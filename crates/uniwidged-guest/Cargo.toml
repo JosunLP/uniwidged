@@ -1,0 +1,13 @@
+[package]
+name = "uniwidged-guest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The SDK widget authors write against. Compiles to wasm32-wasip2."
+
+[dependencies]
+uniwidged-core.workspace = true
+uniwidged-view.workspace = true

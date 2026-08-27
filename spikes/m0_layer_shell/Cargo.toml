@@ -1,0 +1,28 @@
+[package]
+name = "m0-layer-shell"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "M0 spike: can a wlr-layer-shell surface back a GPU swapchain with per-pixel alpha?"
+
+# Deliberately outside the main workspace. It pulls in Vello, wgpu and the
+# Wayland stack, and `cargo test --workspace` should stay a few seconds.
+[workspace]
+
+[dependencies]
+# The system backend, not the Rust one. Mesa's Vulkan WSI drives the same
+# `wl_display` through libwayland, so both halves have to be talking to the
+# *same* C object — a pure-Rust connection would leave wgpu with a pointer to
+# something Mesa has never heard of.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+# wgpu comes through Vello, so the two cannot disagree about what a `Device`
+# is. raw-window-handle must match what that wgpu was built against.
+vello = "0.9"
+raw-window-handle = "0.6"
+pollster = "0.4"

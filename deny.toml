@@ -1,0 +1,40 @@
+# cargo-deny — supply-chain policy for uniwidged.
+# Run locally with:  cargo deny check
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive only, and this is enforced rather than aspirational: uniwidged is
+# MIT OR Apache-2.0 so that a widget author may choose any licence they like,
+# and a single copyleft dependency would quietly take that away from every one
+# of them. See NOTICE.md.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+# Two copies of the Linebender crates would mean two incompatible `Scene`
+# types, and the error message for that is not one anybody enjoys reading.
+deny = []
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

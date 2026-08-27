@@ -1,0 +1,15 @@
+[package]
+name = "hello-widget"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "A reference widget: what a uniwidged widget looks like."
+
+[dependencies]
+uniwidged-core.workspace = true
+uniwidged-view.workspace = true
+uniwidged-guest.workspace = true

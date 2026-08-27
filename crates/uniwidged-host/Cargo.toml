@@ -1,0 +1,17 @@
+[package]
+name = "uniwidged-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The uniwidged daemon: scheduler, lifecycle, configuration, policy."
+
+[dependencies]
+uniwidged-core.workspace = true
+uniwidged-view.workspace = true
+uniwidged-compose.workspace = true
+uniwidged-render.workspace = true
+uniwidged-runtime.workspace = true
+uniwidged-shell.workspace = true

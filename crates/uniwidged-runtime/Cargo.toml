@@ -1,0 +1,24 @@
+[package]
+name = "uniwidged-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The WASM sandbox uniwidged widgets run in: capabilities, limits, lifecycle."
+
+[dependencies]
+uniwidged-core.workspace = true
+uniwidged-view.workspace = true
+serde = { workspace = true, optional = true }
+# Optional while the rest of the workspace is being built out: Wasmtime is a
+# multi-minute compile and none of the capability logic below needs it. The
+# feature goes on by default at milestone M3.
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+
+[features]
+default = []
+wasmtime = ["dep:wasmtime", "dep:wasmtime-wasi"]
+serde = ["dep:serde"]

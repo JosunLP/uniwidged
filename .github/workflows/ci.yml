@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # uniwidged depends on Ferrum UI by path while it is unpublished.
+      # Remove this step the moment it reaches crates.io — see Cargo.toml.
+      - uses: actions/checkout@v4
+        with:
+          repository: leuchtturm/ferrumui
+          path: ../ferrumui
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+
+  # Every visual claim in ARCHITECTURE.md §7 is pinned by a golden image, and
+  # golden images are only evidence if they run on every change. lavapipe is a
+  # software Vulkan device and is deterministic, so this needs no GPU and no
+  # display.
+  snapshots:
+    name: golden images (lavapipe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - run: cargo test --workspace --features snapshots
+        env:
+          WGPU_BACKEND: vulkan
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+
+  supply-chain:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # The sandbox is only a sandbox if what it refuses is tested. This runs the
+  # conformance widget under a deny-all policy and asserts every capability
+  # attempt fails.
+  sandbox:
+    name: capability conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p uniwidged-runtime --all-features

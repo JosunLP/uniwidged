@@ -1,0 +1,150 @@
+// The interface between the host and a widget.
+//
+// Vendored rather than referenced: the component model is still moving, and a
+// widget built last month must keep working. `world widget` is the contract;
+// `abi-version` is checked at instantiation and refused on a mismatch rather
+// than being allowed to fail confusingly later.
+//
+// Status: draft. Milestone M3 in ROADMAP.md generates bindings from this.
+
+package uniwidged:widget@0.1.0;
+
+/// What a widget describes. Mirrors `uniwidged-view` exactly — the Rust types
+/// on both sides of this boundary are the same crate, so this is a
+/// transcription rather than a second schema.
+interface view {
+    record node {
+        id: u32,
+        content: content,
+        style: style,
+        semantics: semantics,
+        children: list<node>,
+    }
+
+    variant content {
+        group,
+        text(string),
+        icon(icon),
+        image(u32),
+        divider,
+        spacer,
+        progress(f32),
+    }
+
+    enum icon { refresh, settings, close, chevron, check, alert, offline }
+
+    /// A named style. The theme decides what it is; the widget only names it.
+    enum role {
+        plain, panel, card, chip,
+        title, display, section, body, body-strong, caption,
+    }
+
+    /// A semantic colour. Named by meaning, never by hue.
+    variant accent {
+        neutral, brand, positive, warning, critical,
+        series(u8),
+    }
+
+    enum direction { column, row }
+    enum align { start, center, end, stretch }
+    enum justify { start, center, end, space-between }
+
+    record layout {
+        direction: direction,
+        /// In theme steps, not pixels.
+        gap: u8,
+        padding: u8,
+        align: align,
+        justify: justify,
+        grow: u8,
+        wrap: bool,
+    }
+
+    record style {
+        role: role,
+        accent: accent,
+        layout: layout,
+        muted: bool,
+    }
+
+    variant interaction {
+        none, button, toggle, list-item,
+        link(string),
+    }
+
+    record state {
+        disabled: bool,
+        selected: bool,
+        checked: option<bool>,
+    }
+
+    record semantics {
+        label: option<string>,
+        interaction: interaction,
+        state: state,
+        tooltip: option<string>,
+    }
+}
+
+/// What the host offers. Every function here is gated by a capability the
+/// manifest declared and the user approved; calling an ungranted one returns
+/// `not-granted` rather than trapping, so a widget can degrade instead of
+/// disappearing.
+interface host {
+    variant denied { not-granted, malformed(string), unavailable(string) }
+
+    /// Locale-formatted output — `locale`.
+    format-time: func(epoch-seconds: s64) -> result<string, denied>;
+    format-date: func(epoch-seconds: s64) -> result<string, denied>;
+
+    /// How wide a string is in a named style, for a widget's own truncation
+    /// decisions — `measure`. The host owns the fonts; this is the only window
+    /// onto them.
+    measure-text: func(text: string, role: u8) -> result<f32, denied>;
+
+    /// An HTTPS request to a granted host — `net:<host>`. Returns immediately
+    /// with a token; the answer arrives as a `delivered` event. A widget never
+    /// blocks, because a blocked widget is a widget holding its deadline open.
+    fetch: func(url: string) -> result<u32, denied>;
+    take-response: func(token: u32) -> result<list<u8>, denied>;
+
+    /// The widget's own data directory — `fs:<subpath>`.
+    read-file: func(path: string) -> result<list<u8>, denied>;
+    write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
+
+    /// The OS keychain, namespaced to this widget — `secrets`.
+    get-secret: func(key: string) -> result<list<u8>, denied>;
+    set-secret: func(key: string, value: list<u8>) -> result<_, denied>;
+
+    log: func(message: string);
+}
+
+world widget {
+    import host;
+    use view.{node};
+
+    /// Bumped when this world changes incompatibly. Checked at instantiation.
+    export abi-version: func() -> u32;
+
+    /// Called once, before the first view.
+    export start: func() -> result<_, string>;
+
+    /// Describe what should be on screen. Returning the same tree as last time
+    /// means nothing is drawn at all.
+    export view: func() -> node;
+
+    /// When to be called again.
+    variant wake { never, at(s64), after-ms(u32), animating }
+    export next-wake: func() -> wake;
+
+    variant event {
+        clicked(u32),
+        toggled(tuple<u32, bool>),
+        delivered(u32),
+        configured,
+        environment-changed,
+    }
+
+    /// React. Return true if the view would now differ.
+    export on-event: func(e: event) -> bool;
+}

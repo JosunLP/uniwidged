@@ -1,0 +1,92 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/uniwidged-core",
+    "crates/uniwidged-view",
+    "crates/uniwidged-compose",
+    "crates/uniwidged-render",
+    "crates/uniwidged-shell",
+    "crates/uniwidged-runtime",
+    "crates/uniwidged-guest",
+    "crates/uniwidged-host",
+    "crates/uniwidged-cli",
+    "examples/hello_widget",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/leuchtturm/uniwidged"
+authors = ["uniwidged contributors"]
+
+[workspace.dependencies]
+# --- Linebender / rendering stack ----------------------------------------
+# Pinned to the versions Ferrum UI resolves. `uniwidged-compose` builds a
+# `vello::Scene` that `uniwidged-render` submits, and both reach those types
+# through Ferrum, so the versions have to agree or the types stop unifying.
+# Bumping any of these is a coordinated change across both repositories.
+vello = "0.9.0"
+parley = "0.10.0"
+kurbo = "0.13.1"
+peniko = "0.6.1"
+taffy = "0.11.0"
+
+# There is deliberately no `wgpu` entry. Vello re-exports the exact wgpu it was
+# built against (`vello::wgpu`, currently 29.x), and reaching it that way makes
+# a version mismatch impossible. Pinning wgpu separately is how a project ends
+# up with two `Device` types and an error message nobody enjoys reading.
+
+# --- Accessibility --------------------------------------------------------
+accesskit = "0.24.1"
+
+# --- Platform surfaces ----------------------------------------------------
+# `uniwidged-shell` creates desktop-layer surfaces itself and hands wgpu a raw
+# handle. There is no winit anywhere in this workspace on purpose: winit has no
+# `wlr-layer-shell` role and no way to ask for one, and that role is the whole
+# definition of a desktop widget.
+raw-window-handle = "0.6.2"
+
+# --- WASM guests ----------------------------------------------------------
+wasmtime = { version = "48.0.1", default-features = false, features = [
+    "component-model",
+    "cranelift",
+    "runtime",
+] }
+wasmtime-wasi = "48.0.1"
+wit-bindgen = "0.61.1"
+
+# --- Utilities ------------------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tracing = "0.1"
+
+# --- Ferrum UI ------------------------------------------------------------
+# Path dependencies on the sibling checkout while Ferrum UI is unpublished.
+# These become version requirements the moment it reaches crates.io; nothing
+# else about the build changes when they do.
+ferrum-core = { path = "../ferrumui/crates/ferrum-core" }
+ferrum-render = { path = "../ferrumui/crates/ferrum-render" }
+ferrum-layout = { path = "../ferrumui/crates/ferrum-layout" }
+ferrum-text = { path = "../ferrumui/crates/ferrum-text" }
+
+# --- Internal crates ------------------------------------------------------
+uniwidged-core = { path = "crates/uniwidged-core", version = "0.0.1" }
+uniwidged-view = { path = "crates/uniwidged-view", version = "0.0.1" }
+uniwidged-compose = { path = "crates/uniwidged-compose", version = "0.0.1" }
+uniwidged-render = { path = "crates/uniwidged-render", version = "0.0.1" }
+uniwidged-shell = { path = "crates/uniwidged-shell", version = "0.0.1" }
+uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "0.0.1" }
+uniwidged-guest = { path = "crates/uniwidged-guest", version = "0.0.1" }
+uniwidged-host = { path = "crates/uniwidged-host", version = "0.0.1" }
+
+# The host is an always-on desktop process. Size and steady-state cost matter
+# more than throughput, but not at the price of the render path — hence `s`
+# rather than Ephemeris's `z`, and no `panic = "abort"`: a widget that panics
+# must not take the desktop with it.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true

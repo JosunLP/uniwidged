@@ -1,0 +1,18 @@
+[package]
+name = "uniwidged-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core types for uniwidged: geometry, colour, ids, input events and the wake model."
+
+[dependencies]
+kurbo.workspace = true
+peniko.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde", "kurbo/serde", "peniko/serde"]

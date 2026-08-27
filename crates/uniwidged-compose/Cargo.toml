@@ -1,0 +1,13 @@
+[package]
+name = "uniwidged-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Turns a uniwidged view tree into a Vello scene, hit rects and accessibility nodes."
+
+[dependencies]
+uniwidged-core.workspace = true
+uniwidged-view.workspace = true

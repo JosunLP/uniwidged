@@ -1,0 +1,17 @@
+[package]
+name = "uniwidged-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The uniwidged command-line tool."
+
+[[bin]]
+name = "uniwidged"
+path = "src/main.rs"
+
+[dependencies]
+uniwidged-host.workspace = true
+uniwidged-shell.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "uniwidged-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Desktop-layer surfaces: below every window, above the wallpaper, on four platforms."
+
+[dependencies]
+uniwidged-core.workspace = true
+raw-window-handle.workspace = true
