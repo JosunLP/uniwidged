@@ -21,8 +21,13 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
-# wgpu comes through Vello, so the two cannot disagree about what a `Device`
-# is. raw-window-handle must match what that wgpu was built against.
+# The spike now drives the real renderer rather than a copy of it: since M1,
+# `uniwidged-render` owns the device, the surfaces and the presentation, and
+# this crate only supplies a Wayland surface and a scene. That makes the spike
+# a standing integration test of the crate against a real compositor.
+uniwidged-render = { path = "../../crates/uniwidged-render" }
+
+# Only for building the scene. Same version the renderer resolves, so the
+# `Scene` type is the same type.
 vello = "0.9"
 raw-window-handle = "0.6"
-pollster = "0.4"

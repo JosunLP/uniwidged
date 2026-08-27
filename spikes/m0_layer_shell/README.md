@@ -26,17 +26,23 @@ So this is deliberately the first thing built, before any of the framework.
 
 ## What proves it
 
-`verify.py` reads a `grim` screenshot of the compositor output and checks the
-arithmetic. The compositor's background is a saturated blue; if the panel's
+Three scripts, all reading a `grim` screenshot of the compositor output and
+checking arithmetic rather than looking at pictures.
+
+`verify.py` checks transparency. The compositor's background is a saturated blue; if the panel's
 pixels are a *blend* of that blue and the panel colour, the alpha reached the
 compositor. If they are the panel colour alone, it did not, and the swapchain
 is opaque no matter what it reported.
 
+`compare.py` checks that the headless render of the *same scene* composites to
+the same pixels as the on-screen one. That equivalence is what makes a golden
+image rendered in CI evidence about what ships — and it is what caught the
+straight-versus-premultiplied alpha bug described in `FINDINGS.md`.
+
+`stacking.py` checks that an ordinary window covers the widget.
+
 ## Running it
 
 ```sh
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-WLR_BACKENDS=headless WLR_RENDERER=pixman sway -c sway.conf &
-WAYLAND_DISPLAY=wayland-1 cargo run --release
-WAYLAND_DISPLAY=wayland-1 grim shot.png && python3 verify.py shot.png
+./run.sh          # starts a headless sway if none is running, then all three
 ```

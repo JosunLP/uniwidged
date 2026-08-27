@@ -3,3 +3,10 @@ target/
 *.pdb
 .DS_Store
 __pycache__/
+
+# Stray spike output; the curated copies live in spikes/*/images/.
+spikes/*/readback.png
+
+# Produced next to a reference when a golden image changes, so the failure
+# can be looked at. Never committed.
+*.actual.png

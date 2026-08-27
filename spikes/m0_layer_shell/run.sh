@@ -26,12 +26,15 @@ export SPIKE_HOLD_SECS=${SPIKE_HOLD_SECS:-45}
 
 up() { for _ in $(seq 1 20); do grep -q 'frame presented' "$1" 2>/dev/null && return; sleep 1; done; }
 
-# 1. Transparency: the widget on its own.
+# 1. Transparency, and the headless path against the on-screen one.
 pkill -x m0-layer-shell 2>/dev/null || true; sleep 1
-setsid $BIN >"$OUT/widget.log" 2>/dev/null & up "$OUT/widget.log"
+SPIKE_READBACK_PNG="$OUT/readback.png" setsid $BIN >"$OUT/widget.log" 2>/dev/null &
+up "$OUT/widget.log"
 cat "$OUT/widget.log"
 grim -o HEADLESS-1 "$OUT/widget.png"
 python3 verify.py "$OUT/widget.png"
+echo
+python3 compare.py "$OUT/widget.png" "$OUT/readback.png"
 
 # 2. Stacking: the same widget, moved under where the window will open.
 pkill -x m0-layer-shell 2>/dev/null || true; sleep 1

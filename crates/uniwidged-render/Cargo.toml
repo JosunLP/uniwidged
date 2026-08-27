@@ -6,7 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "One GPU device, many desktop surfaces, one submit per frame."
+description = "One GPU device, many desktop surfaces, swapchain or readback presentation."
 
 [dependencies]
 uniwidged-core.workspace = true
+# wgpu comes through Vello so the two cannot disagree about what a `Device` is.
+vello.workspace = true
+pollster.workspace = true
+raw-window-handle.workspace = true
+png.workspace = true

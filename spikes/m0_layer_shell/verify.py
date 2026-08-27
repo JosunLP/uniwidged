@@ -35,7 +35,11 @@ METER = (0x78, 0xBE, 0xFF)
 
 
 def read_png(path):
-    """Returns (width, height, rows), rows being lists of (r, g, b)."""
+    """Returns (width, height, rows), rows being lists of (r, g, b, a).
+
+    Alpha is 255 for an RGB image, so callers can always index four channels.
+    `patch` drops it; `compare.py` is the one that needs it.
+    """
     with open(path, "rb") as f:
         data = f.read()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -81,7 +85,10 @@ def read_png(path):
                 pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
                 pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
                 line[i] = (line[i] + pred) & 0xFF
-        out.append([tuple(line[i : i + 3]) for i in range(0, stride, channels)])
+        out.append([
+            (line[i], line[i + 1], line[i + 2], line[i + 3] if channels == 4 else 255)
+            for i in range(0, stride, channels)
+        ])
         prev = line
     return width, height, out
 
@@ -96,7 +103,7 @@ def patch(rows, x, y, size=3):
     acc, n = [0, 0, 0], 0
     for dy in range(-size, size + 1):
         for dx in range(-size, size + 1):
-            px = rows[y + dy][x + dx]
+            px = rows[y + dy][x + dx][:3]
             acc = [a + b for a, b in zip(acc, px)]
             n += 1
     return tuple(round(c / n) for c in acc)

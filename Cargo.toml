@@ -18,7 +18,7 @@ version = "0.0.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/leuchtturm/uniwidged"
+repository = "https://github.com/j-pfalzgraf/uniwidged"
 authors = ["uniwidged contributors"]
 
 [workspace.dependencies]
@@ -29,6 +29,8 @@ authors = ["uniwidged contributors"]
 # Bumping any of these is a coordinated change across both repositories.
 vello = "0.9.0"
 parley = "0.10.0"
+pollster = "0.4.0"
+png = "0.18.1"
 kurbo = "0.13.1"
 peniko = "0.6.1"
 taffy = "0.11.0"
