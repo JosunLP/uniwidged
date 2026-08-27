@@ -5,5 +5,5 @@
 
 pub use crate::{Cx, Event, Widget};
 pub use uniwidged_core::{NodeId, Wake};
+pub use uniwidged_view::View;
 pub use uniwidged_view::build::*;
-pub use uniwidged_view::{Accent, Align, Icon, Justify, Role, View};

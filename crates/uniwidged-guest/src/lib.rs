@@ -8,14 +8,13 @@
 //! ```ignore
 //! use uniwidged_guest::prelude::*;
 //!
-//! struct Clock;
+//! #[derive(Default)]
+//! struct Clock { minute: u32 }
 //!
 //! impl Widget for Clock {
 //!     fn view(&mut self, cx: &Cx) -> View {
-//!         let now = cx.local_time();
 //!         panel(NodeId::named("clock"))
-//!             .child(text(cx.format_time(now)).role(Role::Display))
-//!             .child(text(cx.format_date(now)).role(Role::Caption).muted())
+//!             .child(text(cx.format_time(cx.now()).unwrap_or_default()).role(Role::Display))
 //!             .view()
 //!     }
 //!
@@ -40,27 +39,44 @@
 //! desktop full of widgets cost something, and the host will throttle you for
 //! it.
 //!
-//! ## Status
+//! ## Testing your widget
 //!
-//! Skeleton — the trait is the contract; the `export!` macro and the WIT
-//! bindings land in milestone M3.
+//! Everything except [`Cx`] works natively, so the view a widget builds can be
+//! unit-tested with no WASM toolchain at all — see `examples/hello_widget`.
 
-#![allow(dead_code)]
+#![allow(clippy::needless_doctest_main)]
+
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub mod bindings;
 
 pub mod prelude;
+
+#[cfg(target_arch = "wasm32")]
+mod host;
+#[cfg(target_arch = "wasm32")]
+pub use host::{Cx, Denied};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod stub;
+#[cfg(not(target_arch = "wasm32"))]
+pub use stub::{Cx, Denied};
 
 use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
+/// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
+pub const ABI_VERSION: u32 = 1;
+
 /// Something that happened to your widget.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A node you marked interactive was activated. Reported by the id you
     /// gave it, never by coordinate — the host did the layout, so the host
     /// does the hit-testing.
     Clicked(NodeId),
     Toggled(NodeId, bool),
-    /// A capability you asked for has an answer. Correlated by the token the
+    /// A capability you asked for has an answer, correlated by the token the
     /// request returned.
     Delivered {
         token: u32,
@@ -72,21 +88,8 @@ pub enum Event {
     EnvironmentChanged,
 }
 
-/// The host, as a widget sees it.
-///
-/// Every method here is backed by a capability. Calling one you were not
-/// granted returns an error rather than trapping, so a widget can degrade —
-/// a weather widget without `net` should show its last reading and say it is
-/// stale, not disappear.
-///
-/// Skeleton: the methods land with the WIT bindings in M3.
-#[derive(Debug)]
-pub struct Cx {
-    _private: (),
-}
-
 /// The one trait a widget implements.
-pub trait Widget {
+pub trait Widget: Default {
     /// Describe what should be on screen.
     ///
     /// Called whenever the host thinks something may have changed. Return the
@@ -103,6 +106,13 @@ pub trait Widget {
         Wake::Never
     }
 
+    /// Called once, before the first view. Returning an error stops the widget
+    /// from starting at all, which is right for a configuration it cannot work
+    /// without and wrong for anything it could show a message about.
+    fn start(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// React to something. Return `true` if your view would now differ.
     ///
     /// Returning `false` when it would have changed means a stale widget;
@@ -112,3 +122,78 @@ pub trait Widget {
         false
     }
 }
+
+/// Makes a type the widget this component exports.
+///
+/// Exactly one per component. On a non-wasm target it expands to nothing, so
+/// that a widget crate still compiles — and still runs its own unit tests —
+/// without a WASM toolchain.
+#[cfg(target_arch = "wasm32")]
+#[macro_export]
+macro_rules! export {
+    ($widget:ty) => {
+        const _: () = {
+            use ::std::cell::RefCell;
+
+            thread_local! {
+                // WebAssembly is single-threaded, so a thread-local is simply
+                // "the instance". `RefCell` rather than a plain `static mut`
+                // so that a re-entrant call — which the host does not make —
+                // panics rather than aliasing.
+                static WIDGET: RefCell<$widget> = RefCell::new(<$widget as ::core::default::Default>::default());
+            }
+
+            struct Component;
+
+            impl $crate::bindings::exports::uniwidged::widget::guest::Guest for Component {
+                fn abi_version() -> u32 {
+                    $crate::ABI_VERSION
+                }
+
+                fn start() -> ::core::result::Result<(), ::std::string::String> {
+                    WIDGET.with(|w| $crate::Widget::start(&mut *w.borrow_mut()))
+                }
+
+                fn view() -> $crate::bindings::uniwidged::widget::types::Tree {
+                    let cx = $crate::Cx::new();
+                    let view = WIDGET.with(|w| $crate::Widget::view(&mut *w.borrow_mut(), &cx));
+                    $crate::to_wire(&view)
+                }
+
+                fn next_wake() -> $crate::bindings::uniwidged::widget::types::Wake {
+                    let wake = WIDGET.with(|w| $crate::Widget::wake(&*w.borrow()));
+                    $crate::wake_to_wire(wake)
+                }
+
+                fn on_event(
+                    event: $crate::bindings::uniwidged::widget::types::Event,
+                ) -> bool {
+                    let cx = $crate::Cx::new();
+                    let event = $crate::event_from_wire(event);
+                    WIDGET.with(|w| $crate::Widget::on_event(&mut *w.borrow_mut(), &event, &cx))
+                }
+            }
+
+            $crate::bindings::export!(Component with_types_in $crate::bindings);
+        };
+    };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! export {
+    ($widget:ty) => {
+        // Nothing to export off-target. The type is still checked by the trait
+        // bound below, so a widget that does not implement `Widget` fails to
+        // compile natively rather than only when someone builds it for WASM.
+        const _: fn() = || {
+            fn assert_widget<T: $crate::Widget>() {}
+            assert_widget::<$widget>();
+        };
+    };
+}
+
+#[cfg(target_arch = "wasm32")]
+mod convert;
+#[cfg(target_arch = "wasm32")]
+pub use convert::{event_from_wire, to_wire, wake_to_wire};

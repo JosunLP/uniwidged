@@ -1,0 +1,8 @@
+# Deliberately empty of capabilities. The conformance suite installs this
+# widget under a deny-all policy and asserts that every attempt below is
+# refused — a sandbox tested only for what it permits is not tested.
+name = "conformance"
+version = "0.1.0"
+description = "Tries every capability, so the sandbox can be tested for what it refuses"
+capabilities = []
+memory-mb = 16

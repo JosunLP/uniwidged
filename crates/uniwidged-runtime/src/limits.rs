@@ -18,12 +18,14 @@ pub struct Limits {
     /// counter rather than a signal, so it works on a loop with no allocation
     /// and no call in it.
     pub call_deadline: Duration,
-    /// How many consecutive deadline overruns before the widget is suspended
-    /// rather than merely interrupted.
+    /// How many consecutive failed *instances* before the widget is given up
+    /// on rather than restarted.
     ///
-    /// One overrun is a slow machine under load. Three in a row is a bug, and
-    /// re-running a bug sixty times a second is how a widget framework becomes
-    /// the reason a laptop is warm.
+    /// Restarted, not resumed: a component instance that has trapped cannot be
+    /// entered again, so the only recovery is a fresh one — see
+    /// [`crate::instance::Instance`]. One failure is a slow machine under
+    /// load. Three in a row is a bug, and restarting a bug sixty times a
+    /// second is how a widget framework becomes the reason a laptop is warm.
     pub overruns_before_suspend: u8,
 }
 
@@ -44,38 +46,42 @@ impl Default for Limits {
     }
 }
 
-/// What running a widget's call produced.
+/// What a supervisor should do after an instance ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Completed,
-    /// Interrupted at the deadline. The surface keeps its last frame.
-    TimedOut,
-    /// Suspended after repeated overruns, or after a trap. Shown as errored;
-    /// restarted only when the user asks or the widget is reinstalled.
+    /// Worth another instance. The surface keeps its last frame meanwhile.
+    Restart,
+    /// Given up on, after too many failures in a row. Shown as errored;
+    /// started again only when the user asks or the widget is reinstalled.
     Suspended,
 }
 
-/// Tracks consecutive overruns for one widget instance.
+/// Tracks consecutive instance failures for one installed widget.
+///
+/// Lives above [`crate::instance::Instance`], which is single-use: this is
+/// what remembers that the last three instances all died, which no single
+/// instance can know.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Health {
     consecutive_overruns: u8,
 }
 
 impl Health {
-    /// Records a completed call. Resets the count — a widget that recovers is
-    /// not held against its worst minute.
+    /// Records an instance that ran. Resets the count — a widget that recovers
+    /// is not held against its worst minute.
     pub fn completed(&mut self) -> Outcome {
         self.consecutive_overruns = 0;
         Outcome::Completed
     }
 
-    /// Records an overrun and decides whether the widget survives it.
-    pub fn timed_out(&mut self, limits: &Limits) -> Outcome {
+    /// Records a failed instance and decides whether to start another.
+    pub fn failed(&mut self, limits: &Limits) -> Outcome {
         self.consecutive_overruns = self.consecutive_overruns.saturating_add(1);
         if self.consecutive_overruns >= limits.overruns_before_suspend {
             Outcome::Suspended
         } else {
-            Outcome::TimedOut
+            Outcome::Restart
         }
     }
 }
@@ -85,24 +91,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_slow_call_is_forgiven_and_a_pattern_is_not() {
+    fn one_failed_instance_is_forgiven_and_a_pattern_is_not() {
         let limits = Limits::default();
         let mut health = Health::default();
-        assert_eq!(health.timed_out(&limits), Outcome::TimedOut);
-        assert_eq!(health.timed_out(&limits), Outcome::TimedOut);
-        assert_eq!(health.timed_out(&limits), Outcome::Suspended);
+        assert_eq!(health.failed(&limits), Outcome::Restart);
+        assert_eq!(health.failed(&limits), Outcome::Restart);
+        assert_eq!(health.failed(&limits), Outcome::Suspended);
     }
 
     #[test]
     fn a_widget_that_recovers_is_not_held_to_its_worst_minute() {
         // A machine under load makes every widget miss a deadline. Counting
-        // those cumulatively would suspend well-behaved widgets after a
+        // those cumulatively would give up on well-behaved widgets after a
         // compile.
         let limits = Limits::default();
         let mut health = Health::default();
-        health.timed_out(&limits);
-        health.timed_out(&limits);
+        health.failed(&limits);
+        health.failed(&limits);
         assert_eq!(health.completed(), Outcome::Completed);
-        assert_eq!(health.timed_out(&limits), Outcome::TimedOut);
+        assert_eq!(health.failed(&limits), Outcome::Restart);
     }
 }

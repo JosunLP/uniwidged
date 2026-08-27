@@ -1,24 +1,42 @@
 // The interface between the host and a widget.
 //
 // Vendored rather than referenced: the component model is still moving, and a
-// widget built last month must keep working. `world widget` is the contract;
-// `abi-version` is checked at instantiation and refused on a mismatch rather
-// than being allowed to fail confusingly later.
-//
-// Status: draft. Milestone M3 in ROADMAP.md generates bindings from this.
+// widget built last month must keep working. `abi-version` is checked at
+// instantiation and refused on a mismatch, rather than being allowed to fail
+// confusingly later.
 
 package uniwidged:widget@0.1.0;
 
-/// What a widget describes. Mirrors `uniwidged-view` exactly — the Rust types
-/// on both sides of this boundary are the same crate, so this is a
-/// transcription rather than a second schema.
-interface view {
+/// What a widget describes.
+///
+/// ## Why the tree is flat
+///
+/// WIT has no recursive types — a `record node` cannot contain a
+/// `list<node>` — so the tree crosses the boundary as an arena: a flat list of
+/// nodes, each naming its children by index. Node 0 is the root.
+///
+/// This is not only a workaround. A flat list is one allocation on each side
+/// rather than one per node, and it is what lets the host validate the whole
+/// structure before touching it: indices in range, no cycles, no second root,
+/// a bounded size. A recursive decoder would have had to discover a cycle by
+/// running out of stack.
+interface types {
+    /// A whole view. Empty means the widget has nothing to show yet, which is
+    /// a normal state before its first data arrives.
+    record tree {
+        nodes: list<node>,
+    }
+
     record node {
+        /// The author's own id, or 0 for decoration. See `NodeId` on the host.
         id: u32,
         content: content,
         style: style,
         semantics: semantics,
-        children: list<node>,
+        /// Indices into `tree.nodes`. Must be greater than this node's own
+        /// index — see the host's validation, which is what makes a cycle
+        /// impossible rather than merely unlikely.
+        children: list<u32>,
     }
 
     variant content {
@@ -84,67 +102,105 @@ interface view {
         state: state,
         tooltip: option<string>,
     }
-}
 
-/// What the host offers. Every function here is gated by a capability the
-/// manifest declared and the user approved; calling an ungranted one returns
-/// `not-granted` rather than trapping, so a widget can degrade instead of
-/// disappearing.
-interface host {
-    variant denied { not-granted, malformed(string), unavailable(string) }
+    /// When the widget would like to be called again.
+    variant wake {
+        /// Only external events. The right answer more often than it looks.
+        never,
+        /// A wall-clock instant, as seconds since the Unix epoch. What a clock
+        /// asks for: it stays correct across a suspend or an NTP step, which
+        /// a delay does not.
+        %at(s64),
+        /// A delay from now.
+        after-ms(u32),
+        /// The display's refresh rate, while something is genuinely moving.
+        animating,
+    }
 
-    /// Locale-formatted output — `locale`.
-    format-time: func(epoch-seconds: s64) -> result<string, denied>;
-    format-date: func(epoch-seconds: s64) -> result<string, denied>;
-
-    /// How wide a string is in a named style, for a widget's own truncation
-    /// decisions — `measure`. The host owns the fonts; this is the only window
-    /// onto them.
-    measure-text: func(text: string, role: u8) -> result<f32, denied>;
-
-    /// An HTTPS request to a granted host — `net:<host>`. Returns immediately
-    /// with a token; the answer arrives as a `delivered` event. A widget never
-    /// blocks, because a blocked widget is a widget holding its deadline open.
-    fetch: func(url: string) -> result<u32, denied>;
-    take-response: func(token: u32) -> result<list<u8>, denied>;
-
-    /// The widget's own data directory — `fs:<subpath>`.
-    read-file: func(path: string) -> result<list<u8>, denied>;
-    write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
-
-    /// The OS keychain, namespaced to this widget — `secrets`.
-    get-secret: func(key: string) -> result<list<u8>, denied>;
-    set-secret: func(key: string, value: list<u8>) -> result<_, denied>;
-
-    log: func(message: string);
-}
-
-world widget {
-    import host;
-    use view.{node};
-
-    /// Bumped when this world changes incompatibly. Checked at instantiation.
-    export abi-version: func() -> u32;
-
-    /// Called once, before the first view.
-    export start: func() -> result<_, string>;
-
-    /// Describe what should be on screen. Returning the same tree as last time
-    /// means nothing is drawn at all.
-    export view: func() -> node;
-
-    /// When to be called again.
-    variant wake { never, at(s64), after-ms(u32), animating }
-    export next-wake: func() -> wake;
-
+    /// Something that happened to the widget.
     variant event {
+        /// A node marked interactive was activated, reported by *id* — never
+        /// by coordinate. The host did the layout, so the host hit-tests.
         clicked(u32),
         toggled(tuple<u32, bool>),
+        /// A capability request has an answer, correlated by its token.
         delivered(u32),
         configured,
         environment-changed,
     }
+}
+
+/// What the host offers.
+///
+/// Every function here is gated by a capability the manifest declared and the
+/// user approved. Calling an ungranted one returns `denied` rather than
+/// trapping, so a widget can degrade — a weather widget without `net` should
+/// show its last reading and say it is stale, not disappear.
+interface host {
+    variant denied {
+        not-granted,
+        malformed(string),
+        unavailable(string),
+    }
+
+    /// Locale-formatted output — needs `locale`.
+    format-time: func(epoch-seconds: s64) -> result<string, denied>;
+    format-date: func(epoch-seconds: s64) -> result<string, denied>;
+
+    /// How wide a string is in a named role, for a widget's own truncation
+    /// decisions — needs `measure`. The host owns the fonts; this is the only
+    /// window onto them.
+    measure-text: func(text: string, role: u8) -> result<f32, denied>;
+
+    /// An HTTPS request to a granted host — needs `net:<host>`.
+    ///
+    /// Returns immediately with a token; the answer arrives as a `delivered`
+    /// event. A widget never blocks, because a blocked widget is a widget
+    /// holding its deadline open.
+    fetch: func(url: string) -> result<u32, denied>;
+    take-response: func(token: u32) -> result<list<u8>, denied>;
+
+    /// The widget's own data directory — needs `fs:<subpath>`.
+    read-file: func(path: string) -> result<list<u8>, denied>;
+    write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
+
+    /// The OS keychain, namespaced to this widget — needs `secrets`.
+    get-secret: func(key: string) -> result<list<u8>, denied>;
+    set-secret: func(key: string, value: list<u8>) -> result<_, denied>;
+
+    /// Machine counters — needs `metrics`.
+    cpu-load: func() -> result<f32, denied>;
+
+    /// Goes to the host's log, prefixed with the widget's name. Always
+    /// available: a widget that cannot say what went wrong is one nobody can
+    /// help.
+    log: func(message: string);
+}
+
+/// What a widget must provide.
+interface guest {
+    use types.{tree, wake, event};
+
+    /// Bumped when this world changes incompatibly. Checked at instantiation,
+    /// before anything else is called.
+    abi-version: func() -> u32;
+
+    /// Called once, before the first view.
+    start: func() -> result<_, string>;
+
+    /// Describe what should be on screen.
+    ///
+    /// Returning the same tree as last time means nothing is drawn at all.
+    view: func() -> tree;
+
+    /// When to be called again.
+    next-wake: func() -> wake;
 
     /// React. Return true if the view would now differ.
-    export on-event: func(e: event) -> bool;
+    on-event: func(e: event) -> bool;
+}
+
+world widget {
+    import host;
+    export guest;
 }

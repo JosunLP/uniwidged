@@ -41,8 +41,21 @@ than a licence requirement.
 ## Code adopted from Ferrum UI
 
 The rendering, layout, text and accessibility layers build on
-[Ferrum UI](https://github.com/leuchtturm/ferrumui) (MIT OR Apache-2.0), which
+[Ferrum UI](https://github.com/j-pfalzgraf/ferrumui) (MIT OR Apache-2.0), which
 is used as a dependency rather than copied.
+
+## The bundled test font
+
+`crates/uniwidged-compose/tests/fonts/DejaVuSans.ttf` is included so that the
+golden-image suite renders the same text on every machine. A snapshot taken with
+whatever fonts a developer happens to have installed is a snapshot of that
+machine rather than of this code, and would differ from CI for reasons neither
+could act on.
+
+DejaVu Sans is under the Bitstream Vera licence (permissive; the DejaVu changes
+are public domain) — see `DejaVuSans.LICENSE` beside it. It is a **test**
+dependency: nothing that ships to a user contains it, and uniwidged uses the
+desktop's own UI font at runtime.
 
 ## Third-party dependencies
 

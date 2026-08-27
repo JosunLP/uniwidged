@@ -10,40 +10,18 @@
 //! no coordinate: the widget names [`Role::Display`] and the theme decides
 //! what that is. See `ARCHITECTURE.md` §6.
 //!
-//! ## The full widget, from milestone M3
+//! ## It is a real widget
 //!
-//! Once the WASM bindings land, the trait implementation around [`view`] is:
-//!
-//! ```ignore
-//! use uniwidged_guest::prelude::*;
-//!
-//! struct SystemLoad { reading: Reading }
-//!
-//! impl Widget for SystemLoad {
-//!     fn view(&mut self, _cx: &Cx) -> View {
-//!         hello_widget::view(&self.reading)
-//!     }
-//!
-//!     // Every two seconds while visible. Not a poll: the host sleeps, and
-//!     // nothing at all runs in between.
-//!     fn wake(&self) -> Wake { Wake::After(Duration::from_secs(2)) }
-//!
-//!     fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
-//!         match event {
-//!             Event::Clicked(id) if *id == NodeId::named("refresh") => {
-//!                 self.reading = read_metrics(cx);
-//!                 true                    // the view will differ
-//!             }
-//!             _ => false,                 // nothing changed; no frame
-//!         }
-//!     }
-//! }
-//!
-//! uniwidged_guest::export!(SystemLoad);
-//! ```
+//! [`SystemLoad`] implements [`Widget`] and is exported as this crate's
+//! component. Building it for `wasm32-wasip2` produces something the host can
+//! install; building it natively — which is what `cargo test` does here — still
+//! compiles and still runs the tests below, because the export macro expands to
+//! nothing off-target. An author should be able to test their widget's logic
+//! without a WASM toolchain.
 
-use uniwidged_core::NodeId;
-use uniwidged_view::build::*;
+use std::time::Duration;
+
+use uniwidged_guest::prelude::*;
 
 /// What the widget has to show. Fractions are `0.0..=1.0`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -190,6 +168,18 @@ mod tests {
     }
 
     #[test]
+    fn a_widget_without_the_metrics_capability_says_it_is_stale() {
+        // A user can decline anything. A widget that disappears when they do
+        // is a worse answer than one that shows its last value and says so —
+        // and the native `Cx` refuses everything, so this is exercised by the
+        // widget's own tests rather than only in production.
+        let mut widget = SystemLoad::default();
+        let view = widget.view(&Cx::new());
+        assert!(widget.reading.stale);
+        assert!(find(&view.root, NodeId::named("system-load")).is_some());
+    }
+
+    #[test]
     fn an_unchanged_reading_produces_no_frame() {
         // The damage model, from the widget author's side: describing the same
         // state twice costs one tree comparison and no GPU work.
@@ -202,3 +192,58 @@ mod tests {
         assert!(!view(&reading).differs_from(&view(&reading)));
     }
 }
+
+/// The widget itself.
+#[derive(Default)]
+pub struct SystemLoad {
+    reading: Reading,
+}
+
+impl Widget for SystemLoad {
+    fn view(&mut self, cx: &Cx) -> View {
+        self.reading = read(cx).unwrap_or(Reading {
+            stale: true,
+            ..self.reading
+        });
+        view(&self.reading)
+    }
+
+    /// Every two seconds. Not a poll: the host sleeps in between and nothing
+    /// at all runs, which is the whole of the framework's cost model.
+    fn wake(&self) -> Wake {
+        Wake::After(Duration::from_secs(2))
+    }
+
+    fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
+        match event {
+            Event::Clicked(id) if *id == NodeId::named("refresh") => {
+                self.reading = read(cx).unwrap_or(Reading {
+                    stale: true,
+                    ..self.reading
+                });
+                // The view will differ, so ask for a frame.
+                true
+            }
+            // Nothing changed, so no frame. Returning `true` here would cost a
+            // tree comparison per event and nothing else, but saying so
+            // honestly is free.
+            _ => false,
+        }
+    }
+}
+
+/// Reads the counters, or gives up.
+///
+/// Returning `None` rather than panicking is the point: a user can decline the
+/// `metrics` capability, and a widget that disappears when they do is a worse
+/// answer than one that shows its last value and says it is stale.
+fn read(cx: &Cx) -> Option<Reading> {
+    let cpu = cx.cpu_load().ok()?;
+    Some(Reading {
+        cpu,
+        // The host serves only CPU today; the rest keep their last values.
+        ..Default::default()
+    })
+}
+
+uniwidged_guest::export!(SystemLoad);

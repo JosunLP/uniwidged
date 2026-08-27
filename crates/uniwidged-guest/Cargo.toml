@@ -11,3 +11,10 @@ description = "The SDK widget authors write against. Compiles to wasm32-wasip2."
 [dependencies]
 uniwidged-core.workspace = true
 uniwidged-view.workspace = true
+
+# The generated bindings link against the component model's imports, which only
+# exist on wasm32. Declaring the dependency per target keeps a native
+# `cargo check` of a widget crate working — an author should be able to run
+# their own unit tests without a WASM toolchain.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen.workspace = true

@@ -33,20 +33,36 @@ opaque window covers the widget completely. §10.2 is resolved; §10.1 is
 resolved for Wayland and stays open for X11 until M4. Full write-up in
 `spikes/m0_layer_shell/FINDINGS.md`.
 
-## M1 · `uniwidged-render` — one device, many surfaces
+## M1 · `uniwidged-render` — one device, many surfaces ✅ **done, 2026-08-27**
 
 * One `wgpu::Device` shared by every surface; per-surface swapchain,
   intermediate storage texture and `TextureBlitter`.
-* Dirty tracking: only dirty surfaces are encoded, all of them on one
-  `CommandEncoder`, finished with one `queue.submit`.
-* The headless path: render to texture, read back a PNG.
-* `vello_cpu` behind the same `Scene` input, selectable per surface.
+* Dirty tracking: clean surfaces are not rendered, not encoded and not
+  presented. Every dirty surface's blit goes onto one `CommandEncoder`,
+  finished with one `queue.submit`. (Vello 0.9 submits its own compute pass per
+  `render_to_texture` call and offers no way to pass in an encoder, so a frame
+  costs one submit per *dirty* surface plus one for all the blits together —
+  not the single submit originally planned. Measured, not assumed.)
+* Two presentation modes behind one interface: a wgpu swapchain, and readback —
+  render to a texture, read the pixels back, let the platform composite them.
+  Readback is what the X11 mitigation and every headless test use.
 
-**Exit:** three surfaces of different sizes rendering different scenes in one
-submit, verified by a frame capture; and the same three scenes rendered
-headlessly to PNGs that match the on-screen output.
+**Exit — met.** Twelve tests on a software Vulkan device, including three
+surfaces of different sizes rendering different scenes in one `render` call
+with each getting its own content, an idle frame costing zero submits, and
+undrawn pixels staying fully transparent.
 
-## M2 · `uniwidged-compose` — view tree to pixels
+The headless-matches-on-screen half is checked against a real compositor by
+`spikes/m0_layer_shell/compare.py`, which renders one scene down both paths and
+compares them pixel for pixel: **worst channel difference 1, mean 0.272**. That
+comparison found a genuine bug — Vello emits straight alpha where a Wayland
+swapchain expects premultiplied, so every translucent pixel was too bright on
+screen and nothing looking at one path alone could see it. Written up in
+`spikes/m0_layer_shell/FINDINGS.md`.
+
+`vello_cpu` is *not* part of this milestone, and cannot be: see §10.1.
+
+## M2 · `uniwidged-compose` — view tree to pixels ✅ **done, 2026-08-27**
 
 * `View` → taffy layout (via `ferrum-layout`), with the `gap`/`padding` theme
   steps resolved to pixels.
@@ -59,11 +75,26 @@ headlessly to PNGs that match the on-screen output.
 * Hit rects and AccessKit nodes emitted from the *same* pass — see
   `ARCHITECTURE.md` §4 on why they may never be computed separately.
 
-**Exit:** the golden-image suite, covering every `Role`, every `Accent`, both
-appearances, high contrast, RTL, and 100 %/150 %/200 % scaling. Every visual
-claim in `ARCHITECTURE.md` §7 has an image behind it.
+**Exit — met.** Fifteen golden images in
+`crates/uniwidged-compose/tests/snapshots/`, covering every role, every semantic
+accent, the categorical palette, the icon set, both appearances, high contrast,
+truncation and wrapping, Arabic in both directions, and 100 %/150 %/200 %
+scaling. They render through the whole stack on a software Vulkan device and are
+made deterministic by a bundled font, so a colour, weight, radius or shadow that
+changes fails CI instead of shipping.
 
-## M3 · `uniwidged-runtime` + `uniwidged-guest` — the sandbox
+Text is Parley directly rather than through `ferrum-text`: that wrapper exposes
+only size and a generic family, and two of the §7 commitments need more — font
+weight (most of what makes a hierarchy readable, and *all* of it at high
+contrast, where opacity is gone) and tabular figures (a clock in proportional
+digits changes width as the minute turns). `ferrum-layout` is used unchanged.
+
+72 unit tests besides the images, including the invariant that no colour the
+theme can produce falls outside the sRGB gamut — several did on the first
+attempt, and a silently clipped palette is one whose author did not choose what
+shipped.
+
+## M3 · `uniwidged-runtime` + `uniwidged-guest` — the sandbox ✅ **done, 2026-08-27**
 
 * Generate host and guest bindings from `wit/uniwidged.wit`.
 * Wasmtime: instantiate, `ResourceLimiter` memory cap, epoch interruption at
@@ -73,9 +104,29 @@ claim in `ARCHITECTURE.md` §7 has an image behind it.
 * `uniwidged_guest::export!` and the manifest format.
 * The conformance widget: attempts every capability, run under deny-all.
 
-**Exit:** a widget compiled to `wasm32-wasip2`, installed from a file, rendering
-on screen; and the conformance suite green, meaning every ungranted capability
-is refused rather than merely unused.
+**Exit — met.** `widgets/conformance` is a real component built for
+`wasm32-wasip2`, instantiated by the real runtime, producing a view the host
+accepts. Thirteen conformance tests, of which most are about what is refused:
+every capability under a deny-all policy, a `file://` URL refused as *malformed*
+rather than ungranted, a path escape refused even where the directory is
+granted, and a host grant that does not extend to a name merely containing it.
+
+The suite **builds the widget itself** rather than looking for a prebuilt file:
+one that skips when an artefact is missing eventually always skips, and nobody
+notices until it matters.
+
+Two findings changed the design. WIT has **no recursive types**, so the view
+tree crosses as a validated flat arena — see `ARCHITECTURE.md` §6, where the
+ordering rule makes a cycle impossible to express rather than merely detected.
+And a **trapped component instance cannot be re-entered**: the first design
+counted deadline overruns per call and expected a widget to survive two, and
+the second call came back with "cannot enter component instance" in 95
+microseconds. A trap now ends the instance, recovery is a fresh one, and
+`a_fresh_instance_recovers_a_widget_that_died` proves that path works.
+
+Both halves of containment are tested against a widget that really misbehaves:
+one that never returns is interrupted at its deadline, and one that allocates
+in a loop is stopped by the memory cap rather than by the clock.
 
 ## M4 · X11
 

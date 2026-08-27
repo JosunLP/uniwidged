@@ -6,7 +6,7 @@ the wallpaper — and a sandboxed SDK third parties write those panels against.
 
 It is the union of two existing projects. [Ephemeris](https://github.com/JosunLP/Ephemeris)
 worked out how a window becomes a *desktop widget* on four platforms and is the
-source of `uniwidged-shell`. [Ferrum UI](https://github.com/leuchtturm/ferrumui)
+source of `uniwidged-shell`. [Ferrum UI](https://github.com/j-pfalzgraf/ferrumui)
 is a GPU-rendered UI stack on Vello/wgpu/Parley/taffy/AccessKit and supplies
 everything above the surface. What is genuinely new is the seam between them —
 a raw desktop-layer surface handed to wgpu instead of to Cairo — and the WASM
@@ -89,7 +89,7 @@ layer would serve one.
 | `uniwidged-core` | geometry, colour, ids, input events, the wake model | no | no |
 | `uniwidged-view` | the view tree and style tokens that cross the sandbox | no | no |
 | `uniwidged-compose` | view → layout → text → `vello::Scene`, hit rects, a11y nodes | no | no |
-| `uniwidged-render` | the wgpu device, per-surface renderers, the CPU fallback | no | yes (or CPU) |
+| `uniwidged-render` | the wgpu device, per-surface renderers, readback presentation | no | yes |
 | `uniwidged-shell` | desktop-layer surfaces, input, configure, scale, menus | **yes** | no |
 | `uniwidged-runtime` | Wasmtime, capability enforcement, resource limits | no | no |
 | `uniwidged-guest` | the SDK widget authors compile against | no | no |
@@ -120,10 +120,10 @@ two definitions that must be kept in sync.
                                  └──► AccessKit nodes  (for screen readers)
       │
       ▼
- render:   one CommandEncoder for every dirty surface
-             per surface: Vello compute pass → intermediate storage texture
-                          → blit onto that surface's swapchain image
-           one queue.submit()   ← all widgets, one call
+ render:   per dirty surface: Vello compute pass → intermediate texture
+           then ONE CommandEncoder blits every one of them onto its
+           swapchain image, and submits once
+             ← clean surfaces are not encoded, not submitted, not presented
       │
       ▼
  present each dirty surface
@@ -183,6 +183,22 @@ its idle clock. Regressions are caught by a soak test, not by hoping.
 The guest returns a **view tree**: nodes with a role, a style token, text or an
 image handle, and children. It is pure data — a few hundred bytes to a few
 kilobytes — and it is the *only* thing that comes back.
+
+It crosses **flat**, as an arena: a list of nodes, each naming its children by
+index, with node 0 as the root. WIT has no recursive types, so a record cannot
+contain a list of itself and there was no choice about this — but it turns out
+to be the better shape anyway. One allocation per side instead of one per node,
+and the host can check the whole structure before touching any of it.
+
+The check matters, because the arena arrives from a sandbox. The rule that does
+the work is that **a child's index must be greater than its parent's**: an
+arena must be topologically ordered, which makes a cycle impossible to *express*
+rather than merely detected. There is no visited set to get wrong and no depth
+at which the check gives up — and a recursive decoder would have discovered a
+cycle by running out of stack, which on a desktop process means the widget takes
+the desktop with it. Two parents, an index out of range, an unattached node, too
+many nodes and an over-long string are refused alongside it. See
+`uniwidged_view::wire`.
 
 The guest never sees a pixel, a font, a GPU, a window, or a coordinate it did
 not ask for. Layout, text shaping, painting, hit-testing and the accessibility
@@ -327,9 +343,19 @@ where the wallpaper should be. Mitigations, in the order they will be tried:
    where the driver offers it.
 2. An EGL/GL path with an ARGB visual — EGL on X11 does honour the visual's
    alpha channel.
-3. `vello_cpu` into shared memory, composited with XRender. This is Ephemeris's
-   own path, but driven from the *same* `vello::Scene`, so the output stays
-   pixel-identical to the GPU path and the golden images still apply.
+3. **Readback presentation.** Vello renders to an offscreen texture exactly as
+   it does everywhere else; the pixels are read back and handed to XRender or
+   `XShmPutImage`, which is Ephemeris's own presentation path. Rasterisation is
+   untouched — the same `vello::Scene`, the same GPU, the same output — so the
+   golden images still apply. Only *presentation* falls back, which is the
+   thing X11 is actually bad at.
+
+   This was originally written as "`vello_cpu` from the same scene", and that
+   is not possible: `vello` 0.9 builds its scene on `vello_encoding`, while
+   `vello_cpu` 0.2 builds one on `vello_common`. They are disjoint types, and a
+   scene cannot cross between them. A true no-GPU-at-all path would need
+   `uniwidged-compose` to emit into both, and is not planned until the two
+   Vello lines converge.
 
 **This was spiked before anything was built on top of it.** On Wayland the
 answer is unambiguous: the surface offers `[Opaque, PreMultiplied]`, and
@@ -374,7 +400,13 @@ rebuilt on the next wake; the surfaces keep their last frame meanwhile.
 
 WASI Preview 2 and the component model are stable enough to build on but not
 frozen. Wasmtime is pinned to an exact version, the WIT world is vendored in
-`wit/`, and the guest ABI gets a version field checked at instantiation.
+`wit/`, and the guest ABI gets a version field checked at instantiation —
+before `start`, and before anything a widget could do about it.
+
+Two of its constraints already shaped the design rather than merely annoying
+it: **no recursive types**, which is why the view tree crosses flat (§6, and
+the better shape for it), and **a trapped instance cannot be re-entered**,
+which is why a deadline overrun ends an instance instead of being retried.
 
 ## 11. Provenance and licensing
 

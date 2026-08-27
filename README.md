@@ -13,11 +13,19 @@ model.
 > architecture is settled and written down, the vocabulary crates are real and
 > tested, and the platform layers are documented skeletons.
 >
-> **Milestone M0 is done.** A `wlr-layer-shell` surface on the bottom layer
-> really does back a wgpu swapchain with per-pixel alpha, and the widget really
-> does stay below ordinary windows — measured, not assumed. See
+> **Milestones M0 through M3 are done.** A `wlr-layer-shell` surface on the bottom
+> layer really does back a wgpu swapchain with per-pixel alpha, and the widget
+> really does stay below ordinary windows. `uniwidged-render` drives it: one
+> device, many surfaces, an idle frame costing zero submits, and a headless
+> render that matches the on-screen one to within one 8-bit unit.
+> `uniwidged-compose` turns a view tree into that scene — layout, text, theme,
+> icons, hit rectangles and an accessibility tree, all from one pass — with
+> fifteen golden images behind it. And widgets really are sandboxed WASM
+> components: `widgets/conformance` is built for `wasm32-wasip2`, instantiated
+> by the real runtime, and thirteen tests assert what the sandbox *refuses*.
+> All measured, not assumed; see
 > [`spikes/m0_layer_shell/FINDINGS.md`](spikes/m0_layer_shell/FINDINGS.md).
-> Next is M1, the multi-surface renderer. See [`ROADMAP.md`](ROADMAP.md).
+> Next is M4, X11. See [`ROADMAP.md`](ROADMAP.md).
 
 ![A widget on the bottom layer, with the wallpaper showing through it](spikes/m0_layer_shell/images/widget.png)
 
@@ -33,7 +41,7 @@ becomes a *desktop widget* rather than an application window — on Windows,
 macOS, Wayland and X11, with all the flags and protocols that implies, and all
 the ways each platform gets it wrong. That is `uniwidged-shell`.
 
-[**Ferrum UI**](https://github.com/leuchtturm/ferrumui) is a GPU-rendered UI
+[**Ferrum UI**](https://github.com/j-pfalzgraf/ferrumui) is a GPU-rendered UI
 stack on Vello, wgpu, Parley, taffy and AccessKit. That is everything above the
 surface.
 
@@ -72,14 +80,15 @@ full of widgets by different authors look like one product.
 ```rust
 use uniwidged_guest::prelude::*;
 
+#[derive(Default)]
 struct Clock;
 
 impl Widget for Clock {
     fn view(&mut self, cx: &Cx) -> View {
-        let now = cx.local_time();
+        let now = now_seconds();
         panel(NodeId::named("clock"))
-            .child(text(cx.format_time(now)).role(Role::Display))
-            .child(text(cx.format_date(now)).role(Role::Caption).muted())
+            .child(text(cx.format_time(now).unwrap_or_default()).role(Role::Display))
+            .child(text(cx.format_date(now).unwrap_or_default()).role(Role::Caption).muted())
             .view()
     }
 
@@ -90,6 +99,12 @@ impl Widget for Clock {
 
 uniwidged_guest::export!(Clock);
 ```
+
+Every host call returns a `Result`: a user can decline anything, and a widget
+that disappears when they do is a worse answer than one that shows its last
+value and says it is stale. Off-target the whole thing still compiles and its
+tests still run — `export!` expands to nothing there — so a widget's logic can
+be tested without a WASM toolchain.
 
 No colours, no fonts, no pixels, no coordinates. A widget names
 `Role::Display`; the theme decides what that is. A widget names
@@ -116,28 +131,36 @@ crates/
   uniwidged-core       geometry · colour · ids · events · the wake model
   uniwidged-view       the view tree that crosses the sandbox boundary
   uniwidged-compose    view → layout → text → Vello scene · hit rects · a11y
-  uniwidged-render     one wgpu device, many surfaces, one submit per frame
+  uniwidged-render     one wgpu device, many surfaces, swapchain or readback
   uniwidged-shell      desktop-layer surfaces: wayland · x11 · win32 · appkit
   uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
   uniwidged-guest      the SDK widget authors compile against
   uniwidged-host       the daemon: scheduler, configuration, policy
   uniwidged-cli        `uniwidged run · new · install · list · doctor`
 wit/uniwidged.wit      the host/guest contract
+widgets/conformance    a widget that tries everything, so the sandbox can be
+                       tested for what it refuses
 spikes/m0_layer_shell  the proof that the whole thing is possible
 ```
 
 ## Building
 
 ```sh
+git clone https://github.com/j-pfalzgraf/ferrumui  ../ferrumui   # a sibling checkout
 cargo test --workspace
 ```
 
-uniwidged depends on Ferrum UI by path while it is unpublished, so a sibling
-checkout is expected:
+`uniwidged-compose` depends on `ferrum-layout` by path while Ferrum UI is
+unpublished — a sibling checkout is expected, and the dependency becomes a
+version requirement the moment it reaches crates.io.
 
-```sh
-git clone https://github.com/leuchtturm/ferrumui  ../ferrumui
-```
+Some tests need more than a compiler, and say so rather than skipping quietly:
+
+| | |
+|---|---|
+| the golden images | a Vulkan driver — `mesa-vulkan-drivers` supplies a software one. Without it they skip; `UNIWIDGED_REQUIRE_GPU=1` turns that into a failure, and CI sets it. |
+| the sandbox conformance suite | `rustup target add wasm32-wasip2`. It builds the conformance widget itself, so there is nothing to skip. |
+| the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
 
 ## Licence
 
