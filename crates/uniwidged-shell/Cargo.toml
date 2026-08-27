@@ -11,3 +11,6 @@ description = "Desktop-layer surfaces: below every window, above the wallpaper, 
 [dependencies]
 uniwidged-core.workspace = true
 raw-window-handle.workspace = true
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb.workspace = true

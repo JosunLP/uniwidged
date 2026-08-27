@@ -131,7 +131,6 @@ fn build(
                 // CSS — and measuring it here rather than through the measure
                 // callback is what makes the width explicit at all.
                 let (width, _) = engine.measure(string, shaping);
-                let width = width.ceil();
                 let (pad_x, _) = theme.chip_padding();
                 leaves.push(TextLeaf {
                     text: string.clone(),
@@ -139,7 +138,22 @@ fn build(
                     wrap: false,
                 });
                 return tree.measured_leaf(
-                    style.width(Length::px(width + pad_x * 2.0)),
+                    // `shrink(0)` as well as an explicit width: without it a
+                    // row that overflows makes taffy shrink whatever it can,
+                    // and a chip narrower than its text is a chip reading
+                    // "li…". Text *should* shrink — that is how it comes to be
+                    // ellipsised — but a pill that hugs its content has
+                    // nothing to give.
+                    // The *whole box* is rounded up, not just the text.
+                    // Taffy rounds a computed box down to whole pixels, and a
+                    // chip's padding is a fraction of its font size — so
+                    // ceiling only the text still leaves 32.44 becoming 32,
+                    // and the text a third of a pixel too wide for its own
+                    // content box. That rendered "live" as "li…", and only on
+                    // a display whose font made the arithmetic land badly.
+                    style
+                        .width(Length::px((width + pad_x * 2.0).ceil()))
+                        .shrink(0.0),
                     leaves.len() as u64,
                 );
             }
@@ -151,8 +165,11 @@ fn build(
             tree.measured_leaf(style, leaves.len() as u64)
         }
         Content::Icon(_) => {
+            // Square, and not shrinkable for the same reason as a chip: an
+            // icon squeezed narrower than it is tall stops being the icon it
+            // was drawn as.
             let size = theme.text(node.style.role).size * 1.15;
-            tree.leaf(style.size(Length::px(size), Length::px(size)))
+            tree.leaf(style.size(Length::px(size), Length::px(size)).shrink(0.0))
         }
         Content::Divider => {
             // Explicitly full width: the default cross-axis alignment sizes a

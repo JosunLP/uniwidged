@@ -50,6 +50,11 @@ accesskit = "0.24.1"
 # definition of a desktop widget.
 raw-window-handle = "0.6.2"
 
+# X11, through libxcb rather than through x11rb's pure-Rust connection: wgpu
+# needs a real `xcb_connection_t*` to create a surface, and a Rust connection
+# has no pointer to give it. `allow-unsafe-code` is what gates that module.
+x11rb = { version = "0.14", features = ["allow-unsafe-code"] }
+
 # --- WASM guests ----------------------------------------------------------
 wasmtime = { version = "48.0.1", default-features = false, features = [
     "component-model",

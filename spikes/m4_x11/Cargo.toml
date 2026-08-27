@@ -1,0 +1,19 @@
+[package]
+name = "m4-x11"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "M4 spike: is a widget transparent and below windows on X11, and which of the three alpha paths does it take?"
+
+# Its own workspace, like the M0 spike: it pulls in Vello, wgpu and X11, and
+# `cargo test --workspace` should stay a few seconds.
+[workspace]
+
+[dependencies]
+uniwidged-core = { path = "../../crates/uniwidged-core" }
+uniwidged-view = { path = "../../crates/uniwidged-view" }
+uniwidged-compose = { path = "../../crates/uniwidged-compose" }
+uniwidged-render = { path = "../../crates/uniwidged-render" }
+uniwidged-shell = { path = "../../crates/uniwidged-shell" }

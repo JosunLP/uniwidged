@@ -106,7 +106,13 @@ impl Capabilities {
             missing.push("no per-pixel alpha; the panel gets an opaque backing");
         }
         if !self.gpu_swapchain {
-            missing.push("no GPU swapchain; rendering falls back to the CPU");
+            // Careful with this wording: rasterisation is *not* falling back.
+            // Vello still runs on the GPU; the pixels are read back and handed
+            // to the platform instead of being presented through a swapchain,
+            // and the output is identical — which the M4 spike measures rather
+            // than assumes. Saying "falls back to the CPU" would tell a user
+            // their widgets are being drawn in software, which is untrue.
+            missing.push("no GPU swapchain; frames are presented through readback");
         }
         if missing.is_empty() {
             None

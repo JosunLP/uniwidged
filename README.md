@@ -13,7 +13,7 @@ model.
 > architecture is settled and written down, the vocabulary crates are real and
 > tested, and the platform layers are documented skeletons.
 >
-> **Milestones M0 through M3 are done.** A `wlr-layer-shell` surface on the bottom
+> **Milestones M0 through M4 are done.** A `wlr-layer-shell` surface on the bottom
 > layer really does back a wgpu swapchain with per-pixel alpha, and the widget
 > really does stay below ordinary windows. `uniwidged-render` drives it: one
 > device, many surfaces, an idle frame costing zero submits, and a headless
@@ -23,9 +23,12 @@ model.
 > fifteen golden images behind it. And widgets really are sandboxed WASM
 > components: `widgets/conformance` is built for `wasm32-wasip2`, instantiated
 > by the real runtime, and thirteen tests assert what the sandbox *refuses*.
-> All measured, not assumed; see
-> [`spikes/m0_layer_shell/FINDINGS.md`](spikes/m0_layer_shell/FINDINGS.md).
-> Next is M4, X11. See [`ROADMAP.md`](ROADMAP.md).
+> And it runs on X11 as well as Wayland — the risk `ARCHITECTURE.md` §10.1
+> named, measured rather than assumed, with the documented fallback built and
+> forced so it stays honest. See
+> [`spikes/m0_layer_shell/FINDINGS.md`](spikes/m0_layer_shell/FINDINGS.md) and
+> [`spikes/m4_x11/FINDINGS.md`](spikes/m4_x11/FINDINGS.md).
+> Next is M5, Windows. See [`ROADMAP.md`](ROADMAP.md).
 
 ![A widget on the bottom layer, with the wallpaper showing through it](spikes/m0_layer_shell/images/widget.png)
 
@@ -141,6 +144,7 @@ wit/uniwidged.wit      the host/guest contract
 widgets/conformance    a widget that tries everything, so the sandbox can be
                        tested for what it refuses
 spikes/m0_layer_shell  the proof that the whole thing is possible
+spikes/m4_x11          the same question on X11, where it was least certain
 ```
 
 ## Building

@@ -128,7 +128,7 @@ Both halves of containment are tested against a widget that really misbehaves:
 one that never returns is interrupted at its deadline, and one that allocates
 in a loop is stopped by the memory cap rather than by the clock.
 
-## M4 · X11
+## M4 · X11 ✅ **done, 2026-08-27**
 
 * The window: 32-bit TrueColor visual, `_NET_WM_STATE_BELOW`, `SKIP_TASKBAR`,
   `SKIP_PAGER`, `STICKY`, `WM_HINTS.input = False`, Motif decorations off.
@@ -137,8 +137,24 @@ in a loop is stopped by the memory cap rather than by the clock.
 * The three transparency paths of `ARCHITECTURE.md` §10.1, tried in order, with
   the chosen one reported by `uniwidged doctor`.
 
-**Exit:** the same widget as M3, transparent, below windows, on X11 — under at
-least one of the three paths, with the other two exercised by forcing them.
+**Exit — met, with one path deliberately unbuilt.** `spikes/m4_x11` creates the
+window through `uniwidged-shell`, renders a widget composed by
+`uniwidged-compose`, and checks the arithmetic: the window on screen is the
+scene composited over the wallpaper to within one 8-bit unit, and an ordinary
+opaque window covers it. Path 3 is forced with `SPIKE_FORCE_READBACK=1` and
+produces the same numbers, which is what makes "only presentation falls back" a
+measurement rather than a claim.
+
+Path 2 (EGL with an ARGB visual) is **not** built. It would buy GPU presentation
+on a driver that refuses alpha through Vulkan, where readback already gives GPU
+rasterisation and correct output; that is a performance difference on hardware
+nobody has measured. `AlphaPath` still names it, so the gap is visible rather
+than forgotten. Write-up in `spikes/m4_x11/FINDINGS.md`.
+
+The screenshots earned their place twice over: they found two rendering bugs
+with a single root cause — taffy rounds a computed box down to whole pixels —
+that the golden-image suite could not see, because its bundled font made the
+arithmetic land differently.
 
 ## M5 · Windows
 

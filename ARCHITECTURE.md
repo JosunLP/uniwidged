@@ -332,7 +332,7 @@ back a PNG. It is not a courtesy: it is how every visual test in CI runs.
 
 ## 10. Known risks
 
-### 10.1 X11 per-pixel alpha with a Vulkan swapchain — the highest risk
+### 10.1 X11 per-pixel alpha with a Vulkan swapchain — **largely resolved**
 
 Ephemeris gets a transparent X11 window by picking a 32-bit TrueColor visual
 and drawing into it with Cairo. A Vulkan swapchain on X11 usually advertises
@@ -344,11 +344,14 @@ where the wallpaper should be. Mitigations, in the order they will be tried:
 2. An EGL/GL path with an ARGB visual — EGL on X11 does honour the visual's
    alpha channel.
 3. **Readback presentation.** Vello renders to an offscreen texture exactly as
-   it does everywhere else; the pixels are read back and handed to XRender or
-   `XShmPutImage`, which is Ephemeris's own presentation path. Rasterisation is
-   untouched — the same `vello::Scene`, the same GPU, the same output — so the
-   golden images still apply. Only *presentation* falls back, which is the
-   thing X11 is actually bad at.
+   it does everywhere else; the pixels are read back and put into the window
+   with `PutImage`. Rasterisation is untouched — the same `vello::Scene`, the
+   same GPU, the same output — so the golden images still apply. Only
+   *presentation* falls back, which is the thing X11 is actually bad at.
+
+   No XRender is needed, which this plan assumed there would be: the window
+   already has a 32-bit visual, so the compositor blends its contents exactly
+   as it blends a swapchain's.
 
    This was originally written as "`vello_cpu` from the same scene", and that
    is not possible: `vello` 0.9 builds its scene on `vello_encoding`, while
@@ -360,12 +363,21 @@ where the wallpaper should be. Mitigations, in the order they will be tried:
 **This was spiked before anything was built on top of it.** On Wayland the
 answer is unambiguous: the surface offers `[Opaque, PreMultiplied]`, and
 `PreMultiplied` composites correctly through the whole Vello → wgpu →
-layer-surface path (`spikes/m0_layer_shell/FINDINGS.md`). X11 remains open and
-is settled in milestone M4.
+layer-surface path (`spikes/m0_layer_shell/FINDINGS.md`).
 
-If none of the three works there, X11 gets the CPU path permanently and the
-architecture is unchanged — which is precisely why compose emits a `Scene`
-rather than talking to wgpu.
+**On X11, path 1 works too** — measured on 2026-08-27 against Xvfb, openbox and
+xcompmgr: the surface offered `PreMultiplied`, and the window on screen is the
+scene composited over the wallpaper to within one 8-bit unit
+(`spikes/m4_x11/FINDINGS.md`).
+
+With one caveat that matters: **that was a software Vulkan driver.** Mesa's
+lavapipe presents on X11 through `XPutImage`, which can carry alpha; a hardware
+driver on DRI3/Present may still report `Opaque` and nothing else. So path 3 is
+built and tested rather than left as a plan — forcing it produces the *same*
+numbers, which is this section's claim measured rather than asserted. Path 2
+(EGL) is deliberately not built: it would buy GPU presentation on hardware
+nobody has measured, and maintaining an EGL/GL path on a guess is worse than
+naming the gap.
 
 ### 10.2 wgpu does not expect somebody else to drive the surface — **resolved**
 

@@ -286,3 +286,87 @@ fn a_scaled_base_size_scales_the_layout_and_not_only_the_glyphs() {
             > find(&small, NodeId::named("t")).rect.height()
     );
 }
+
+#[test]
+fn a_chip_does_not_shrink_when_the_row_overflows() {
+    // Found by looking at a screenshot: with a wide title beside it, taffy
+    // shrank the chip and it rendered as "li…". A pill that hugs its content
+    // has nothing to give; text is what should shrink, because that is how it
+    // comes to be ellipsised.
+    let roomy = panel(NodeId::named("root"))
+        .padding(0)
+        .child(row().child(chip("live").id(NodeId::named("c"))))
+        .view();
+    let cramped = panel(NodeId::named("root"))
+        .padding(0)
+        .child(
+            row()
+                .child(text("An extremely long title that will not fit at all").role(Role::Title))
+                .child(spacer())
+                .child(chip("live").id(NodeId::named("c"))),
+        )
+        .view();
+    let (roomy, cramped) = (placed(&roomy), placed(&cramped));
+    let alone = find(&roomy, NodeId::named("c")).rect.width();
+    let squeezed = find(&cramped, NodeId::named("c")).rect.width();
+    assert!(
+        (alone - squeezed).abs() < 0.01,
+        "the chip was {alone} wide alone and {squeezed} beside a long title"
+    );
+}
+
+#[test]
+fn an_icon_stays_square_when_the_row_overflows() {
+    // Same reason: an icon squeezed narrower than it is tall stops being the
+    // icon it was drawn as.
+    let view = panel(NodeId::named("root"))
+        .padding(0)
+        .child(
+            row()
+                .child(text("An extremely long title that will not fit at all").role(Role::Title))
+                .child(spacer())
+                .child(icon(Icon::Refresh).id(NodeId::named("i"))),
+        )
+        .view();
+    let root = placed(&view);
+    let rect = find(&root, NodeId::named("i")).rect;
+    assert!(
+        (rect.width() - rect.height()).abs() < 0.01,
+        "the icon became {}x{}",
+        rect.width(),
+        rect.height()
+    );
+}
+
+#[test]
+fn a_chip_is_always_wide_enough_for_its_own_text() {
+    // Taffy rounds a computed box down to whole pixels, and a chip's padding
+    // is a fraction of its font size — so a box of 32.44 becomes 32, and the
+    // text is a third of a pixel too wide for its own content rectangle. That
+    // rendered "live" as "li…" on a real display, while the golden images —
+    // whose bundled font happened to land differently — showed nothing wrong.
+    //
+    // Swept over lengths and base sizes so the arithmetic cannot land well by
+    // accident.
+    for base in [11.0f32, 13.0, 14.5, 17.0, 20.0] {
+        let theme = Theme {
+            base_font_size: base,
+            ..Theme::default()
+        };
+        let mut engine = TextEngine::new();
+        for label in ["1", "live", "stale", "12 new", "Wednesday"] {
+            let view = panel(NodeId::named("root"))
+                .child(row().child(chip(label).id(NodeId::named("c"))))
+                .view();
+            let root = compute(&view, &theme, &mut engine, AVAILABLE);
+            let placed = find(&root, NodeId::named("c"));
+            let shaping = crate::text::Shaping::from_style(theme.text(Role::Chip), true);
+            let natural = engine.measure(label, shaping).0 as f64;
+            assert!(
+                placed.content.width() >= natural,
+                "at base {base}, {label:?} needs {natural} and got {}",
+                placed.content.width()
+            );
+        }
+    }
+}
