@@ -11,3 +11,18 @@ description = "Turns a uniwidged view tree into a Vello scene, hit rects and acc
 [dependencies]
 uniwidged-core.workspace = true
 uniwidged-view.workspace = true
+uniwidged-render.workspace = true
+ferrum-layout.workspace = true
+# Text is *not* taken from `ferrum-text`, which is otherwise the obvious choice.
+# It exposes only size and generic family, and this crate needs weight (a title
+# at 600 against a body at 400 is most of the hierarchy) and tabular figures (a
+# clock whose digits change width jitters once a second). Parley offers both;
+# the wrapper does not. The Parley→Vello glyph bridge below follows the one in
+# `ferrum-text`, which is where the technique came from.
+parley.workspace = true
+accesskit.workspace = true
+
+[dev-dependencies]
+# The golden-image suite renders for real and decodes the references itself.
+uniwidged-render.workspace = true
+png.workspace = true

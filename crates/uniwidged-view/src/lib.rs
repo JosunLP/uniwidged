@@ -19,6 +19,7 @@
 //! schema to keep in sync, only a version to check.
 
 pub mod build;
+pub mod wire;
 
 use uniwidged_core::NodeId;
 
@@ -221,12 +222,23 @@ pub enum Direction {
 }
 
 /// Alignment across the layout axis.
+///
+/// The default is [`Align::Stretch`], which is also flexbox's own default and
+/// is what makes the common shapes work without saying anything: a row inside a
+/// panel spans the panel, a divider spans the row it is in, and a label with a
+/// value pushed to the far edge has an edge to be pushed to. With `Start` as
+/// the default, every one of those is sized to its content instead and the
+/// layout silently collapses leftwards.
+///
+/// Nodes that should hug their content regardless — a chip, an icon — say so by
+/// having a size of their own, which overrides a parent's stretch exactly as it
+/// does in CSS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Align {
-    #[default]
     Start,
     Center,
     End,
+    #[default]
     Stretch,
 }
 
