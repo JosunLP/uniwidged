@@ -13,7 +13,7 @@ model.
 > architecture is settled and written down, the vocabulary crates are real and
 > tested, and the platform layers are documented skeletons.
 >
-> **Milestones M0 through M4 are done.** A `wlr-layer-shell` surface on the bottom
+> **Milestones M0 through M4 are done, and M7 in part.** A `wlr-layer-shell` surface on the bottom
 > layer really does back a wgpu swapchain with per-pixel alpha, and the widget
 > really does stay below ordinary windows. `uniwidged-render` drives it: one
 > device, many surfaces, an idle frame costing zero submits, and a headless
@@ -28,12 +28,18 @@ model.
 > forced so it stays honest. See
 > [`spikes/m0_layer_shell/FINDINGS.md`](spikes/m0_layer_shell/FINDINGS.md) and
 > [`spikes/m4_x11/FINDINGS.md`](spikes/m4_x11/FINDINGS.md).
-> Next is M5, Windows. See [`ROADMAP.md`](ROADMAP.md).
+> And it runs: `uniwidged run` starts a real desktop on X11 with sandboxed WASM
+> widgets in it, drawing, responding to clicks, restarting when one fails, and
+> submitting nothing at all when nothing is happening. What is still missing is
+> named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over — dragging, the
+> Wayland shell, and the Windows and macOS platforms.
 
-![A widget on the bottom layer, with the wallpaper showing through it](spikes/m0_layer_shell/images/widget.png)
+![Two sandboxed WASM widgets running on a desktop](docs/images/desktop.png)
 
-*Not a mockup: `grim`'s capture of a headless sway session, showing a Vello
-scene on a layer surface composited per-pixel against the wallpaper.*
+*Not a mockup: `uniwidged run` on an X11 session, screenshotted. Two WASM
+components, each in its own desktop-layer window with its own swapchain, drawn
+from one GPU device. The right-hand one is the conformance widget, reporting
+that every capability it tried was refused.*
 
 ## Where it comes from
 

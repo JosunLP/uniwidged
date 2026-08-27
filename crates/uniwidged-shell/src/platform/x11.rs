@@ -514,6 +514,75 @@ impl X11Window {
         self.conn.flush().map_err(protocol)
     }
 
+    /// Blocks until an X11 event arrives or `timeout` elapses.
+    ///
+    /// `None` means block indefinitely, which is the common case on an idle
+    /// desktop and is what makes it cost nothing: there is no timer to fire and
+    /// no loop to turn. This is X11's half of `ARCHITECTURE.md` §5.
+    pub fn wait(&self, timeout: Option<std::time::Duration>) -> Result<(), X11Error> {
+        use std::os::unix::io::AsRawFd;
+        // Anything already queued means there is nothing to wait for. Checking
+        // first also closes the race where an event arrived between the last
+        // dispatch and this call, which would otherwise be slept through.
+        if self.conn.poll_for_event().map_err(protocol)?.is_some() {
+            return Ok(());
+        }
+        self.conn.flush().map_err(protocol)?;
+        let millis = match timeout {
+            Some(d) => d.as_millis().min(i32::MAX as u128) as i32,
+            None => -1,
+        };
+        let mut fds = [libc::pollfd {
+            fd: self.conn.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        // SAFETY: one valid descriptor, borrowed for the duration of the call.
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), 1, millis) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            // A signal is not a failure; the loop simply comes round again.
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(X11Error::Protocol(error.to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Every event queued right now.
+    ///
+    /// Drained rather than handled one at a time, so a burst of motion events
+    /// costs one pass through the loop instead of one each.
+    pub fn drain_events(&self) -> Result<Vec<Input>, X11Error> {
+        let mut out = Vec::new();
+        while let Some(event) = self.conn.poll_for_event().map_err(protocol)? {
+            match event {
+                x11rb::protocol::Event::ButtonPress(press) if press.detail == 1 => {
+                    out.push(Input::Click {
+                        window: press.event,
+                        x: press.event_x as f64,
+                        y: press.event_y as f64,
+                    });
+                }
+                x11rb::protocol::Event::Expose(expose) if expose.count == 0 => {
+                    out.push(Input::Exposed {
+                        window: expose.window,
+                    });
+                }
+                // The only client message a widget subscribes to.
+                x11rb::protocol::Event::ClientMessage(message)
+                    if message.data.as_data32()[0] == self.atoms.wm_delete_window =>
+                {
+                    out.push(Input::Closed {
+                        window: message.window,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
     /// Puts finished pixels straight into the window.
     ///
     /// This is [`AlphaPath::Readback`]: Vello rasterised to a texture as it
@@ -575,6 +644,26 @@ impl X11Window {
         self.conn.flush().map_err(protocol)?;
         Ok(())
     }
+}
+
+/// Something the user did, in terms the host can act on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    /// A primary-button press, in the window's own coordinates. Which *node*
+    /// that is remains the host's business — it did the layout.
+    Click {
+        window: u32,
+        x: f64,
+        y: f64,
+    },
+    /// The window's contents were lost and have to be put back. An X11 window
+    /// has no backing store by default, so this is not optional.
+    Exposed {
+        window: u32,
+    },
+    Closed {
+        window: u32,
+    },
 }
 
 /// The first 32-bit `TrueColor` visual on this screen, with its depth.

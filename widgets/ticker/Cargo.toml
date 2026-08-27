@@ -1,0 +1,23 @@
+[package]
+name = "ticker-widget"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "A widget that counts, so the host's scheduling and damage tracking can be tested against something that actually changes."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+uniwidged-guest = { path = "../../crates/uniwidged-guest" }
+uniwidged-core = { path = "../../crates/uniwidged-core" }
+uniwidged-view = { path = "../../crates/uniwidged-view" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

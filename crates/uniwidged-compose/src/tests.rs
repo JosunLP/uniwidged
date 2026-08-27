@@ -60,7 +60,7 @@ fn a_click_lands_on_the_node_the_screen_reader_was_told_about() {
         .expect("the button should be in the accessibility tree");
     assert!((announced.x0 - rect.x0).abs() < 0.01);
     assert!((announced.y1 - rect.y1).abs() < 0.01);
-    assert_eq!(composed.hit(rect.center(), &[id]), Some(id));
+    assert_eq!(composed.hit(rect.center()), Some(id));
 }
 
 #[test]
@@ -149,12 +149,16 @@ fn changing_the_theme_does_not_throw_away_the_shaping() {
 
 #[test]
 fn the_topmost_node_takes_the_click() {
-    // Paint order decides: the last thing drawn is the thing on top.
+    // Paint order decides: the last thing drawn is the thing on top. The
+    // order comes from the compose pass rather than from the caller, so a
+    // caller cannot get it wrong.
     let view = sample();
     let composed = compose(&view, |c| c);
     let refresh = NodeId::named("refresh");
-    let value = NodeId::named("value");
     let point = composed.hit_rects[&refresh].center();
-    // Given both in paint order, the later one wins where they overlap.
-    assert_eq!(composed.hit(point, &[value, refresh]), Some(refresh));
+    assert_eq!(composed.hit(point), Some(refresh));
+    assert!(
+        composed.order.contains(&refresh),
+        "every named node should be in paint order"
+    );
 }

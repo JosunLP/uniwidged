@@ -59,6 +59,9 @@ pub struct Composed {
     /// once the shell has divided out the scale factor, and converting twice is
     /// how a click ends up a few pixels off on a fractional-scale display.
     pub hit_rects: HashMap<NodeId, Rect>,
+    /// Named nodes in paint order, so the topmost can be found without
+    /// re-walking the tree. The last thing drawn is the thing on top.
+    pub order: Vec<NodeId>,
     /// The flat node list for AccessKit, root first. See [`a11y`].
     pub a11y: Vec<(accesskit::NodeId, accesskit::Node)>,
     /// The size the tree wanted, before the surface's own constraints.
@@ -70,9 +73,9 @@ impl Composed {
     ///
     /// Uses the recorded rectangles rather than re-walking the tree, so the
     /// answer is by construction the same one the screen reader was given.
-    pub fn hit(&self, point: Point, order: &[NodeId]) -> Option<NodeId> {
+    pub fn hit(&self, point: Point) -> Option<NodeId> {
         // Reverse paint order: the last thing drawn is the topmost.
-        order
+        self.order
             .iter()
             .rev()
             .find(|id| {
@@ -151,8 +154,10 @@ impl Compositor {
         painter.paint(&mut scene, &placed, &mut self.text);
 
         let mut hit_rects = HashMap::new();
+        let mut order = Vec::new();
         placed.walk(&mut |node| {
             if !node.node.id.is_anonymous() {
+                order.push(node.node.id);
                 // Mirrored, because a click arrives in the coordinates the user
                 // sees. Recording the unmirrored rectangle would make every
                 // right-to-left widget clickable in the wrong place — silently,
@@ -166,6 +171,7 @@ impl Compositor {
         Composed {
             scene,
             hit_rects,
+            order,
             a11y,
             intrinsic: Size::new(placed.rect.width(), placed.rect.height()),
         }

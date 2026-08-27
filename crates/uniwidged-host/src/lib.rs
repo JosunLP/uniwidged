@@ -10,6 +10,12 @@
 //! [`scheduler`] is complete and tested. Lifecycle, configuration and IPC land
 //! in milestone M7.
 
+pub mod config;
+pub mod host;
 pub mod scheduler;
+pub mod supervisor;
 
+pub use config::{Config, Placement, WidgetConfig};
+pub use host::{Host, HostError, TickReport};
 pub use scheduler::{Scheduler, Tick};
+pub use supervisor::{State, Supervised};

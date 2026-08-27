@@ -1,0 +1,7 @@
+# Broken on purpose. Installed by the host's own tests to check that a widget
+# which cannot be made to work is given up on rather than restarted forever.
+name = "broken"
+version = "0.1.0"
+description = "Hangs on every instance, deliberately"
+capabilities = []
+memory-mb = 16

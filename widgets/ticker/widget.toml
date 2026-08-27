@@ -1,0 +1,7 @@
+# The one capability it needs, and nothing else — which is also what makes it a
+# useful test of the host: a widget with a schedule but no reach.
+name = "ticker"
+version = "0.1.0"
+description = "Counts, so that something on the desktop is known to be changing"
+capabilities = ["timer"]
+memory-mb = 16

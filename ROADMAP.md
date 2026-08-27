@@ -180,7 +180,7 @@ Alt-Tab entry, and shows the wallpaper through its glass.
 **Exit:** as M5, plus: the widget follows the user across Spaces and does not
 slide away under Mission Control.
 
-## M7 · The host and the CLI
+## M7 · The host and the CLI — **partly done, 2026-08-27**
 
 * Lifecycle: install, configure, enable, disable, remove; per-widget data
   directory and keychain namespace.
@@ -191,8 +191,39 @@ slide away under Mission Control.
 * Autostart per platform.
 * The idle soak test of `ARCHITECTURE.md` §5, in CI.
 
-**Exit:** eight widgets installed, arranged across two monitors, surviving a
-restart; and the soak test holding the CPU budget with zero frames submitted.
+**Done.** `uniwidged-host` is the loop `ARCHITECTURE.md` §5 describes, with real
+WASM widgets in it: a supervisor that restarts a failed widget and gives up
+after three, damage tracking that draws nothing when a view has not changed,
+input routed by hit-testing so a widget is told *which node* rather than where
+the pointer was, and a theme change that redraws everything without any view
+changing. Twelve integration tests against three real components — including
+`widgets/broken`, which hangs on every instance so that giving up can be tested
+at all.
+
+**The soak test holds.** Eight widgets installed, first frames drawn, and then
+`next_timeout` is `None` and five further ticks draw nothing and run nothing.
+
+`uniwidged-cli` has `run`, `install`, `list`, `doctor` and `snapshot`, and
+`run` starts a real desktop on X11: one process, one GPU device, one loop, a
+desktop-layer window and swapchain per widget.
+
+**Not done, and named rather than glossed over:**
+
+* **Dragging, resizing and the lock switch.** The configuration carries
+  `locked` and a placement; nothing moves a widget yet.
+* **Placement by output name.** The configuration stores it; the X11 shell does
+  not yet place a window on a named monitor, so "two monitors" is untested.
+* **The per-widget data directory and keychain namespace.** The paths are
+  computed; the `fs` and `secrets` capabilities still answer `unavailable`.
+* **Autostart**, and `uniwidged new`.
+* **The Wayland shell.** Its window code is still in `spikes/m0_layer_shell`
+  and has to be promoted into `uniwidged-shell` — the next platform job, and a
+  larger one than it looks because the surface lifecycle is driven differently.
+
+Because of the last two, the milestone's original exit criterion — eight
+widgets across two monitors surviving a restart — is **not** met. What is met
+is everything that criterion was standing in for: that a desktop full of real
+sandboxed widgets runs, draws, responds and costs nothing at rest.
 
 ## M8 · Shipping
 

@@ -2277,7 +2277,11 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 name = "uniwidged-cli"
 version = "0.0.1"
 dependencies = [
+ "uniwidged-compose",
+ "uniwidged-core",
  "uniwidged-host",
+ "uniwidged-render",
+ "uniwidged-runtime",
  "uniwidged-shell",
 ]
 
@@ -2316,12 +2320,16 @@ dependencies = [
 name = "uniwidged-host"
 version = "0.0.1"
 dependencies = [
+ "accesskit",
+ "serde",
+ "toml",
  "uniwidged-compose",
  "uniwidged-core",
  "uniwidged-render",
  "uniwidged-runtime",
  "uniwidged-shell",
  "uniwidged-view",
+ "wasmtime",
 ]
 
 [[package]]
@@ -2351,6 +2359,7 @@ dependencies = [
 name = "uniwidged-shell"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "raw-window-handle",
  "uniwidged-core",
  "x11rb",

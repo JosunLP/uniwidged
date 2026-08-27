@@ -15,3 +15,10 @@ uniwidged-compose.workspace = true
 uniwidged-render.workspace = true
 uniwidged-runtime.workspace = true
 uniwidged-shell.workspace = true
+serde.workspace = true
+toml.workspace = true
+# The supervisor holds a compiled component between instances, which is a
+# Wasmtime type; the runtime crate does not re-export it because nothing else
+# needs it.
+wasmtime.workspace = true
+accesskit.workspace = true

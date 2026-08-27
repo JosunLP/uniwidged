@@ -13,5 +13,9 @@ name = "uniwidged"
 path = "src/main.rs"
 
 [dependencies]
+uniwidged-core.workspace = true
+uniwidged-compose.workspace = true
 uniwidged-host.workspace = true
+uniwidged-render.workspace = true
+uniwidged-runtime.workspace = true
 uniwidged-shell.workspace = true
