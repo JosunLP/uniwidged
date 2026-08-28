@@ -5,6 +5,10 @@
 //! uniwidged new <name>              scaffold a widget that already builds
 //! uniwidged check <widget.wasm>     is this a widget, and who signed it?
 //! uniwidged install <widget.wasm>   install a widget, showing what it asks for
+//! uniwidged registry add <url>      read a registry, pinned to its key
+//! uniwidged search [term]           what the registries offer
+//! uniwidged add <name>[@version]    install one from a registry
+//! uniwidged update [name]           what is newer, and take it
 //! uniwidged enable|disable <name>   turn one on or off without forgetting it
 //! uniwidged remove <name>           uninstall, and optionally forget its data
 //! uniwidged keygen | sign           publish widgets under a key of your own
@@ -48,8 +52,10 @@ mod check;
 mod configure;
 #[cfg(unix)]
 mod daemon;
+mod install;
 mod new;
 mod paths;
+mod registry;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod run;
 mod trust;
@@ -65,7 +71,11 @@ fn main() -> ExitCode {
         Some("run") => command_run(&rest),
         Some("new") => new::create(&rest),
         Some("check") => check::check(&rest),
-        Some("install") => command_install(&rest),
+        Some("install") => install::command(&rest),
+        Some("registry") => registry::command(&rest),
+        Some("search") => registry::search(&rest),
+        Some("add") => registry::add(&rest),
+        Some("update") => registry::update(&rest),
         Some("list") => command_list(&rest),
         Some("enable") => command_enable(&rest, true),
         Some("disable") => command_enable(&rest, false),
@@ -83,6 +93,17 @@ fn main() -> ExitCode {
         Some("autostart") => autostart::command(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
+        Some("--version" | "-V" | "version") => {
+            // The ABI version too, because "which uniwidged is this" is nearly
+            // always asked about a widget that will not load, and the answer is
+            // the number in its manifest against the number here.
+            println!(
+                "uniwidged {} (widget ABI {})",
+                env!("CARGO_PKG_VERSION"),
+                uniwidged_runtime::ABI_VERSION
+            );
+            Ok(())
+        }
         Some("--help" | "-h" | "help") | None => {
             print_usage();
             Ok(())
@@ -112,6 +133,12 @@ fn print_usage() {
            uniwidged trust <key> [--name N]  accept that key's signatures\n  \
            uniwidged untrust <key> | trusted\n  \
            uniwidged install <widget.wasm> [--allow-unsigned]\n  \
+           uniwidged registry add <url> --key <key> [--name N]\n  \
+           uniwidged registry remove <name> | list\n  \
+           uniwidged registry publish --key F --base-url U <w.wasm>…\n  \
+           uniwidged search [term] [--refresh] [--offline]\n  \
+           uniwidged add <name>[@version] [--registry N]\n  \
+           uniwidged update [name] [--check]   what is newer, and take it\n  \
            uniwidged list                    what is installed, and what it was granted\n  \
            uniwidged lock <name>             pin a widget where it is\n  \
            uniwidged unlock <name>           let it be dragged again\n  \
@@ -120,7 +147,8 @@ fn print_usage() {
            uniwidged reload                  tell a running desktop to read it again\n  \
            uniwidged autostart [enable|disable|status]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
-           uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n"
+           uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n  \
+           uniwidged --version\n"
     );
 }
 
@@ -171,121 +199,9 @@ fn command_reload(args: &[String]) -> Result<(), String> {
 ///
 /// Called by every command that writes one. Quiet when there is no desktop:
 /// most of the time there is not, and a line every time would be noise.
-fn nudge_desktop() {
+pub(crate) fn nudge_desktop() {
     #[cfg(unix)]
     daemon::nudge_quietly();
-}
-
-fn command_install(args: &[String]) -> Result<(), String> {
-    use uniwidged_host::config::{Config, WidgetConfig};
-    use uniwidged_runtime::SecretStore;
-    use uniwidged_runtime::manifest::Manifest;
-
-    let component = args
-        .first()
-        .filter(|a| !a.starts_with('-'))
-        .ok_or("which widget? `uniwidged install <widget.wasm>`")?;
-    let component = PathBuf::from(component)
-        .canonicalize()
-        .map_err(|e| format!("{component}: {e}"))?;
-    let manifest_path = component.with_extension("toml");
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let manifest = Manifest::parse(&text).map_err(|e| e.to_string())?;
-
-    // Provenance before consent. The list below is only worth reading if it is
-    // the list the author wrote — a signature covering the component alone
-    // would let anybody widen it, which is why `signature::digest` covers both.
-    let allow_unsigned = args.iter().any(|a| a == "--allow-unsigned");
-    let signed_by = match trust::provenance(&component, &manifest_path)? {
-        trust::Provenance::Trusted(who) => Some(who),
-        trust::Provenance::Refused(why) => {
-            // Never installable, `--allow-unsigned` or not: a signature that
-            // does not verify is a positive claim that something is wrong,
-            // where a missing one is only an absence.
-            return Err(format!(
-                "{} has a signature and it does not check out: {why}",
-                component.display()
-            ));
-        }
-        trust::Provenance::Unsigned if allow_unsigned => None,
-        trust::Provenance::Unsigned => {
-            return Err(format!(
-                "{} is not signed.\n  \
-                 If you built it yourself, `uniwidged install --allow-unsigned` \
-                 says so out loud.\n  \
-                 If somebody sent it to you, ask them for the signature and \
-                 their key, then `uniwidged trust <key>`.",
-                component.display()
-            ));
-        }
-    };
-
-    // What the user is actually asked. Everything the runtime later enforces
-    // is on this list, and nothing that is not.
-    println!("\n  {} {}", manifest.name, manifest.version);
-    match &signed_by {
-        Some(who) => println!("  signed by {who}"),
-        None => println!(
-            "  NOT SIGNED — you are trusting this because you chose to, and \
-             nothing here checked anything"
-        ),
-    }
-    if !manifest.description.is_empty() {
-        println!("  {}", manifest.description);
-    }
-    println!("\n  This widget wants to:");
-    for line in manifest.consent_summary() {
-        println!("    · {line}");
-    }
-    println!(
-        "  It may use up to {} MB of memory.\n",
-        manifest.limits.memory_bytes / (1024 * 1024)
-    );
-    // "store passwords in your keychain" is a sentence whose weight depends
-    // entirely on what the keychain is, and a user cannot be asked to consent
-    // to something they have not been told. So the one capability whose
-    // backing store is a judgement call names it here, at the moment of the
-    // decision, rather than only in `doctor` where nobody looks first.
-    if manifest
-        .capabilities
-        .iter()
-        .any(|c| matches!(c, uniwidged_runtime::Capability::Secrets))
-    {
-        println!(
-            "  Its keychain here is {}.\n",
-            uniwidged_runtime::FileKeyring::new(paths::keyring_dir()).describe()
-        );
-    }
-
-    if !manifest.settings.is_empty() {
-        // Said at installation because it is the moment somebody is looking:
-        // a widget whose knobs are only discoverable by running another
-        // command is a widget whose knobs nobody finds.
-        println!(
-            "  It can be configured: {}",
-            manifest
-                .settings
-                .iter()
-                .map(|setting| setting.key.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        println!("  `uniwidged configure {}`\n", manifest.name);
-    }
-
-    let path = paths::config_file();
-    let mut config = Config::read(&path).map_err(|e| e.to_string())?;
-    let name = manifest.name.clone();
-    config.widgets.retain(|w| w.name != name);
-    config
-        .widgets
-        .push(WidgetConfig::granting_all(&name, component, &manifest));
-    config.write(&path).map_err(|e| e.to_string())?;
-    nudge_desktop();
-    println!("  installed; recorded in {}", path.display());
-    println!("  to decline one of those, remove it from `granted` there.\n");
-    Ok(())
 }
 
 fn command_list(args: &[String]) -> Result<(), String> {
@@ -501,6 +417,9 @@ fn command_remove(args: &[String]) -> Result<(), String> {
     if config.widget(name).is_none() {
         return Err(format!("`{name}` is not installed; try `uniwidged list`"));
     }
+    // Kept before the entry goes, so that `--purge` can find the files a
+    // download left in the widget store.
+    let component = config.widget(name).map(|widget| widget.component.clone());
     config.widgets.retain(|widget| widget.name != *name);
     config.write(&path).map_err(|e| e.to_string())?;
     nudge_desktop();
@@ -508,6 +427,28 @@ fn command_remove(args: &[String]) -> Result<(), String> {
 
     let data = paths::widget_data_dir(name);
     if args.iter().any(|a| a == "--purge") {
+        // A widget that came from a registry has a copy in the store, and
+        // somebody purging a widget means the widget rather than only what it
+        // wrote. One that was installed from a file somewhere else is left
+        // exactly where its owner put it — deleting a file this program did
+        // not put there is not this command's business.
+        if let Some(component) = component
+            && component.starts_with(paths::widget_store_dir())
+        {
+            for file in [
+                component.clone(),
+                component.with_extension("toml"),
+                trust::signature_path(&component),
+            ] {
+                match std::fs::remove_file(&file) {
+                    Ok(()) => println!("  and deleted {}", file.display()),
+                    // A widget with no signature has no `.sig`, which is not a
+                    // failure worth a line.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => eprintln!("uniwidged: could not delete {}: {e}", file.display()),
+                }
+            }
+        }
         match std::fs::remove_dir_all(&data) {
             Ok(()) => println!("  and deleted {}", data.display()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -543,6 +484,29 @@ fn command_doctor() -> Result<(), String> {
             println!("\n  renderer: {} ({:?})", info.name, info.backend);
         }
         Err(e) => println!("\n  renderer: unavailable — {e}"),
+    }
+
+    // Where this machine would fetch a widget from, and whose signatures it
+    // would accept. Both are answers to "why can I not install this", which is
+    // the question `doctor` is usually being asked.
+    match registry::read_registries() {
+        Ok(registries) if registries.is_empty() => {
+            println!("\n  registries: none — `uniwidged registry add <url> --key <key>`")
+        }
+        Ok(registries) => {
+            println!("\n  registries:");
+            for registry in registries {
+                println!("    {}  {}", registry.name, registry.url);
+            }
+        }
+        Err(why) => println!("\n  registries: unreadable — {why}"),
+    }
+    match trust::trusted() {
+        Ok(keys) if keys.is_empty() => {
+            println!("  trusted keys: none, so every widget needs --allow-unsigned")
+        }
+        Ok(keys) => println!("  trusted keys: {}", keys.keys().len()),
+        Err(why) => println!("  trusted keys: unreadable — {why}"),
     }
     Ok(())
 }

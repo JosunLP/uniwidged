@@ -22,9 +22,20 @@ uniwidged-shell.workspace = true
 # `check` counts the nodes a widget draws, so the CLI needs the view vocabulary
 # rather than only the crates that consume it.
 uniwidged-view.workspace = true
+# `registries.toml`, which is read here rather than by the host: the list of
+# places a machine fetches code from is a property of the machine, not of a
+# running desktop.
+serde.workspace = true
+toml.workspace = true
 
 # `sigaction`, `kill` and one `write` from a signal handler — see `daemon`.
 # Unix only, and already in the graph through Wasmtime, so it costs nothing to
 # compile.
+[dev-dependencies]
+# The TLS server the registry tests point at. Enabling it here — in
+# `[dev-dependencies]` — is what keeps it out of the shipped binary: a release
+# build never looks at this section, so `test_server` is not compiled into it.
+uniwidged-runtime = { workspace = true, features = ["test-support"] }
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

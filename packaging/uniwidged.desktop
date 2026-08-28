@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=uniwidged
+GenericName=Desktop widgets
+Comment=Sandboxed widgets below your windows and above your wallpaper
+Exec=uniwidged run
+Terminal=false
+Categories=Utility;
+# Not shown in a menu: `uniwidged run` is a session process rather than
+# something to launch and look at, and an entry that starts a second desktop
+# when somebody clicks it twice is a bug waiting for a user. It is here so that
+# a session manager and `uniwidged autostart` have one entry to name — see
+# `crates/uniwidged-cli/src/autostart.rs`, which writes the per-user copy.
+NoDisplay=true
+X-GNOME-Autostart-enabled=false

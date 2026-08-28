@@ -42,6 +42,15 @@ use sha2::{Digest, Sha256};
 /// silently accepting them against new rules.
 const DOMAIN: &[u8] = b"uniwidged-widget-signature-v1\0";
 
+/// The same, for a registry index.
+///
+/// A *different* string, which is the whole reason the domain exists. Without
+/// it, a signature over some widget's bytes could be presented as a signature
+/// over an index — and a registry publisher's key and a widget author's key
+/// are two different claims that must never be usable for each other's
+/// sentence. See [`crate::registry`], where the two are argued at length.
+const INDEX_DOMAIN: &[u8] = b"uniwidged-registry-index-v1\0";
+
 /// The first token of a `.sig` file, so a file that is not one is refused with
 /// a sentence rather than a parse error.
 const MAGIC: &str = "uniwidged-sig-v1";
@@ -58,6 +67,71 @@ pub fn digest(component: &[u8], manifest: &str) -> [u8; 32] {
     hasher.update((manifest.len() as u64).to_le_bytes());
     hasher.update(manifest.as_bytes());
     hasher.finalize().into()
+}
+
+/// What a signature over a registry index covers.
+///
+/// The text exactly as it was served, byte for byte. Not a parse and not a
+/// re-serialisation: a signature checked against a document this program
+/// rewrote is a signature over something nobody signed, and every difference
+/// between the two — a dropped comment, a re-ordered table, a normalised
+/// number — would be a hole.
+pub fn index_digest(index: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(INDEX_DOMAIN);
+    hasher.update((index.len() as u64).to_le_bytes());
+    hasher.update(index.as_bytes());
+    hasher.finalize().into()
+}
+
+/// Was this index signed by the key this registry was pinned to?
+///
+/// The key is an argument rather than a lookup in [`TrustedKeys`], and that is
+/// the design: trusting somebody to *publish a list* is not trusting them to
+/// *write a widget*. A registry's key is pinned when the registry is added and
+/// is used for nothing else, so taking over a registry does not let anybody
+/// sign a widget, and a widget author's key does not let them rewrite a list.
+pub fn verify_index(
+    index: &str,
+    signature: &SignatureFile,
+    key: PublicKey,
+) -> Result<(), VerifyError> {
+    if signature.key != key {
+        return Err(VerifyError::UntrustedKey(signature.key));
+    }
+    let verifying =
+        ed25519_dalek::VerifyingKey::from_bytes(&key.0).map_err(|_| VerifyError::MalformedKey)?;
+    verifying
+        .verify(
+            &index_digest(index),
+            &ed25519_dalek::Signature::from_bytes(&signature.signature.0),
+        )
+        .map_err(|_| VerifyError::BadSignature)
+}
+
+/// Is this signature intact under the key it names?
+///
+/// **Not** an answer to "should this widget be installed" — that is
+/// [`TrustedKeys::verify`], which asks whether the key is one this machine
+/// decided to trust, and asks it *first* so that "signature valid" can never
+/// be reported about a key nobody trusts.
+///
+/// This is the narrower question a *publisher* has: I am about to list this
+/// widget in an index, and its `.sig` should be a signature over these exact
+/// bytes. A signature that does not check out here is a file somebody has to
+/// re-sign, and listing it would publish a download every client will reject.
+pub fn verify_intact(
+    component: &[u8],
+    manifest: &str,
+    signature: &SignatureFile,
+) -> Result<(), VerifyError> {
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&signature.key.0)
+        .map_err(|_| VerifyError::MalformedKey)?;
+    key.verify(
+        &digest(component, manifest),
+        &ed25519_dalek::Signature::from_bytes(&signature.signature.0),
+    )
+    .map_err(|_| VerifyError::BadSignature)
 }
 
 /// A public key somebody may have signed a widget with.
@@ -124,6 +198,11 @@ impl SecretKey {
 
     pub fn sign(&self, component: &[u8], manifest: &str) -> Signature {
         Signature(self.0.sign(&digest(component, manifest)).to_bytes())
+    }
+
+    /// Signs a registry index. See [`index_digest`] on what is covered.
+    pub fn sign_index(&self, index: &str) -> Signature {
+        Signature(self.0.sign(&index_digest(index)).to_bytes())
     }
 }
 
@@ -327,8 +406,22 @@ impl std::fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
-fn to_hex(bytes: &[u8]) -> String {
+/// Bytes as lower-case hexadecimal.
+///
+/// Public because a digest is written into a registry index as well as read
+/// out of one, and two spellings of the same thirty-two bytes is a comparison
+/// that fails for no reason a person can see.
+pub fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Thirty-two bytes of hexadecimal, or nothing.
+///
+/// The digest reader for [`crate::registry`], which wants an `Option` rather
+/// than this module's [`KeyError`]: a bad digest in an index is a fact about
+/// the index, and it says so in its own words.
+pub fn hex32(text: &str) -> Option<[u8; 32]> {
+    from_hex::<32>(text).ok()
 }
 
 /// Hex to a fixed-size array, refusing anything else.

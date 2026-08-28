@@ -482,6 +482,30 @@ writes it `0600` and refuses to overwrite one.
 
 For your own builds, `--allow-unsigned` says so out loud and installs anyway.
 
+### Somewhere for people to find it
+
+Sending people a file works, and does not scale past your friends. A registry
+is one signed TOML document on a static host — no accounts, no API, nothing to
+run — and once somebody has added it, your widget is `uniwidged add my-widget`:
+
+```sh
+uniwidged keygen --out ~/.uniwidged-registry-key       # once: signs your *list*
+uniwidged registry publish \
+    --key ~/.uniwidged-registry-key \
+    --base-url https://widgets.example \
+    --out index.toml \
+    my_widget.wasm
+# upload index.toml, index.toml.sig, and the .wasm/.toml/.sig beside them
+```
+
+The key that signs the index is **not** the key that signs your widget, and
+that separation is the point: somebody who trusts your list has not thereby
+trusted your code, and somebody who takes over your web host cannot sign a
+widget as you. Give your version a `version` in `widget.toml` while you are
+here — without one, nothing can tell your users that a newer build exists.
+
+[`docs/registries.md`](registries.md) is both halves in full.
+
 ## 10. What the host does to you
 
 Running other people's code on a desktop only works because of two limits, and

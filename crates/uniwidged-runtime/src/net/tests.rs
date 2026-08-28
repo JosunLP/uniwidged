@@ -134,9 +134,7 @@ fn a_grant_for_one_host_is_not_a_grant_for_a_host_that_contains_it() {
 // Against a real server
 // ---------------------------------------------------------------------------
 
-mod server;
-
-use server::TestServer;
+use crate::test_server::TestServer;
 
 /// A client that trusts only the test server's certificate.
 fn client(server: &TestServer) -> Http {

@@ -13,9 +13,10 @@ model.
 > architecture is settled and written down, the vocabulary crates are real and
 > tested, and the platform layers are documented skeletons.
 >
-> **Milestones M0 through M4 are done, and M7 in part.** A `wlr-layer-shell` surface on the bottom
-> layer really does back a wgpu swapchain with per-pixel alpha, and the widget
-> really does stay below ordinary windows. `uniwidged-render` drives it: one
+> **Milestones M0 through M4 are done, M7 in full and M8 in part.** A
+> `wlr-layer-shell` surface on the bottom layer really does back a wgpu
+> swapchain with per-pixel alpha, and the widget really does stay below
+> ordinary windows. `uniwidged-render` drives it: one
 > device, many surfaces, an idle frame costing zero submits, and a headless
 > render that matches the on-screen one to within one 8-bit unit.
 > `uniwidged-compose` turns a view tree into that scene — layout, text, theme,
@@ -79,9 +80,31 @@ model.
 > Installing and removing still take a restart, and say so, because doing half
 > of that on a signal is how a desktop ends up with a window nothing draws into.
 > And a link a widget draws now opens: `https` only, to a host the manifest
-> declared, checked at the click rather than when the view was built. What is
-> still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over
-> — the Windows and macOS platforms, packaging, and somewhere to find widgets.
+> declared, checked at the click rather than when the view was built.
+>
+> **And now there is somewhere to find widgets.** A registry is one signed TOML
+> file on a static host — no accounts, no API, no server to run — and
+> `uniwidged search · add · update` read it. Two signatures by two people are
+> checked separately: the *index* is signed by whoever publishes the list, with
+> its key pinned when the registry is added, and each *widget* by whoever wrote
+> it, against the trusted keys this machine already had. Neither implies the
+> other, so a registry can offer and never install: the machine's own keys
+> still decide. What a listing claims is checked against the manifest that
+> arrives — a download whose manifest asks for more than the entry showed is
+> refused with every signature valid — and `update`, the one command that
+> installs something nobody looked at, will not widen a permission: it says so
+> and sends you to `add`, which prints the whole list. It is all driven against
+> a real TLS server in the tests, including an index edited after it was signed
+> and a component swapped after it was listed.
+>
+> **And it packages.** `packaging/deb/build.sh` builds a `.deb` with `dpkg-deb`
+> and nothing else, and CI builds it and then looks inside: the binary, the
+> manual page and the desktop entry are there, the version in the package is
+> the version in the workspace, and the binary that comes out of it runs. What
+> is still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed
+> over — the Windows and macOS platforms, and the packaging that waits on them,
+> because packaging a binary that prints "this build has no shell for the
+> current platform" would be packaging nothing.
 >
 > **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
 > surface on the bottom layer; an X11 session gets a 32-bit
@@ -218,6 +241,24 @@ network" is not. `link:open-meteo.com` is a *different* line, because "talks to
 a server" and "can send you to a web page" are different things happening to a
 user.
 
+## Finding a widget
+
+```sh
+uniwidged registry add https://widgets.example/index.toml --key 3d40…
+uniwidged search clock
+uniwidged add clock
+uniwidged update
+```
+
+A registry is one signed TOML file on a static host. The key you pin says *who
+publishes the list*; whether a widget is installed is still decided by
+`trusted-keys`, where it always was. A registry cannot vouch a widget past
+that: downloading is not trusting.
+
+Publishing one is `uniwidged registry publish --key <yours> --base-url <where>
+*.wasm`, and then uploading what it wrote. Both halves are
+[**`docs/registries.md`**](docs/registries.md).
+
 ## Layout
 
 ```
@@ -243,6 +284,9 @@ widgets/conformance    a widget that tries everything, so the sandbox can be
                        tested for what it refuses
 docs/writing-a-widget.md  the guide
 docs/api-reference.md     every function, type, limit and refusal, on one page
+docs/registries.md        finding a widget, and publishing one
+packaging/                a `.deb` that CI builds and looks inside, a PKGBUILD,
+                          and the manual page
 spikes/m0_layer_shell  the proof that the whole thing is possible
 spikes/m4_x11          the same question on X11, where it was least certain
 ```
@@ -265,6 +309,7 @@ Some tests need more than a compiler, and say so rather than skipping quietly:
 | the layer-shell tests | `sway`. They start their own headless compositor, so no session is needed; without it they skip, and `UNIWIDGED_REQUIRE_WAYLAND=1` makes that a failure. CI sets it. |
 | the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
 | the HTTPS tests | `openssl`, to make a certificate for the TLS server they start themselves. No internet is used or needed. Without it they skip, and `UNIWIDGED_REQUIRE_NET=1` makes that a failure. |
+| the registry tests | `openssl`, as above: they start a TLS server, serve a signed index over it and drive the real binary against it. Same bargain — skipped without it, a failure under `UNIWIDGED_REQUIRE_NET=1`. |
 | the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
 | the two-monitor tests | `Xvfb` and `xrandr`, which declares two virtual RandR monitors over the nested server's screen — the same protocol path a docked laptop uses. Same bargain: skipped without them, a failure under `UNIWIDGED_REQUIRE_X11=1`. |
 

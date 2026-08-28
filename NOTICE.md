@@ -95,6 +95,12 @@ permissive, with no copyleft and no attribution requirement. It is allowed
 explicitly rather than by loosening the policy, so the next licence to appear
 still has to be read by somebody.
 
+rustls appears a second time, as the **server** in
+`uniwidged_runtime::test_server` — the TLS server the transport and registry
+tests point at. It is behind the `test-support` feature, which only a
+`[dev-dependencies]` line turns on, so no release build compiles it and nothing
+that ships to a user contains it. Same licences, already counted above.
+
 ## The keychain's cipher
 
 `secrets` is served through

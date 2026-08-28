@@ -59,13 +59,7 @@ pub fn widget_data_dir(name: &str) -> PathBuf {
 /// project's trust model, and a security mechanism nobody can inspect is one
 /// nobody should rely on.
 pub fn trusted_keys_file() -> PathBuf {
-    match std::env::var_os("UNIWIDGED_CONFIG") {
-        Some(explicit) => PathBuf::from(explicit)
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("trusted-keys"),
-        None => config_dir().join("trusted-keys"),
-    }
+    beside_config("trusted-keys")
 }
 
 /// Where every widget's own directory lives.
@@ -83,13 +77,7 @@ pub fn trusted_keys_file() -> PathBuf {
 /// It follows `UNIWIDGED_CONFIG` when that is set, so a test desktop — or two
 /// desktops running side by side — cannot write into the real one.
 pub fn data_root() -> PathBuf {
-    match std::env::var_os("UNIWIDGED_CONFIG") {
-        Some(explicit) => PathBuf::from(explicit)
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("widgets"),
-        None => config_dir().join("widgets"),
-    }
+    beside_config("widgets")
 }
 
 /// Where the keychain behind `secrets` lives.
@@ -113,5 +101,49 @@ pub fn keyring_dir() -> PathBuf {
             .unwrap_or(std::path::Path::new("."))
             .to_path_buf(),
         None => config_dir(),
+    }
+}
+
+/// The registries this machine reads.
+///
+/// Beside `trusted-keys`, and meant to be read for the same reason: it is the
+/// other half of where a widget comes from, and a list of places somebody's
+/// desktop fetches code from should be one they can look at.
+pub fn registries_file() -> PathBuf {
+    beside_config("registries.toml")
+}
+
+/// The last index fetched from each registry, and its signature.
+///
+/// A cache and nothing more: deleting it costs one fetch. It is verified again
+/// every time it is read — see `registry::read_cache` — because a file being
+/// local is not a reason to believe it.
+pub fn registry_cache_dir() -> PathBuf {
+    beside_config("registry-cache")
+}
+
+/// Where widgets downloaded from a registry are kept.
+///
+/// The configuration records where a component *is*, so a download has to land
+/// somewhere that outlives the command that fetched it. Beside everything
+/// else, so that copying a configuration directory to a second machine brings
+/// the widgets with it — which is the same argument as `data_root`.
+pub fn widget_store_dir() -> PathBuf {
+    beside_config("store")
+}
+
+/// A path in the configuration directory, following `UNIWIDGED_CONFIG` when it
+/// is set.
+///
+/// The one place that rule is written down. It was three copies of the same
+/// four lines before there were six things beside the configuration, and a
+/// seventh that forgot would be a test writing into somebody's real desktop.
+fn beside_config(name: &str) -> PathBuf {
+    match std::env::var_os("UNIWIDGED_CONFIG") {
+        Some(explicit) => PathBuf::from(explicit)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(name),
+        None => config_dir().join(name),
     }
 }

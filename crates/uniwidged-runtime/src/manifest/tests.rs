@@ -504,3 +504,33 @@ fn the_consent_line_for_a_link_says_what_it_actually_does() {
     );
     assert_ne!(lines[0], lines[1]);
 }
+
+#[test]
+fn a_version_that_cannot_be_ordered_is_refused_where_it_is_written() {
+    // `0.1` is a thing people type, and nothing can say whether a registry
+    // offering `0.2.0` is newer than it. Refused here, in the file its author
+    // is looking at, rather than silently unorderable for ever after.
+    for text in ["0.1", "banana", "v1.0.0", "1.0.0+sha.abc"] {
+        let manifest = format!("name = \"weather\"\nversion = \"{text}\"\n");
+        assert!(
+            matches!(
+                Manifest::parse(&manifest),
+                Err(ManifestError::BadVersion(_))
+            ),
+            "`{text}` should be refused"
+        );
+    }
+
+    // A manifest with no version at all still parses: it is the widget that
+    // cannot be updated, not the widget that is broken.
+    let bare = Manifest::parse("name = \"weather\"\n").expect("valid");
+    assert_eq!(bare.version, "");
+    assert!(bare.semver().is_none());
+
+    // And one with a version has it, orderable.
+    let manifest = Manifest::parse(WEATHER).expect("valid");
+    assert_eq!(
+        manifest.semver(),
+        Some(crate::version::Version::new(0, 2, 0))
+    );
+}

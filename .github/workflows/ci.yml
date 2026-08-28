@@ -32,6 +32,11 @@ jobs:
       # longer resolves is a reader sent nowhere. `-D warnings` is already set
       # above, so a broken intra-doc link fails here rather than rotting.
       - run: cargo doc --workspace --no-deps
+        env:
+          # `RUSTFLAGS` above reaches rustc and not rustdoc, so a broken link
+          # would have been a warning nobody read. This is the flag that makes
+          # the sentence above true.
+          RUSTDOCFLAGS: -D warnings
       # No GPU on this runner, so the rendering tests skip here by design and
       # are covered by the `snapshots` job below.
       - run: cargo test --workspace
@@ -132,3 +137,63 @@ jobs:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p uniwidged-runtime
+
+  # A packaging script is only a packaging script if it runs. This builds the
+  # `.deb` and then looks inside it — a package that builds and is missing its
+  # binary is a build that succeeded and a user who cannot start the program.
+  #
+  # It is deliberately not an installation test: installing as root and
+  # starting a session under it is a virtual machine, and a job that pretended
+  # otherwise would be a green tick meaning nothing. See packaging/README.md.
+  package:
+    name: the .deb, and what is inside it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `dpkg-shlibdeps` is in dpkg-dev, and it is what asks the binary which
+      # libraries it needs. `groff` renders the manual page below. Installed
+      # rather than assumed: the script refuses to write a `Depends` it could
+      # not derive, so a runner without the tool would fail here anyway, and
+      # failing with a missing package is a worse message than not failing.
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev groff
+      - run: packaging/deb/build.sh --output "$RUNNER_TEMP/deb"
+      - name: the package holds what it promises
+        run: |
+          set -eu
+          package=$(ls "$RUNNER_TEMP"/deb/uniwidged_*.deb)
+          echo "::group::contents"
+          dpkg-deb --contents "$package"
+          dpkg-deb --info "$package"
+          echo "::endgroup::"
+          contents=$(dpkg-deb --contents "$package")
+          for path in ./usr/bin/uniwidged ./usr/share/man/man1/uniwidged.1.gz \
+                      ./usr/share/applications/uniwidged.desktop; do
+            echo "$contents" | grep -q " $path\$" || {
+              echo "the package is missing $path" >&2
+              exit 1
+            }
+          done
+          # The version in the package is the version in the workspace: two
+          # places to write one is one place to forget it.
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          dpkg-deb --field "$package" Version | grep -qx "$version" || {
+            echo "the package says $(dpkg-deb --field "$package" Version), the workspace says $version" >&2
+            exit 1
+          }
+          # The dependencies were asked of the binary rather than written by
+          # hand, so the one this program cannot start without is the one worth
+          # asserting: the X11 surface is created through libxcb.
+          dpkg-deb --field "$package" Depends | grep -q libxcb || {
+            echo "the package does not depend on libxcb: $(dpkg-deb --field "$package" Depends)" >&2
+            exit 1
+          }
+          # And the binary in it runs and knows its own version.
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
+          "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version | grep -q "uniwidged $version"
+      # `-ww` turns a mis-nested macro into a failure. A manual page nobody
+      # rendered before shipping is one that renders as nonsense.
+      - name: the manual page has no roff warnings
+        run: groff -man -ww -z packaging/uniwidged.1

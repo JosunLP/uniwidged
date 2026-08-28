@@ -1009,11 +1009,12 @@ depends on, and what once rendered "live" as "li…".
 
 ## M8 · Shipping — **partly done, 2026-08-28**
 
-* Packaging: MSI/MSIX, a signed and notarised `.app`, Flatpak, an AUR package,
-  a `.deb`.
-* A widget registry format. Signature verification on install is **done** —
-  see below; what is missing is somewhere to find widgets, not a way to check
-  them.
+* Packaging: a `.deb` and an AUR package are **done** — see below; MSI/MSIX and
+  a signed and notarised `.app` wait on the platforms they package, which are
+  M5 and M6.
+* A widget registry format — **done**, see below. Signature verification on
+  install was already done; what was missing was somewhere to find widgets, and
+  now is not.
 * The authoring guide, an API reference, and four reference widgets, each
   exercising a different capability.
 
@@ -1074,7 +1075,110 @@ handing a widget a way to make the host launch an arbitrary URL is a
 capability, with `file://` and `x-scheme-handler` behind it, and it has not been
 designed.
 
-**Still to do:** packaging and the registry format.
+**Still to do at the time:** packaging and the registry format. Both are below.
+
+### Somewhere to find widgets — **done, 2026-08-28**
+
+Every previous milestone answered *may this widget do that* and *who wrote it*.
+Neither answered the question before both, and the honest answer until now was
+"somebody sends you a `.wasm` file", which works exactly as well as it sounds.
+
+A registry is **one signed TOML document on a static host**. No accounts, no
+API, no server to run. That is a deliberate ceiling: this project cannot
+honestly operate infrastructure, and a distribution mechanism depending on
+infrastructure nobody maintains stops working the year after it ships. Anything
+larger is somebody else's layer on top of a public file whose format is a page
+long — [`docs/registries.md`](docs/registries.md).
+
+**The interesting decision is that there are two signatures, by two people.**
+The index is signed by whoever publishes the *list*, and that key is pinned
+when the registry is added — `uniwidged registry add <url> --key <hex>`. A
+widget is signed by whoever *wrote* it, and that key is in `trusted-keys`,
+where it always was. They are different claims and are checked separately, with
+domain-separated digests so a signature over one can never be replayed as a
+signature over the other. The consequence is the property worth having: **a
+registry cannot install anything.** It offers; the machine's own trusted keys
+still decide. `a_widget_is_found_and_installed_from_a_registry` runs `add`
+against a registry it trusts and watches it refuse, because the author is not
+yet trusted.
+
+**What a listing shows has to be what the runtime enforces.** An entry carries
+the capabilities a widget declares, because somebody choosing what to install
+reads that before anything is downloaded. So the manifest that arrives must
+agree with the entry that offered it — same name, same version, same
+capabilities — or the install is refused *even when every signature is valid
+and every hash matches*. Without that check, a listing is a place to put one
+sentence in front of somebody and run another.
+
+**And the digest is the one a signature covers**, over the component and the
+manifest together, rather than a hash of the `.wasm`. Same reason as M8's
+signing work: a digest over the component alone lets somebody keep the bytes
+and widen the manifest, and the manifest is the whole of what a user approves.
+
+`uniwidged update` is the one command that installs something nobody looked at,
+so it is the one command that may not widen a permission. An upgrade asking for
+anything the installed grant does not already cover is reported and **not**
+applied; taking it means running `add`, where the whole list is printed. What
+*is* carried across is where the widget sat, what it was configured with and
+whether it was switched off — a new version of a widget is not a new widget,
+and that fixed an older bug on the way: `install` over an existing widget used
+to move it back to the corner and forget its settings.
+
+**Two things fell out of writing it that are worth naming.**
+
+The first is that *a registry being down and a registry serving a forged list
+are different facts*. The first version had one `Err(String)` and a cache
+fallback, and the end-to-end test caught it immediately: an index edited after
+it was signed produced a grey warning line and the command carried on with the
+cached copy. `FetchError` now separates transport from refusal, and only the
+first falls back.
+
+The second is that **the TLS test server was two hundred lines locked inside
+one module's tests**. `uniwidged add` needed a real index, a real component and
+two real signatures over real HTTPS, and a second copy of that server would
+have been a second server drifting from the first. It moved to
+`uniwidged_runtime::test_server` behind a `test-support` feature that only a
+`[dev-dependencies]` line turns on, so nothing in a release build sees it — and
+the CLI's own tests now drive the real binary against a real server, with the
+authority handed to it through `UNIWIDGED_REGISTRY_CA`, which is also how a
+registry inside an organisation is configured.
+
+Versions had to become orderable for any of this: `1.10.0` is newer than
+`1.9.0` and a string comparison says otherwise. `uniwidged_runtime::version` is
+semver's ordering, including the rule that `1.0.0-rc.1` precedes `1.0.0` — an
+update check that got *that* backwards would offer a release candidate to
+somebody already running the release. A manifest's version is now checked when
+it is parsed rather than carried as an unexamined string.
+
+### Packaging — **partly done, 2026-08-28**
+
+`packaging/deb/build.sh` builds a `.deb` with `dpkg-deb` and nothing else: no
+`cargo-deb`, no `dh`, no container. The package is a binary, a manual page and
+a desktop entry, and a control file that can be checked by reading — which
+matters more here than the convenience of a tool that writes it in one line.
+The shared-library dependencies are asked of the binary rather than listed by
+hand.
+
+**CI builds it and then looks inside it**: the binary, the manual page and the
+desktop entry are all there, `dpkg-deb` accepts the control file, the version
+in the package is the version in `Cargo.toml`, and the binary that comes out of
+it runs and agrees about its own version. It is deliberately *not* an
+installation test — installing as root and starting a session under it is a
+virtual machine, and a job pretending otherwise would be a green tick meaning
+nothing.
+
+`packaging/PKGBUILD` is written against `makepkg`'s documented behaviour and is
+**not** built here, and says so rather than implying it was.
+
+**Still to do:** MSI/MSIX and a signed, notarised `.app`. Both need the
+platform they package for, and packaging a binary that prints "this build has
+no shell for the current platform" would be packaging nothing. They come with
+M5 and M6, in the same commit as something to run. Flatpak is **not planned**:
+a widget host draws below every window, reads the session's fonts, watches
+RandR and verifies a signature before running anybody's code, and a sandbox
+that has to be opened up for each of those is a sandbox holding nothing. The
+interesting sandbox in this project is the one inside the process, around each
+widget.
 
 ### Reference widgets, one per served capability
 

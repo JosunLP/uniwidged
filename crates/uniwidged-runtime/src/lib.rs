@@ -43,20 +43,32 @@ pub mod keyring;
 pub mod limits;
 pub mod manifest;
 pub mod net;
+pub mod registry;
 pub mod services;
 pub mod settings;
 pub mod signature;
 pub mod tasks;
+pub mod version;
 
 #[cfg(feature = "wasmtime")]
 pub mod instance;
+
+// A TLS server the transport and registry tests point at. Compiled for this
+// crate's own tests, and for anybody who asks for `test-support` in their
+// `[dev-dependencies]` — which the CLI does, so that `uniwidged add` can be
+// driven against a registry that really is served over HTTPS. Off in every
+// release build, because nothing enables it there.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_server;
 
 pub use capability::{Capability, Policy, Request};
 pub use keyring::{FileKeyring, Keyring, MemoryKeyring, SecretStore};
 pub use limits::Limits;
 pub use manifest::{ABI_VERSION, Manifest, ManifestError};
 pub use net::Http;
+pub use registry::{Entry, Index, RegistryError};
 pub use services::{DataDir, Locale, Services};
 pub use settings::{Setting, SettingKind, SettingValue, Settings};
 pub use signature::{PublicKey, SecretKey, SignatureFile, TrustedKeys};
 pub use tasks::{TaskResult, Tasks, Waker};
+pub use version::Version;

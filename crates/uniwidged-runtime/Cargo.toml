@@ -25,6 +25,14 @@ chacha20poly1305.workspace = true
 # multi-minute Wasmtime compile. On by default since M3.
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
+# Only for `test_server`, which only exists under `test-support`. See the
+# `[dev-dependencies]` entry below for why it is rustls with `ring`.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+], optional = true }
 
 # The system's UTC offset, for `services::Locale`. See the workspace manifest.
 [target.'cfg(unix)'.dependencies]
@@ -44,3 +52,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [features]
 default = ["wasmtime"]
 wasmtime = ["dep:wasmtime", "dep:wasmtime-wasi"]
+# The TLS server in `test_server`, for other crates' tests. A dev-dependency
+# elsewhere in the workspace, so a release build never turns it on and the
+# module is not compiled into anything that ships.
+test-support = ["dep:rustls"]

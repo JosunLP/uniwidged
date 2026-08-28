@@ -472,6 +472,14 @@ memory-mb = 16
 characters, lower-case ASCII, digits and `-`, starting with a letter and not
 ending with `-`.
 
+`version` is `major.minor.patch`, with an optional `-rc.1` tail, and is checked
+when the manifest is parsed. It may be omitted, and then nothing can say
+whether one build is newer than another — which is what `uniwidged update`
+needs, so a widget you intend to publish should carry one. Build metadata
+(`+sha.abc`) is refused rather than ignored: semver says it takes no part in
+ordering, so two versions differing only there could not be told apart in a
+listing.
+
 | Capability | Written |
 |---|---|
 | `timer` · `locale` · `measure` · `metrics` · `secrets` | bare |
@@ -512,6 +520,12 @@ At most 32 settings; a text value at most 1024 bytes.
 The signature covers the component **and** the manifest together. A signature
 over the component alone would let anybody widen `capabilities` and pass it on
 with a signature that still verified.
+
+The same digest is what a registry index names for an entry, so an index and a
+signature speak about the same object — see
+[`registries.md`](registries.md), and note that the key a registry is pinned to
+signs *lists* and can never be made to sign a widget: the two digests are
+domain-separated.
 
 ---
 

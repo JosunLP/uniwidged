@@ -1,0 +1,162 @@
+.\" Manual page for uniwidged. Written by hand rather than generated: the
+.\" interesting half of this program is what it refuses, and a generator emits
+.\" the flags and none of the reasons.
+.TH UNIWIDGED 1 "2026-08-28" "uniwidged 0.0.1" "User Commands"
+.SH NAME
+uniwidged \- run sandboxed widgets on the desktop layer
+.SH SYNOPSIS
+.B uniwidged
+.I command
+.RI [ arguments ]
+.SH DESCRIPTION
+.B uniwidged
+is one process that owns one GPU device and every widget's surface. Widgets sit
+below ordinary windows and above the wallpaper, composited against it per pixel.
+They are WebAssembly components: sandboxed, installable while the desktop is
+running, and written in any language that targets the component model.
+.PP
+A widget can do nothing it was not granted. Everything it may do is written in
+its manifest, shown to you before it is installed, and enforced by the host at
+every call \(em not by the widget's good manners.
+.SH COMMANDS
+.SS Running
+.TP
+.B run " [--config " \fIPATH\fR ]
+Start the desktop in the foreground. One process, one device, one loop; an idle
+desktop submits nothing at all.
+.TP
+.B doctor
+What this session can and cannot do: the window system, the transparency path in
+use, the fonts, and the keychain this machine can offer.
+.TP
+.B reload
+Tell a running desktop to read its configuration again. Every command that
+writes the configuration already does this; \fBreload\fR is for a file you
+edited by hand.
+.SS Installing
+.TP
+.B check " \fIwidget\fR.wasm"
+Everything \fBinstall\fR would find out, without installing anything: the
+manifest, the signature, the capabilities it will ask for, and the settings it
+declares.
+.TP
+.B install " \fIwidget\fR.wasm [--allow-unsigned]"
+Install a widget from a file, after showing what it asks for. A widget with a
+signature that does not verify is never installed; one with no signature at all
+needs \fB--allow-unsigned\fR, which says so out loud.
+.TP
+.B list
+What is installed, where it sits, and what it was granted.
+.TP
+.BR enable ", " disable " \fIname\fR"
+Turn a widget off without forgetting it, and on again.
+.TP
+.B remove " \fIname\fR [--purge]"
+Uninstall. With \fB--purge\fR, its data directory goes too, and so does the
+copy in the widget store if it came from a registry. A widget installed from a
+file somewhere else is left where its owner put it.
+.SS Registries
+.TP
+.B registry add " \fIurl\fR --key \fIpublic key\fR [--name \fIname\fR]"
+Read a registry, pinned to the key its index is signed with. That key says who
+publishes the list; it is not, and must not be, the same thing as trusting
+whoever wrote the widgets on it.
+.TP
+.BR "registry remove" " \fIname\fR, " "registry list"
+Stop reading one, or show what is read and how old each cached index is.
+.TP
+.B registry publish " --key \fIfile\fR --base-url \fIurl\fR [--out \fIfile\fR] \fIwidget\fR.wasm..."
+Write a signed index for widgets you publish.
+.TP
+.B search " [\fIterm\fR] [--refresh] [--offline]"
+What the registries offer, with the permissions each widget will ask for.
+.TP
+.B add " \fIname\fR[@\fIversion\fR] [--registry \fIname\fR]"
+Install one from a registry. The download is checked against the digest the
+signed index names, and then against this machine's own trusted keys \(em a
+registry cannot vouch a widget past them.
+.TP
+.B update " [\fIname\fR] [--check]"
+What is newer, and take it. An update that would ask for more than the installed
+version was granted is reported and \fInot\fR applied; \fBadd\fR is where that
+decision is made, with the whole list shown.
+.SS Signing
+.TP
+.B keygen " [--out \fIfile\fR]"
+A signing key of your own. Anybody who has the secret half can publish widgets
+in your name.
+.TP
+.B sign " \fIwidget\fR.wasm --key \fIfile\fR"
+Sign a widget you publish. The signature covers the component
+.I and
+its manifest: one over the component alone would let anybody widen what the
+widget may do and keep a signature your users recognise.
+.TP
+.BR trust " \fIkey\fR [--name \fIname\fR], " untrust " \fIkey\fR, " trusted
+Whose signatures this machine accepts. One file, one key per line, meant to be
+read by the person it protects.
+.SS Placing and configuring
+.TP
+.B move " \fIname\fR [--x \fIN\fR] [--y \fIN\fR] [--width \fIN\fR] [--height \fIN\fR] [--output \fINAME\fR]"
+Place a widget without a pointer. Anything omitted is left alone.
+.TP
+.BR lock " \fIname\fR, " unlock " \fIname\fR"
+Pin a widget where it is, or let it be dragged again. A locked widget still
+works; it just does not move.
+.TP
+.B configure " \fIname\fR [--set \fIkey\fR=\fIvalue\fR] [--reset \fIkey\fR] [--reset-all]"
+The knobs a widget declared. A value outside what its manifest allows is refused
+here, so a widget never has to handle one.
+.SS Authoring
+.TP
+.B new " \fIname\fR [--dir \fID\fR] [--capability \fIC\fR]..."
+Scaffold a widget that already builds, draws and responds to a click.
+.TP
+.B snapshot " \fIname\fR [-o \fIfile\fR]"
+Render one widget headlessly to a PNG.
+.SS Sessions
+.TP
+.B autostart " [enable|disable|status]"
+Start with the session. It will not overwrite an autostart entry somebody wrote
+by hand.
+.SH FILES
+.TP
+.I ~/.config/uniwidged/config.toml
+What is installed, where each widget sits, and what it was granted. Readable and
+hand-editable on purpose.
+.TP
+.I ~/.config/uniwidged/trusted-keys
+The keys this machine accepts signatures from. One per line.
+.TP
+.I ~/.config/uniwidged/registries.toml
+The registries this machine reads, each with the key its index is pinned to.
+.TP
+.I ~/.config/uniwidged/registry-cache/
+The last index fetched from each registry, and its signature. A cache: deleting
+it costs one fetch, and it is verified again every time it is read.
+.TP
+.I ~/.config/uniwidged/store/
+Widgets downloaded from a registry.
+.TP
+.I ~/.config/uniwidged/widgets/\fIname\fR/
+One widget's own data directory. It cannot leave this, even through a symlink.
+.SH ENVIRONMENT
+.TP
+.B UNIWIDGED_CONFIG
+The configuration file to use. Everything else \(em trusted keys, registries,
+the cache, the keychain, widget data \(em is placed beside it, so this variable
+moves a whole desktop's state at once. That is what lets two desktops run side
+by side, and what keeps a test out of your real one.
+.TP
+.B UNIWIDGED_REGISTRY_CA
+A PEM certificate authority to trust for registry fetches
+.I instead of
+the default roots. For a registry inside an organisation, under a certificate no
+public trust store has heard of.
+.SH EXIT STATUS
+0 when the command did what it said, and 1 with a sentence on standard error
+when it did not.
+.SH SEE ALSO
+The architecture, the roadmap and the authoring guide, at
+.UR https://github.com/j-pfalzgraf/uniwidged
+.UE .

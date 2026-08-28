@@ -2607,6 +2607,8 @@ name = "uniwidged-cli"
 version = "0.0.1"
 dependencies = [
  "libc",
+ "serde",
+ "toml",
  "uniwidged-compose",
  "uniwidged-core",
  "uniwidged-host",

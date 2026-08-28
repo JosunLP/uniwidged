@@ -112,6 +112,12 @@ pub enum ManifestError {
     UnknownCapability(String),
     MalformedCapability(String),
     MemoryTooLarge(u32),
+    /// A version that is not a version.
+    ///
+    /// Empty is allowed and means "unversioned"; anything present has to be
+    /// orderable, because an update check is a comparison and not a string
+    /// inequality — see [`crate::version`].
+    BadVersion(String),
     /// A `[[setting]]` block that does not describe a setting. One variant
     /// rather than eight, because every one of them is "this manifest's author
     /// has to change this line" and the string says which line and why.
@@ -138,6 +144,7 @@ impl std::fmt::Display for ManifestError {
                 f,
                 "a widget may ask for at most {MAX_MEMORY_MB} MB; this one asks for {mb}"
             ),
+            ManifestError::BadVersion(why) => write!(f, "{why}"),
             ManifestError::BadSetting(why) => write!(f, "{why}"),
         }
     }
@@ -152,6 +159,14 @@ impl Manifest {
 
         if !is_usable_name(&raw.name) {
             return Err(ManifestError::BadName(raw.name));
+        }
+        // A version is optional and, when present, has to be one: `0.1.0` and
+        // `0.1` are both things people type, and only one of them can be
+        // compared with the version a registry offers.
+        if !raw.version.is_empty()
+            && let Err(why) = crate::version::Version::parse(&raw.version)
+        {
+            return Err(ManifestError::BadVersion(why.to_string()));
         }
         let memory_mb = raw.memory_mb.unwrap_or(32);
         if memory_mb > MAX_MEMORY_MB {
@@ -190,6 +205,43 @@ impl Manifest {
         }
         self.capabilities.iter().map(describe).collect()
     }
+
+    /// The version as something orderable, or `None` when the manifest gave
+    /// none.
+    ///
+    /// The string is what a person reads and is kept as written; this is what
+    /// decides whether a registry is offering something newer. Parsing cannot
+    /// fail here — [`Manifest::parse`] refused anything that would.
+    pub fn semver(&self) -> Option<crate::version::Version> {
+        crate::version::Version::parse(&self.version).ok()
+    }
+}
+
+/// A capability as it is written in a manifest.
+///
+/// The inverse of the capability parser [`Manifest::parse`] uses; they are
+/// tested against each other so
+/// a capability cannot mean one thing when declared and another when granted.
+///
+/// It lives beside the parser rather than beside its first caller. There were
+/// two readings of a URL once — see [`crate::net::host_of`] — and one printer
+/// with two parsers is the same shape of mistake: what a registry index lists,
+/// what a consent screen shows and what a configuration grants have to be the
+/// same string or they are not the same permission.
+pub fn capability_text(capability: &Capability) -> String {
+    match capability {
+        Capability::Timer => "timer".into(),
+        Capability::Net(host) => format!("net:{host}"),
+        Capability::NetWildcard(domain) => format!("net:*.{domain}"),
+        Capability::Fs(path) => format!("fs:{path}"),
+        Capability::Link(host) => format!("link:{host}"),
+        Capability::LinkWildcard(domain) => format!("link:*.{domain}"),
+        Capability::Secrets => "secrets".into(),
+        Capability::Locale => "locale".into(),
+        Capability::Measure => "measure".into(),
+        Capability::Command(name) => format!("command:{name}"),
+        Capability::Metrics => "metrics".into(),
+    }
 }
 
 /// Is this usable as a directory name and a keychain namespace?
@@ -198,7 +250,7 @@ impl Manifest {
 /// credential store, and both have their own opinions about separators, case
 /// and length — so the intersection of what is safe everywhere is what is
 /// allowed, rather than what happens to work on the developer's machine.
-fn is_usable_name(name: &str) -> bool {
+pub(crate) fn is_usable_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 64 {
         return false;
     }
@@ -348,7 +400,7 @@ fn value_from_toml(key: &str, value: &toml::Value) -> Result<SettingValue, Manif
     }
 }
 
-fn parse_capability(text: &str) -> Result<Capability, ManifestError> {
+pub(crate) fn parse_capability(text: &str) -> Result<Capability, ManifestError> {
     let malformed = || ManifestError::MalformedCapability(text.to_string());
     match text.split_once(':') {
         None => match text {
@@ -427,7 +479,7 @@ fn is_host(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
 }
 
-fn describe(capability: &Capability) -> String {
+pub(crate) fn describe(capability: &Capability) -> String {
     match capability {
         Capability::Timer => "update itself on a schedule".to_string(),
         Capability::Net(host) => format!("talk to {host} over HTTPS"),

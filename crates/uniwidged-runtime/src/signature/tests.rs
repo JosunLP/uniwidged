@@ -290,3 +290,39 @@ fn every_refusal_says_what_to_do_about_it() {
         assert!(said.len() > 25, "{said:?}");
     }
 }
+
+#[test]
+fn a_signature_can_be_checked_for_being_intact_without_being_trusted() {
+    // The publisher's question, which is not the installer's: is this `.sig` a
+    // signature over these exact bytes? Trust does not come into it, and this
+    // must never be mistaken for the check that does — see `verify_intact`.
+    let author = SecretKey::generate().expect("entropy");
+    let component = b"\0asm a component";
+    let manifest = "name = \"clock\"\n";
+    let file = SignatureFile {
+        signature: author.sign(component, manifest),
+        key: author.public(),
+    };
+    assert!(verify_intact(component, manifest, &file).is_ok());
+
+    // Nobody trusts that key, and the *installer's* check still refuses it —
+    // which is the distinction being pinned here.
+    assert!(matches!(
+        TrustedKeys::default().verify(component, manifest, &file),
+        Err(VerifyError::UntrustedKey(_))
+    ));
+
+    // And an intact-looking signature over different bytes is not intact.
+    assert!(matches!(
+        verify_intact(b"\0asm something else", manifest, &file),
+        Err(VerifyError::BadSignature)
+    ));
+    assert!(matches!(
+        verify_intact(
+            component,
+            "name = \"clock\"\ncapabilities = [\"secrets\"]\n",
+            &file
+        ),
+        Err(VerifyError::BadSignature)
+    ));
+}

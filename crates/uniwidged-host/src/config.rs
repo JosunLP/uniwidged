@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use uniwidged_runtime::capability::{Capability, Policy};
+use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::settings::{SettingValue, Settings};
 
@@ -310,23 +310,12 @@ impl WidgetConfig {
 
 /// A capability as it is written in a manifest.
 ///
-/// The inverse of the manifest's parser; they are tested against each other so
-/// a capability cannot mean one thing when declared and another when granted.
-pub fn capability_text(capability: &Capability) -> String {
-    match capability {
-        Capability::Timer => "timer".into(),
-        Capability::Net(host) => format!("net:{host}"),
-        Capability::NetWildcard(domain) => format!("net:*.{domain}"),
-        Capability::Fs(path) => format!("fs:{path}"),
-        Capability::Link(host) => format!("link:{host}"),
-        Capability::LinkWildcard(domain) => format!("link:*.{domain}"),
-        Capability::Secrets => "secrets".into(),
-        Capability::Locale => "locale".into(),
-        Capability::Measure => "measure".into(),
-        Capability::Command(name) => format!("command:{name}"),
-        Capability::Metrics => "metrics".into(),
-    }
-}
+/// Re-exported rather than written again. It moved to
+/// [`uniwidged_runtime::manifest`] when a registry index came to list
+/// capabilities too: three places printing a permission is three chances for
+/// one of them to print it differently, and a grant that reads differently
+/// from the thing granted is not the same grant.
+pub use uniwidged_runtime::manifest::capability_text;
 
 #[cfg(test)]
 mod tests;

@@ -710,7 +710,62 @@ it: **no recursive types**, which is why the view tree crosses flat (§6, and
 the better shape for it), and **a trapped instance cannot be re-entered**,
 which is why a deadline overrun ends an instance instead of being retried.
 
-## 11. Provenance and licensing
+## 11. Distribution
+
+A framework nobody can get widgets for is a framework with one author. §6 is
+about what a widget may do once it is running and §10.3 about who wrote it;
+this is the question before both — where does a widget come from?
+
+### 11.1 A registry is a signed file, not a service
+
+`uniwidged-registry-v1` is one TOML document on a static host, listing name,
+version, description, capabilities, three URLs and a digest per widget, with a
+detached signature beside it. There is no server to run, no account and no API.
+That is a deliberate ceiling on ambition: this project cannot honestly operate
+infrastructure, and a distribution mechanism that depends on infrastructure
+nobody maintains is one that stops working the year after it ships.
+
+Anything larger — search across registries, popularity, moderation — is
+somebody else's layer built on top of this file, and can be, because the file
+is public and its format is a page long.
+
+### 11.2 Two signatures, by two people, checked separately
+
+| Claim | Signed by | Key kept in |
+|---|---|---|
+| *this is the list I published* | the registry publisher | `registries.toml`, pinned when the registry was added |
+| *this is the widget I wrote* | the widget's author | `trusted-keys`, added with `uniwidged trust` |
+
+Neither implies the other, and the digests are domain-separated so that a
+signature over one can never be replayed as a signature over the other. The
+consequence is the property that matters: **a registry cannot install anything.**
+It can offer, and the machine's own trusted keys still decide.
+
+The index digest is `sha256` over the component *and* its manifest — the same
+digest a widget's signature covers, for the same reason (§10.3): a digest over
+the component alone lets somebody keep the bytes and widen the manifest, and
+the manifest is the whole of what a user is asked to approve.
+
+### 11.3 What an index promises is checked against what arrives
+
+An entry lists the capabilities a widget declares, because a person choosing
+what to install reads that list before anything is downloaded. So the manifest
+that arrives must **agree** with the entry that offered it — same name, same
+version, same capabilities — or the install is refused even when every
+signature is valid and every hash matches. Otherwise a listing is a place to
+put one sentence in front of somebody and run another.
+
+### 11.4 The unattended half
+
+`uniwidged update` is the one command that installs something nobody looked at,
+so it is the one command that may not widen a permission. An upgrade whose
+manifest asks for anything the installed grant does not already cover is
+reported and not applied; taking it means running `add`, where the whole list
+is printed. Everything else about the widget — where it sits, what it was
+configured with, whether it was switched off — is carried across, because a new
+version of a widget is not a new widget.
+
+## 12. Provenance and licensing
 
 uniwidged is MIT OR Apache-2.0. `uniwidged-shell` derives from Ephemeris
 (GPL-3.0-or-later) under a relicence by its sole copyright holder; see
