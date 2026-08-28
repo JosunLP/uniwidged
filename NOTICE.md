@@ -41,8 +41,29 @@ than a licence requirement.
 ## Code adopted from Ferrum UI
 
 The rendering, layout, text and accessibility layers build on
-[Ferrum UI](https://github.com/j-pfalzgraf/ferrumui) (MIT OR Apache-2.0), which
-is used as a dependency rather than copied.
+[Ferrum UI](https://github.com/j-pfalzgraf/ferrumui) (MIT OR Apache-2.0), by
+the same author as this project.
+
+It was a path dependency on a sibling checkout until 2026-08-28, and is now
+**adopted rather than depended on**: uniwidged builds from crates.io alone, so
+that cloning this repository and running `cargo test` needs nothing else on the
+machine, and so that a widget author is not asked to obtain a second — and
+currently private — repository to build the SDK they compile against.
+
+What was actually used was one crate of the nine, `ferrum-layout`: a facade
+over [taffy](https://github.com/DioxusLabs/taffy). It now lives at
+`crates/uniwidged-compose/src/layout/boxes.rs`, trimmed to the box model a
+uniwidged view can describe — grid and scroll containers, margins and the
+space-distribution modes `uniwidged-view` has no word for are gone. Both
+licences permit this; the same person holds the copyright either way, and the
+file names its origin.
+
+`ferrum-core`, `ferrum-render` and `ferrum-text` were declared in the workspace
+manifest and never used by any crate in it. They are gone rather than vendored.
+The Parley→Vello glyph bridge in `uniwidged-compose::text` follows the
+technique in `ferrum-text` and says so where it does, but shares no code with
+it: that module exists precisely because the wrapper exposed neither font
+weight nor tabular figures.
 
 ## The bundled test font
 

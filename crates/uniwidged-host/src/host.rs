@@ -23,6 +23,8 @@
 //! swapchain — which the M0 and M4 spikes show produces the same pixels.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use uniwidged_compose::{Compose, Composed, Compositor, Theme};
@@ -31,6 +33,7 @@ use uniwidged_render::{RenderError, Renderer, SurfaceId};
 use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::instance::{Runtime, RuntimeError};
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::services::{CpuSampler, DataDir, Locale, Services, TextMetrics};
 
 use crate::scheduler::Scheduler;
 
@@ -105,6 +108,33 @@ pub struct Host {
     /// disagreed with its neighbours about either would look broken.
     scale: f64,
     rtl: bool,
+    /// Where widgets' data directories live, if this host has any. `None` —
+    /// the default — makes `fs` answer `unavailable`, which is right for a
+    /// test and for `uniwidged snapshot`: rendering a widget should not create
+    /// files on somebody's disk.
+    data_root: Option<PathBuf>,
+    /// How this desktop writes dates and times. Defaults to the machine's own,
+    /// because a host that cannot format a date is not one anybody wants; a
+    /// test that needs a fixed one sets it.
+    locale: Locale,
+    /// One sampler for the whole desktop. It is one machine, and two widgets
+    /// sampling separately would each see half the window and report noise.
+    cpu: Arc<CpuSampler>,
+}
+
+/// The compositor's fonts, as the sandbox sees them.
+///
+/// A newtype only because the trait belongs to `uniwidged-runtime` and the
+/// measurer to `uniwidged-compose`, and neither may depend on the other: the
+/// sandbox must not know about the renderer, and the renderer must not know
+/// about the sandbox. The host owns both, so the host joins them — which is
+/// what this crate is for.
+struct Fonts(uniwidged_compose::Measurer);
+
+impl TextMetrics for Fonts {
+    fn width(&self, text: &str, role: uniwidged_view::Role) -> f32 {
+        self.0.width(text, role)
+    }
 }
 
 impl Host {
@@ -121,6 +151,9 @@ impl Host {
             next_id: 1,
             scale: 1.0,
             rtl: false,
+            data_root: None,
+            locale: Locale::system(),
+            cpu: Arc::new(CpuSampler::new()),
         })
     }
 
@@ -128,6 +161,53 @@ impl Host {
     /// create — a swapchain on a desktop, readback in a test.
     pub fn renderer_mut(&mut self) -> &mut Renderer {
         &mut self.renderer
+    }
+
+    /// Where each widget's own directory goes: `<root>/<widget name>`.
+    ///
+    /// Set before installing anything. Widgets already running keep the
+    /// directory they were started with, because moving a widget's data out
+    /// from under it while it is reading is worse than an inconsistency in a
+    /// setting nobody changes twice.
+    pub fn set_data_root(&mut self, root: impl Into<PathBuf>) {
+        self.data_root = Some(root.into());
+    }
+
+    /// How dates and times are written for every widget on this desktop.
+    pub fn set_locale(&mut self, locale: Locale) {
+        self.locale = locale;
+        // Every widget granted `locale` may now format differently, and none
+        // of their views changed — the same shape of problem as a theme change,
+        // and the same answer.
+        self.renderer.mark_all_dirty();
+        for widget in &mut self.widgets {
+            widget.forget_last_frame();
+        }
+    }
+
+    pub fn locale(&self) -> Locale {
+        self.locale
+    }
+
+    /// What one widget is served, by name.
+    ///
+    /// The directory is named after the manifest, which is why the manifest is
+    /// strict about what a name may contain: two widgets sharing a name would
+    /// share a directory, and the isolation would be gone without anything
+    /// looking wrong.
+    fn services_for(&self, name: &str) -> Services {
+        Services {
+            data: self
+                .data_root
+                .as_ref()
+                .map(|root| DataDir::new(root.join(name))),
+            locale: Some(self.locale),
+            // The measurer follows this compositor's theme, so a widget that
+            // asks how wide its label is gets the answer for the theme it is
+            // about to be drawn in rather than the one it started under.
+            measure: Some(Arc::new(Fonts(self.compositor.measurer()))),
+            metrics: Some(self.cpu.clone()),
+        }
     }
 
     pub fn set_scale(&mut self, scale: f64) {
@@ -160,7 +240,8 @@ impl Host {
     ) -> Result<WidgetId, HostError> {
         let id = WidgetId(self.next_id);
         self.next_id += 1;
-        let widget = Supervised::start(&self.runtime, id, wasm, manifest, policy)
+        let services = self.services_for(&manifest.name);
+        let widget = Supervised::start(&self.runtime, id, wasm, manifest, policy, services)
             .map_err(HostError::Runtime)?;
         self.widgets.push(widget);
         self.scheduler.insert(id);
@@ -330,6 +411,51 @@ impl Host {
             self.scheduler.schedule(*id, wake, now, wall);
         }
         Ok(report)
+    }
+
+    /// Which capabilities this host can actually serve, and which it cannot.
+    ///
+    /// For `uniwidged doctor`, and for the widget author whose widget is
+    /// reporting `unavailable` and who has no other way to find out whether
+    /// that is their manifest, their user's choice, or this host.
+    ///
+    /// The unserved half is written out rather than derived, because there is
+    /// nothing to derive it from: a capability with no implementation has no
+    /// field to be `None`. The conformance suite asserts the same list from the
+    /// other side, so the two cannot drift apart silently.
+    pub fn capabilities(&self) -> Vec<(&'static str, bool)> {
+        let services = self.services_for("doctor");
+        vec![
+            // Needs nothing behind it: the scheduler is always there.
+            ("timer", true),
+            ("locale", services.locale.is_some()),
+            ("measure", services.measure.is_some()),
+            ("metrics", services.metrics.is_some()),
+            ("fs", services.data.is_some()),
+            ("net", false),
+            ("secrets", false),
+            ("command", false),
+        ]
+    }
+
+    /// Does the node under this point want activations of its own?
+    ///
+    /// What the caller asks before treating a press as the start of a drag: a
+    /// press on a button belongs to the widget, and a press on the panel around
+    /// it moves the widget. The answer comes from the same compose pass that
+    /// produced the hit rectangles, so it cannot disagree with them.
+    ///
+    /// A widget with nothing composed yet answers `false`: it has no buttons
+    /// on screen, so there is nothing a press could belong to.
+    pub fn is_interactive_at(&self, id: WidgetId, point: Point) -> bool {
+        self.composed
+            .get(&id)
+            .and_then(|composed| {
+                composed
+                    .hit(point)
+                    .map(|node| composed.is_interactive(node))
+            })
+            .unwrap_or(false)
     }
 
     /// Reports a click at a point in a widget's own logical coordinates.

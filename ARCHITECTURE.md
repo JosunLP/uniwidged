@@ -7,9 +7,11 @@ the wallpaper — and a sandboxed SDK third parties write those panels against.
 It is the union of two existing projects. [Ephemeris](https://github.com/JosunLP/Ephemeris)
 worked out how a window becomes a *desktop widget* on four platforms and is the
 source of `uniwidged-shell`. [Ferrum UI](https://github.com/j-pfalzgraf/ferrumui)
-is a GPU-rendered UI stack on Vello/wgpu/Parley/taffy/AccessKit and supplies
-everything above the surface. What is genuinely new is the seam between them —
-a raw desktop-layer surface handed to wgpu instead of to Cairo — and the WASM
+is a GPU-rendered UI stack on Vello/wgpu/Parley/taffy/AccessKit and is where
+the techniques above the surface come from. Both are **adopted rather than
+depended on** — this workspace builds from crates.io alone, with no sibling
+checkout; see `NOTICE.md`. What is genuinely new is the seam between them — a
+raw desktop-layer surface handed to wgpu instead of to Cairo — and the WASM
 boundary that lets somebody else write a widget.
 
 ---
@@ -22,7 +24,8 @@ the host lays it out, shapes its text, paints it, hit-tests it and exposes it
 to screen readers.
 
 **Is not.** Not a general application framework — that is Ferrum UI, which
-uniwidged depends on. Not a wallpaper engine or a shader playground. Not an
+uniwidged took its rendering techniques from and which remains the place for
+one. Not a wallpaper engine or a shader playground. Not an
 HTML/CSS/JS runtime. Not a panel or status-bar replacement, though the shell
 layer would serve one.
 
@@ -239,6 +242,57 @@ simply absent rather than denied.
 talks to `api.open-meteo.com`" is a sentence a user can consent to, and
 "this widget uses the network" is not.
 
+The gate and what is behind it are separate, and a widget can tell them apart.
+`Policy` decides whether a widget *may*; `Services` decides whether this host
+*can*. An ungranted capability answers `not-granted`, and a granted one with
+nothing behind it answers `unavailable` — which are different facts, and a
+widget told the first when the second is true sends its author to fix a
+manifest that is already right. As of 2026-08-28, `fs`, `locale`, `measure` and
+`metrics` are served, and `net`, `secrets` and `command` answer `unavailable`;
+the conformance suite asserts exactly that, so implementing one and forgetting
+to say so fails a test.
+
+`measure` is worth a sentence of its own, because it is the one capability that
+hands a widget something the host would otherwise keep. The handle behind it
+shares the compositor's font context and follows its theme, so the width a
+widget is told is the width the layout will use — a widget deciding its own
+truncation against a different number is deciding against a guess, and a
+measurer that copied the theme would keep answering plausibly after a light/dark
+switch.
+
+### Moving a widget
+
+A desktop widget is furniture, so putting it somewhere is a drag — and that
+makes the pointer ambiguous, because the same press could be a drag or a click
+on a button. `uniwidged-host::interaction` is where that is decided, from
+things the host already knows:
+
+1. **Locked** — the user has pinned it. Every press is the widget's.
+2. **Within six logical pixels of an edge** — a resize. The band wins even over
+   a control, because a button on the very edge would otherwise make the widget
+   unresizable from that side.
+3. **On a node the widget marked interactive** — the widget's.
+4. **Anywhere else** — a move.
+
+Rule 3 needs to know which nodes those are, so the compose pass records them
+alongside the hit rectangles, for the reason §4 gives about the accessibility
+tree: a second walk is a second answer.
+
+Nothing happens until the pointer has travelled four logical pixels, which is
+why a click is delivered on **release** rather than on press — before that
+there is no way to tell the two apart. Every intermediate rectangle is computed
+from the geometry at the moment of the press rather than from the previous one,
+so a drag cannot accumulate rounding, and the pointer is grabbed for the
+duration, because a drag faster than the compositor otherwise loses it the
+moment it leaves the window.
+
+**Placement is stored relative to a named output**, never as a desktop
+coordinate and never by index. Indices renumber and coordinates move wholesale
+when a screen is plugged in on the left, so a widget remembered either way ends
+up somewhere its user did not put it. A widget whose monitor is gone appears on
+the primary and *keeps its stored name*, so plugging the monitor back in puts
+it back.
+
 ### Containment
 
 * **Memory** — a `ResourceLimiter` cap per instance, declared in the manifest
@@ -247,6 +301,10 @@ talks to `api.open-meteo.com`" is a sentence a user can consent to, and
   that blows it is suspended, marked errored in the UI, and keeps showing its
   last frame. **The desktop never blocks on guest code.**
 * **State** — its own data directory, its own keychain namespace, no path out.
+  Containment is checked twice: textually on the requested path, and again
+  after the filesystem has resolved it, because only the second can see a
+  symlink somebody planted in a folder the user can open. Writes land through a
+  rename, so a widget interrupted at its deadline leaves a whole file or none.
 
 ## 7. Graphical quality, concretely
 

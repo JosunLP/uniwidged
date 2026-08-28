@@ -50,6 +50,38 @@ pub enum Wake {
 }
 
 impl Wake {
+    /// A wake-up at a whole number of seconds since the Unix epoch.
+    ///
+    /// The form a widget actually has, because that is what a clock reads and
+    /// what crosses the sandbox boundary. Building a `SystemTime` by hand at
+    /// every call site is four lines of `UNIX_EPOCH + Duration::from_secs` that
+    /// say nothing — and a negative instant, which is before 1970 and therefore
+    /// already past, has to be handled somewhere rather than panicking in a
+    /// widget.
+    pub fn at_epoch_seconds(seconds: i64) -> Self {
+        match u64::try_from(seconds) {
+            Ok(seconds) => Wake::At(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            // Already past. Running once and letting the widget ask again is
+            // the only answer that does not silently stop it.
+            Err(_) => Wake::After(Duration::ZERO),
+        }
+    }
+
+    /// The next whole multiple of `seconds` after `now`, both in seconds since
+    /// the epoch.
+    ///
+    /// What a clock wants: "the top of the next minute" is a point in time, and
+    /// asking for a *delay* of sixty seconds drifts a little further from the
+    /// minute boundary on every tick until the displayed time changes a second
+    /// late. Also the reason eight clocks cost one wake-up rather than eight —
+    /// they all name the same instant, and the scheduler coalesces them.
+    pub fn at_next_multiple_of(seconds: i64, now: i64) -> Self {
+        if seconds <= 0 {
+            return Wake::After(Duration::ZERO);
+        }
+        Self::at_epoch_seconds(now - now.rem_euclid(seconds) + seconds)
+    }
+
     /// Resolves this request against the clock into an absolute deadline.
     ///
     /// `now` and `wall` must be read at the same moment — they are the two
@@ -242,5 +274,68 @@ mod tests {
         assert_eq!(real.min(Deadline::never()), real);
         assert_eq!(Deadline::never().min(real), real);
         assert!(Deadline::never().min(Deadline::never()).is_never());
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    #[test]
+    fn the_top_of_the_next_minute_is_a_whole_minute_and_in_the_future() {
+        // 2026-08-28 14:05:07 UTC.
+        let now = 1_787_925_907;
+        let Wake::At(target) = Wake::at_next_multiple_of(60, now) else {
+            panic!("a clock asks for an instant");
+        };
+        let seconds = target
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_secs() as i64;
+        assert_eq!(seconds % 60, 0);
+        assert_eq!(seconds, 1_787_925_960);
+        assert!(seconds > now);
+    }
+
+    #[test]
+    fn a_moment_exactly_on_the_boundary_waits_a_whole_period() {
+        // Not zero. A widget woken at 14:05:00 and asking again must be told
+        // 14:06:00, or it spins for a second at whatever rate the loop turns.
+        let Wake::At(target) = Wake::at_next_multiple_of(60, 1_787_925_900) else {
+            panic!("an instant");
+        };
+        assert_eq!(
+            target
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1_787_925_960
+        );
+    }
+
+    #[test]
+    fn an_instant_before_1970_is_already_past_rather_than_a_panic() {
+        // Reachable from a widget doing arithmetic on a clock it could not
+        // read, which answers zero. Subtracting from that must not take the
+        // desktop with it.
+        assert_eq!(Wake::at_epoch_seconds(-1), Wake::After(Duration::ZERO));
+        assert_eq!(
+            Wake::at_next_multiple_of(0, 100),
+            Wake::After(Duration::ZERO),
+            "a period of zero has no next multiple"
+        );
+    }
+
+    #[test]
+    fn a_period_other_than_a_minute_works_the_same_way() {
+        let Wake::At(target) = Wake::at_next_multiple_of(3600, 1_787_925_907) else {
+            panic!("an instant");
+        };
+        let seconds = target
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(seconds % 3600, 0);
+        assert_eq!(seconds, 1_787_929_200);
     }
 }

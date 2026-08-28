@@ -45,7 +45,7 @@ impl Cx {
         Err(Denied::NotGranted)
     }
 
-    pub fn measure_text(&self, _text: &str, _role: u8) -> Result<f32, Denied> {
+    pub fn measure_text(&self, _text: &str, _role: uniwidged_view::Role) -> Result<f32, Denied> {
         Err(Denied::NotGranted)
     }
 
@@ -57,7 +57,7 @@ impl Cx {
         Err(Denied::NotGranted)
     }
 
-    pub fn read_file(&self, _path: &str) -> Result<Vec<u8>, Denied> {
+    pub fn read_file(&self, _path: &str) -> Result<Option<Vec<u8>>, Denied> {
         Err(Denied::NotGranted)
     }
 

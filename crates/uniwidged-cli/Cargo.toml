@@ -19,3 +19,8 @@ uniwidged-host.workspace = true
 uniwidged-render.workspace = true
 uniwidged-runtime.workspace = true
 uniwidged-shell.workspace = true
+
+[dev-dependencies]
+# The scaffold test instantiates what `uniwidged new` produced, so it needs the
+# view vocabulary to read the widget's answer back.
+uniwidged-view.workspace = true

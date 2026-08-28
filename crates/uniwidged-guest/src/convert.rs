@@ -50,21 +50,29 @@ fn icon(i: uniwidged_view::Icon) -> wit::Icon {
     }
 }
 
+/// One place, because `measure-text` names a role too — and a role that
+/// crossed the boundary as one thing in a view and another in a measurement
+/// would be a widget measuring what it is not going to be drawn as.
+pub(crate) fn role(role: uniwidged_view::Role) -> wit::Role {
+    use uniwidged_view::Role;
+    match role {
+        Role::Plain => wit::Role::Plain,
+        Role::Panel => wit::Role::Panel,
+        Role::Card => wit::Role::Card,
+        Role::Chip => wit::Role::Chip,
+        Role::Title => wit::Role::Title,
+        Role::Display => wit::Role::Display,
+        Role::Section => wit::Role::Section,
+        Role::Body => wit::Role::Body,
+        Role::BodyStrong => wit::Role::BodyStrong,
+        Role::Caption => wit::Role::Caption,
+    }
+}
+
 fn style(s: uniwidged_view::Style) -> wit::Style {
-    use uniwidged_view::{Accent, Align, Direction, Justify, Role};
+    use uniwidged_view::{Accent, Align, Direction, Justify};
     wit::Style {
-        role: match s.role {
-            Role::Plain => wit::Role::Plain,
-            Role::Panel => wit::Role::Panel,
-            Role::Card => wit::Role::Card,
-            Role::Chip => wit::Role::Chip,
-            Role::Title => wit::Role::Title,
-            Role::Display => wit::Role::Display,
-            Role::Section => wit::Role::Section,
-            Role::Body => wit::Role::Body,
-            Role::BodyStrong => wit::Role::BodyStrong,
-            Role::Caption => wit::Role::Caption,
-        },
+        role: role(s.role),
         accent: match s.accent {
             Accent::Neutral => wit::Accent::Neutral,
             Accent::Brand => wit::Accent::Brand,

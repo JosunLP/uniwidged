@@ -1,0 +1,8 @@
+# The reference widget for `fs`. `fs:state` is a grant for one folder inside
+# the widget's own directory — not for the directory, and certainly not for the
+# disk. A user reading this line is being asked for exactly that.
+name = "counter"
+version = "1.0.0"
+description = "Counts things, and remembers the count"
+capabilities = ["fs:state"]
+memory-mb = 8

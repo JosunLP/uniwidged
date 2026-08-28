@@ -1,0 +1,7 @@
+# The reference widget for `locale`, and the smallest useful widget there is:
+# it asks to be woken, formats one number, and reaches nothing else.
+name = "clock"
+version = "1.0.0"
+description = "The time and the date, in your locale"
+capabilities = ["timer", "locale"]
+memory-mb = 8

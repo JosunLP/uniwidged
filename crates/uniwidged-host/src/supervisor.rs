@@ -25,6 +25,7 @@ use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::instance::{Event, Instance, Runtime, RuntimeError};
 use uniwidged_runtime::limits::{Health, Limits, Outcome};
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::services::Services;
 use uniwidged_view::View;
 use wasmtime::component::Component;
 
@@ -50,6 +51,10 @@ pub struct Supervised {
     manifest: Arc<Manifest>,
     component: Component,
     policy: Policy,
+    /// Handed to every fresh instance, so a widget that restarts finds its
+    /// data where it left it. That is what makes a restart cheap: a widget's
+    /// in-memory state is derived from its data, and the data survives.
+    services: Services,
     instance: Option<Instance>,
     health: Health,
     limits: Limits,
@@ -70,17 +75,24 @@ impl Supervised {
         wasm: &[u8],
         manifest: Manifest,
         policy: Policy,
+        services: Services,
     ) -> Result<Self, RuntimeError> {
         let component = runtime.compile(wasm)?;
         let manifest = Arc::new(manifest);
         let limits = manifest.limits;
-        let instance = runtime.instantiate(&component, manifest.clone(), policy.clone())?;
+        let instance = runtime.instantiate(
+            &component,
+            manifest.clone(),
+            policy.clone(),
+            services.clone(),
+        )?;
         Ok(Self {
             id,
             name: manifest.name.clone(),
             manifest,
             component,
             policy,
+            services,
             instance: Some(instance),
             health: Health::default(),
             limits,
@@ -124,7 +136,12 @@ impl Supervised {
         if self.instance.is_some() {
             return Ok(());
         }
-        match runtime.instantiate(&self.component, self.manifest.clone(), self.policy.clone()) {
+        match runtime.instantiate(
+            &self.component,
+            self.manifest.clone(),
+            self.policy.clone(),
+            self.services.clone(),
+        ) {
             Ok(instance) => {
                 self.instance = Some(instance);
                 self.state = State::Running;

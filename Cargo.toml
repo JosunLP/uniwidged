@@ -23,10 +23,10 @@ authors = ["uniwidged contributors"]
 
 [workspace.dependencies]
 # --- Linebender / rendering stack ----------------------------------------
-# Pinned to the versions Ferrum UI resolves. `uniwidged-compose` builds a
-# `vello::Scene` that `uniwidged-render` submits, and both reach those types
-# through Ferrum, so the versions have to agree or the types stop unifying.
-# Bumping any of these is a coordinated change across both repositories.
+# One pin per crate, shared by the whole workspace. `uniwidged-compose` builds a
+# `vello::Scene` that `uniwidged-render` submits, so the two have to agree on
+# the version or the types stop unifying — which is what a single workspace
+# entry guarantees.
 vello = "0.9.0"
 parley = "0.10.0"
 pollster = "0.4.0"
@@ -53,7 +53,10 @@ raw-window-handle = "0.6.2"
 # X11, through libxcb rather than through x11rb's pure-Rust connection: wgpu
 # needs a real `xcb_connection_t*` to create a surface, and a Rust connection
 # has no pointer to give it. `allow-unsafe-code` is what gates that module.
-x11rb = { version = "0.14", features = ["allow-unsafe-code"] }
+# `randr` is what makes a placement survive a monitor being unplugged: it
+# reports outputs by *name*, and a name is the only identifier that does not
+# renumber when the hardware changes.
+x11rb = { version = "0.14", features = ["allow-unsafe-code", "randr"] }
 
 # --- WASM guests ----------------------------------------------------------
 wasmtime = { version = "48.0.1", default-features = false, features = [
@@ -65,18 +68,18 @@ wasmtime-wasi = "48.0.1"
 wit-bindgen = "0.61.1"
 
 # --- Utilities ------------------------------------------------------------
+# `localtime_r`, for the one thing no std API exposes: this machine's offset
+# from UTC, daylight saving included. Unix only, and already in the graph
+# through Wasmtime, so it costs nothing to compile.
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 tracing = "0.1"
 
-# --- Ferrum UI ------------------------------------------------------------
-# Path dependencies on the sibling checkout while Ferrum UI is unpublished.
-# These become version requirements the moment it reaches crates.io; nothing
-# else about the build changes when they do.
-ferrum-core = { path = "../ferrumui/crates/ferrum-core" }
-ferrum-render = { path = "../ferrumui/crates/ferrum-render" }
-ferrum-layout = { path = "../ferrumui/crates/ferrum-layout" }
-ferrum-text = { path = "../ferrumui/crates/ferrum-text" }
+# There are deliberately no path dependencies on a sibling checkout. Everything
+# outside this workspace comes from crates.io, so `git clone && cargo test`
+# works with nothing else on the machine — see NOTICE.md for what was adopted
+# from elsewhere and how.
 
 # --- Internal crates ------------------------------------------------------
 uniwidged-core = { path = "crates/uniwidged-core", version = "0.0.1" }

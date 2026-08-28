@@ -14,38 +14,24 @@ jobs:
     name: fmt · clippy · test
     runs-on: ubuntu-latest
     steps:
-      # Both repositories are checked out as siblings, because `uniwidged`
-      # depends on Ferrum UI by path — see `[workspace.dependencies]`. They
-      # cannot simply be cloned next to each other: `actions/checkout` refuses
-      # a `path` outside the workspace, so the layout is built inside it and
-      # every step runs from `uniwidged/`.
       - uses: actions/checkout@v4
-        with:
-          path: uniwidged
-      - uses: actions/checkout@v4
-        with:
-          repository: j-pfalzgraf/ferrumui
-          path: ferrumui
-          # Ferrum UI is a private repository, and the default `GITHUB_TOKEN`
-          # only reaches this one. A fine-grained token with read access to it
-          # has to be set as the `FERRUMUI_TOKEN` secret, or this step fails
-          # with a 404 that looks like the repository does not exist.
-          token: ${{ secrets.FERRUMUI_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: uniwidged
+      # The pointer tests start their own nested X server, so this needs no
+      # session and no display — only the binary.
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
       - run: cargo fmt --all -- --check
-        working-directory: uniwidged
       - run: cargo clippy --workspace --all-targets
-        working-directory: uniwidged
       # No GPU on this runner, so the rendering tests skip here by design and
       # are covered by the `snapshots` job below.
       - run: cargo test --workspace
-        working-directory: uniwidged
+        env:
+          # Without this the drag tests skip themselves where no Xvfb is
+          # found, and a green run would prove nothing about dragging.
+          UNIWIDGED_REQUIRE_X11: "1"
 
   # Every visual claim in ARCHITECTURE.md §7 is pinned by a golden image, and
   # golden images are only evidence if they run on every change. lavapipe is a
@@ -56,22 +42,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: uniwidged
-      - uses: actions/checkout@v4
-        with:
-          repository: j-pfalzgraf/ferrumui
-          path: ferrumui
-          token: ${{ secrets.FERRUMUI_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: uniwidged
-      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers xvfb
       - run: cargo test --workspace
-        working-directory: uniwidged
         env:
           WGPU_BACKEND: vulkan
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
@@ -80,6 +56,7 @@ jobs:
           # broken driver in CI fails loudly instead of quietly covering
           # nothing.
           UNIWIDGED_REQUIRE_GPU: "1"
+          UNIWIDGED_REQUIRE_X11: "1"
 
   supply-chain:
     name: cargo deny
@@ -96,13 +73,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: uniwidged
-      - uses: actions/checkout@v4
-        with:
-          repository: j-pfalzgraf/ferrumui
-          path: ferrumui
-          token: ${{ secrets.FERRUMUI_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           # The suite builds the widget itself rather than looking for a
@@ -110,7 +80,4 @@ jobs:
           # missing eventually always skips.
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: uniwidged
       - run: cargo test -p uniwidged-runtime
-        working-directory: uniwidged

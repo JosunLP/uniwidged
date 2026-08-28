@@ -584,22 +584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrum-core"
-version = "0.0.1"
-dependencies = [
- "kurbo",
- "peniko",
-]
-
-[[package]]
-name = "ferrum-layout"
-version = "0.0.1"
-dependencies = [
- "ferrum-core",
- "taffy",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2283,6 +2267,7 @@ dependencies = [
  "uniwidged-render",
  "uniwidged-runtime",
  "uniwidged-shell",
+ "uniwidged-view",
 ]
 
 [[package]]
@@ -2290,9 +2275,9 @@ name = "uniwidged-compose"
 version = "0.0.1"
 dependencies = [
  "accesskit",
- "ferrum-layout",
  "parley",
  "png",
+ "taffy",
  "uniwidged-core",
  "uniwidged-render",
  "uniwidged-view",
@@ -2347,6 +2332,7 @@ dependencies = [
 name = "uniwidged-runtime"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "serde",
  "toml",
  "uniwidged-core",
@@ -2362,6 +2348,7 @@ dependencies = [
  "libc",
  "raw-window-handle",
  "uniwidged-core",
+ "uniwidged-host",
  "x11rb",
 ]
 

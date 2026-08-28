@@ -19,6 +19,12 @@
 //! any of them: WASI Preview 2 grants no ambient authority, so a capability
 //! that is not wired up below does not exist to a widget rather than being
 //! denied to it.
+//!
+//! What happens *after* the check is [`Services`] — what this host can
+//! actually serve, which is a different question and deliberately a separate
+//! type. A capability nobody granted answers `not-granted`; one that was
+//! granted and has nothing behind it answers `unavailable`. A widget can act
+//! on the difference, and this file is where it is kept.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,6 +36,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 use crate::capability::{Denied as PolicyDenied, Policy, Request};
 use crate::limits::Limits;
 use crate::manifest::{ABI_VERSION, Manifest};
+use crate::services::{Services, StoreError};
 
 wasmtime::component::bindgen!({
     path: "../../wit",
@@ -157,11 +164,18 @@ impl Runtime {
     }
 
     /// Instantiates a compiled component under a policy.
+    ///
+    /// `services` is what the embedder can serve on this widget's behalf — its
+    /// own data directory, this desktop's date conventions. It is per widget,
+    /// not per host: the directory is named after the manifest, and handing
+    /// two widgets the same one would undo the isolation the whole crate is
+    /// about.
     pub fn instantiate(
         &self,
         component: &Component,
         manifest: Arc<Manifest>,
         policy: Policy,
+        services: Services,
     ) -> Result<Instance, RuntimeError> {
         let limits = manifest.limits;
         let state = State {
@@ -180,6 +194,7 @@ impl Runtime {
                 .memories(4)
                 .build(),
             policy,
+            services,
             manifest: manifest.clone(),
             log: Vec::new(),
         };
@@ -365,6 +380,7 @@ pub struct State {
     wasi: WasiCtx,
     store_limits: StoreLimits,
     policy: Policy,
+    services: Services,
     manifest: Arc<Manifest>,
     log: Vec<String>,
 }
@@ -398,19 +414,26 @@ impl State {
 impl uniwidged::widget::types::Host for State {}
 
 impl uniwidged::widget::host::Host for State {
-    fn format_time(&mut self, _epoch_seconds: i64) -> Result<String, Denied> {
+    fn format_time(&mut self, epoch_seconds: i64) -> Result<String, Denied> {
         self.check(Request::Locale)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let locale = self.services.locale.ok_or_else(no_locale)?;
+        Ok(locale.format_time(epoch_seconds))
     }
 
-    fn format_date(&mut self, _epoch_seconds: i64) -> Result<String, Denied> {
+    fn format_date(&mut self, epoch_seconds: i64) -> Result<String, Denied> {
         self.check(Request::Locale)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let locale = self.services.locale.ok_or_else(no_locale)?;
+        Ok(locale.format_date(epoch_seconds))
     }
 
-    fn measure_text(&mut self, _text: String, _role: u8) -> Result<f32, Denied> {
+    fn measure_text(&mut self, text: String, role: wit::Role) -> Result<f32, Denied> {
         self.check(Request::Measure)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let metrics = self
+            .services
+            .measure
+            .as_ref()
+            .ok_or_else(|| Denied::Unavailable("granted, but this host has no fonts".into()))?;
+        Ok(metrics.width(&text, role_from_wire(role)))
     }
 
     fn fetch(&mut self, url: String) -> Result<u32, Denied> {
@@ -426,14 +449,33 @@ impl uniwidged::widget::host::Host for State {
         Err(Denied::Unavailable(NOT_YET.into()))
     }
 
-    fn read_file(&mut self, path: String) -> Result<Vec<u8>, Denied> {
-        self.check(Request::Fs { path })?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+    fn read_file(&mut self, path: String) -> Result<Option<Vec<u8>>, Denied> {
+        // The path is checked against the policy first and against the
+        // filesystem second — see `DataDir`, which does the second check after
+        // resolving, because that is the only one that can see a symlink.
+        self.check(Request::Fs { path: path.clone() })?;
+        let dir = self.services.data.as_ref().ok_or_else(no_data_dir)?;
+        dir.read(&path).map_err(|e| match e {
+            // Reachable only through a symlink a user planted: the textual
+            // check has already passed. Reported as malformed all the same,
+            // because the fact about the *request* is the same one.
+            StoreError::Escape => Denied::Malformed(ESCAPED.into()),
+            other => Denied::Unavailable(other.to_string()),
+        })
     }
 
-    fn write_file(&mut self, path: String, _bytes: Vec<u8>) -> Result<(), Denied> {
-        self.check(Request::Fs { path })?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+    fn write_file(&mut self, path: String, bytes: Vec<u8>) -> Result<(), Denied> {
+        self.check(Request::Fs { path: path.clone() })?;
+        let dir = self.services.data.as_ref().ok_or_else(no_data_dir)?;
+        dir.write(&path, &bytes).map_err(|e| match e {
+            StoreError::Escape => Denied::Malformed(ESCAPED.into()),
+            // A widget asking to store more than the limit is asking for
+            // something out of bounds, which is a fact about the request
+            // rather than about this host — so the answer is the one it can do
+            // something about.
+            too_large @ StoreError::TooLarge { .. } => Denied::Malformed(too_large.to_string()),
+            other => Denied::Unavailable(other.to_string()),
+        })
     }
 
     fn get_secret(&mut self, _key: String) -> Result<Vec<u8>, Denied> {
@@ -448,7 +490,10 @@ impl uniwidged::widget::host::Host for State {
 
     fn cpu_load(&mut self) -> Result<f32, Denied> {
         self.check(Request::Metrics)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let sampler = self.services.metrics.as_ref().ok_or_else(|| {
+            Denied::Unavailable("granted, but this host reads no machine counters".into())
+        })?;
+        sampler.load().map_err(Denied::Unavailable)
     }
 
     fn log(&mut self, message: String) {
@@ -467,11 +512,28 @@ impl uniwidged::widget::host::Host for State {
 
 /// What the capability check passes before the backing implementation exists.
 ///
-/// The gate is real from M3; what is behind it lands with the host in M7. A
-/// widget therefore gets `not-granted` when it never asked and `unavailable`
-/// when it did — which are different facts, and a widget that conflated them
-/// would report the wrong thing to its user.
-const NOT_YET: &str = "granted, but this host cannot serve it yet (milestone M7)";
+/// The gate has been real since M3. `fs`, `locale`, `measure` and `metrics`
+/// now have something behind them; `net`, `secrets` and `command` do not yet,
+/// and say so. A widget therefore gets `not-granted` when it never asked
+/// and `unavailable` when it did — which are different facts, and a widget
+/// that conflated them would report the wrong thing to its user.
+const NOT_YET: &str = "granted, but this host cannot serve it yet — see ROADMAP.md";
+
+const ESCAPED: &str = "that path leaves the widget's own directory";
+
+/// Granted, but this embedder gave the widget no directory.
+///
+/// A headless test and `uniwidged snapshot` both run widgets with nowhere to
+/// write, on purpose: rendering a widget should not create files. Saying so
+/// plainly is better than inventing a temporary directory the widget would
+/// then find empty every time.
+fn no_data_dir() -> Denied {
+    Denied::Unavailable("granted, but this host gave the widget no data directory".into())
+}
+
+fn no_locale() -> Denied {
+    Denied::Unavailable("granted, but this host has no locale configured".into())
+}
 
 /// The host part of an `https://` URL, lower-cased.
 ///
@@ -535,21 +597,29 @@ fn icon_from_wire(icon: wit::Icon) -> uniwidged_view::Icon {
     }
 }
 
+/// One place, because two would eventually disagree — and a role that decoded
+/// differently in `measure-text` than in a view is a widget measuring one
+/// thing and being drawn as another.
+fn role_from_wire(role: wit::Role) -> uniwidged_view::Role {
+    use uniwidged_view::Role;
+    match role {
+        wit::Role::Plain => Role::Plain,
+        wit::Role::Panel => Role::Panel,
+        wit::Role::Card => Role::Card,
+        wit::Role::Chip => Role::Chip,
+        wit::Role::Title => Role::Title,
+        wit::Role::Display => Role::Display,
+        wit::Role::Section => Role::Section,
+        wit::Role::Body => Role::Body,
+        wit::Role::BodyStrong => Role::BodyStrong,
+        wit::Role::Caption => Role::Caption,
+    }
+}
+
 fn style_from_wire(style: wit::Style) -> uniwidged_view::Style {
-    use uniwidged_view::{Accent, Align, Direction, Justify, Layout, Role};
+    use uniwidged_view::{Accent, Align, Direction, Justify, Layout};
     uniwidged_view::Style {
-        role: match style.role {
-            wit::Role::Plain => Role::Plain,
-            wit::Role::Panel => Role::Panel,
-            wit::Role::Card => Role::Card,
-            wit::Role::Chip => Role::Chip,
-            wit::Role::Title => Role::Title,
-            wit::Role::Display => Role::Display,
-            wit::Role::Section => Role::Section,
-            wit::Role::Body => Role::Body,
-            wit::Role::BodyStrong => Role::BodyStrong,
-            wit::Role::Caption => Role::Caption,
-        },
+        role: role_from_wire(style.role),
         accent: match style.accent {
             wit::Accent::Neutral => Accent::Neutral,
             wit::Accent::Brand => Accent::Brand,

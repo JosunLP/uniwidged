@@ -5,6 +5,7 @@
 //! error type is one they can match on.
 
 use crate::bindings::uniwidged::widget::host as raw;
+use uniwidged_view::Role;
 
 /// Why a request was refused.
 ///
@@ -63,8 +64,14 @@ impl Cx {
         raw::format_date(epoch_seconds).map_err(Into::into)
     }
 
-    pub fn measure_text(&self, text: &str, role: u8) -> Result<f32, Denied> {
-        raw::measure_text(text, role).map_err(Into::into)
+    /// How wide `text` would be in `role`, in logical pixels.
+    ///
+    /// The number the host's own layout will arrive at, in the theme it is
+    /// about to draw in — so a widget can decide for itself whether a label
+    /// fits, rather than against a guess. You still do not choose the font,
+    /// the size or the weight; this is a window onto what the host chose.
+    pub fn measure_text(&self, text: &str, role: Role) -> Result<f32, Denied> {
+        raw::measure_text(text, crate::convert::role(role)).map_err(Into::into)
     }
 
     /// Starts an HTTPS request. The answer arrives as
@@ -81,7 +88,13 @@ impl Cx {
         raw::take_response(token).map_err(Into::into)
     }
 
-    pub fn read_file(&self, path: &str) -> Result<Vec<u8>, Denied> {
+    /// Reads a file from your widget's own directory.
+    ///
+    /// `Ok(None)` means it is not there, which is what your first run finds
+    /// and is not an error. Everything else is: a path outside your directory
+    /// is [`Denied::Malformed`], and a host with no storage for you is
+    /// [`Denied::Unavailable`].
+    pub fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, Denied> {
         raw::read_file(path).map_err(Into::into)
     }
 

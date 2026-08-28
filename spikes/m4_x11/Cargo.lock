@@ -233,22 +233,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrum-core"
-version = "0.0.1"
-dependencies = [
- "kurbo",
- "peniko",
-]
-
-[[package]]
-name = "ferrum-layout"
-version = "0.0.1"
-dependencies = [
- "ferrum-core",
- "taffy",
-]
-
-[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1371,8 +1355,8 @@ name = "uniwidged-compose"
 version = "0.0.1"
 dependencies = [
  "accesskit",
- "ferrum-layout",
  "parley",
+ "taffy",
  "uniwidged-core",
  "uniwidged-render",
  "uniwidged-view",
@@ -1401,6 +1385,7 @@ dependencies = [
 name = "uniwidged-shell"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "raw-window-handle",
  "uniwidged-core",
  "x11rb",

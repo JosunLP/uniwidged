@@ -17,3 +17,12 @@ x11rb.workspace = true
 # For `poll` on the X11 connection: blocking with a timeout is what makes an
 # idle desktop cost nothing, and there is no portable std equivalent.
 libc = "0.2"
+
+[dev-dependencies]
+# The drag test drives the same interaction model the desktop does, rather than
+# a copy of it — a measurement of a reimplementation measures the
+# reimplementation.
+uniwidged-host.workspace = true
+# `xtest` fakes pointer input, which is the only way to measure a drag rather
+# than assert one. Test-only: nothing that ships synthesises input.
+x11rb = { workspace = true, features = ["xtest"] }

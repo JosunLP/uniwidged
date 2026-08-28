@@ -2,11 +2,19 @@
 //!
 //! ```text
 //! uniwidged run [--config PATH]     start the desktop in the foreground
+//! uniwidged new <name>              scaffold a widget that already builds
 //! uniwidged install <widget.wasm>   install a widget, showing what it asks for
 //! uniwidged list                    what is installed, and what it was granted
+//! uniwidged lock <name>             pin a widget where it is
+//! uniwidged unlock <name>           let it be dragged again
+//! uniwidged move <name> [--x N …]   place a widget without a pointer
 //! uniwidged doctor                  what this session can and cannot do
 //! uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG
 //! ```
+//!
+//! `move` exists because a pointer is not always available: a widget can be
+//! placed over SSH, from a dotfiles script, or back onto a monitor that was
+//! unplugged while it was there.
 //!
 //! `doctor` is the one worth explaining. A desktop widget depends on properties
 //! the platform may or may not provide — a compositing manager, a transparent
@@ -14,6 +22,7 @@
 //! one is missing the symptom is visual and the cause is not. So it reports
 //! what the session actually offers, in the same words the start-up log uses.
 
+mod new;
 mod paths;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod run;
@@ -27,8 +36,12 @@ fn main() -> ExitCode {
     let rest: Vec<String> = args.collect();
     let result = match command.as_deref() {
         Some("run") => command_run(&rest),
+        Some("new") => new::create(&rest),
         Some("install") => command_install(&rest),
         Some("list") => command_list(&rest),
+        Some("lock") => command_lock(&rest, true),
+        Some("unlock") => command_lock(&rest, false),
+        Some("move") => command_move(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
         Some("--help" | "-h" | "help") | None => {
@@ -51,14 +64,18 @@ fn print_usage() {
         "uniwidged — a cross-platform desktop widget framework\n\n\
          USAGE:\n  \
            uniwidged run [--config PATH]     start the desktop in the foreground\n  \
+           uniwidged new <name> [--dir D] [--sdk P] [--capability C]…\n  \
            uniwidged install <widget.wasm>   install a widget, showing what it asks for\n  \
            uniwidged list                    what is installed, and what it was granted\n  \
+           uniwidged lock <name>             pin a widget where it is\n  \
+           uniwidged unlock <name>           let it be dragged again\n  \
+           uniwidged move <name> [--x N] [--y N] [--width N] [--height N] [--output NAME]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n"
     );
 }
 
-fn flag(args: &[String], name: &str) -> Option<String> {
+pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
@@ -153,12 +170,130 @@ fn command_list(args: &[String]) -> Result<(), String> {
                 .map(|o| format!(" on {o}"))
                 .unwrap_or_default(),
         );
+        if placement.locked {
+            println!("    locked in place");
+        }
         if widget.granted.is_empty() {
             println!("    granted nothing");
         } else {
             println!("    granted {}", widget.granted.join(", "));
         }
     }
+    Ok(())
+}
+
+/// Pins a widget where it is, or lets it be dragged again.
+///
+/// The switch people reach for once a widget is where they want it — and the
+/// one they reach for again when they knock it out of place. A locked widget
+/// still works: clicks reach it, it still updates. It just does not move.
+fn command_lock(args: &[String], locked: bool) -> Result<(), String> {
+    use uniwidged_host::config::Config;
+
+    let name = args
+        .first()
+        .ok_or("which widget? `uniwidged lock <name>`")?;
+    let path = config_path(args);
+    let mut config = Config::read(&path).map_err(|e| e.to_string())?;
+    let widget = config
+        .widget_mut(name)
+        .ok_or_else(|| format!("`{name}` is not installed; try `uniwidged list`"))?;
+    widget.placement.locked = locked;
+    config.write(&path).map_err(|e| e.to_string())?;
+    println!(
+        "  `{name}` is {}",
+        if locked {
+            "locked where it is"
+        } else {
+            "free to move again"
+        }
+    );
+    Ok(())
+}
+
+/// Places a widget without a pointer.
+///
+/// Every field is optional and anything omitted is left alone, so `--y 900` is
+/// a nudge rather than a reset. The coordinates are relative to the widget's
+/// output when it has one — the same numbers `config.toml` holds, and the same
+/// ones a drag writes back.
+fn command_move(args: &[String]) -> Result<(), String> {
+    use uniwidged_host::config::Config;
+
+    let name = args
+        .first()
+        .ok_or("which widget? `uniwidged move <name> [--x N] [--y N]`")?;
+    let path = config_path(args);
+    let mut config = Config::read(&path).map_err(|e| e.to_string())?;
+    let widget = config
+        .widget_mut(name)
+        .ok_or_else(|| format!("`{name}` is not installed; try `uniwidged list`"))?;
+
+    let number = |name: &str| -> Result<Option<i64>, String> {
+        match flag(args, name) {
+            None => Ok(None),
+            Some(value) => value
+                .parse::<i64>()
+                .map(Some)
+                .map_err(|_| format!("`{value}` is not a number for {name}")),
+        }
+    };
+    let mut changed = false;
+    if let Some(x) = number("--x")? {
+        widget.placement.x = x as i32;
+        changed = true;
+    }
+    if let Some(y) = number("--y")? {
+        widget.placement.y = y as i32;
+        changed = true;
+    }
+    // A widget smaller than this cannot be grabbed to make it bigger again,
+    // which is the same floor the pointer enforces — see
+    // `uniwidged_host::interaction::MIN_SIZE`.
+    let min = uniwidged_host::interaction::MIN_SIZE;
+    if let Some(width) = number("--width")? {
+        if width < min.0 as i64 {
+            return Err(format!(
+                "a widget may not be narrower than {} pixels",
+                min.0
+            ));
+        }
+        widget.placement.width = width as u32;
+        changed = true;
+    }
+    if let Some(height) = number("--height")? {
+        if height < min.1 as i64 {
+            return Err(format!("a widget may not be shorter than {} pixels", min.1));
+        }
+        widget.placement.height = height as u32;
+        changed = true;
+    }
+    if let Some(output) = flag(args, "--output") {
+        // `--output ""` forgets the monitor, which is how a widget stored
+        // against a screen that no longer exists is set free.
+        widget.placement.output = (!output.is_empty()).then_some(output);
+        changed = true;
+    }
+    if !changed {
+        return Err(
+            "nothing to change: give at least one of --x, --y, --width, --height, --output".into(),
+        );
+    }
+
+    let placement = widget.placement.clone();
+    config.write(&path).map_err(|e| e.to_string())?;
+    println!(
+        "  `{name}` is now {}x{} at {},{}{}",
+        placement.width,
+        placement.height,
+        placement.x,
+        placement.y,
+        placement
+            .output
+            .as_deref()
+            .map(|o| format!(" on {o}"))
+            .unwrap_or_default(),
+    );
     Ok(())
 }
 

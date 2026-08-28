@@ -12,13 +12,15 @@ description = "Turns a uniwidged view tree into a Vello scene, hit rects and acc
 uniwidged-core.workspace = true
 uniwidged-view.workspace = true
 uniwidged-render.workspace = true
-ferrum-layout.workspace = true
-# Text is *not* taken from `ferrum-text`, which is otherwise the obvious choice.
-# It exposes only size and generic family, and this crate needs weight (a title
-# at 600 against a body at 400 is most of the hierarchy) and tabular figures (a
-# clock whose digits change width jitters once a second). Parley offers both;
-# the wrapper does not. The Parley→Vello glyph bridge below follows the one in
-# `ferrum-text`, which is where the technique came from.
+# The box model, in `layout::boxes`. Taffy directly rather than through a
+# wrapper crate: the vocabulary a widget can describe is small enough that the
+# facade is two hundred lines, and this workspace depends on nothing outside
+# crates.io — see NOTICE.md on what was adopted and from where.
+taffy.workspace = true
+# Text is Parley directly. A generic wrapper exposes size and family, and this
+# crate needs weight (a title at 600 against a body at 400 is most of the
+# hierarchy) and tabular figures (a clock whose digits change width jitters
+# once a second).
 parley.workspace = true
 accesskit.workspace = true
 

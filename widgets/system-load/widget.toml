@@ -1,0 +1,8 @@
+# The reference widget for `metrics`. It asks for a schedule and a counter and
+# nothing else — no network, no storage, no keychain — which is what a
+# system monitor should need and rather less than most of them take.
+name = "system-load"
+version = "1.0.0"
+description = "How busy this machine's processors are"
+capabilities = ["timer", "metrics"]
+memory-mb = 8

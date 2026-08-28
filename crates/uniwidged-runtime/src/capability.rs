@@ -186,7 +186,7 @@ fn net_matches(capability: &Capability, host: &str) -> bool {
 /// Checked on the request rather than after joining, because by the time a
 /// `..` has been joined onto a base path the damage is a canonicalisation
 /// question, and those are answered differently on every platform.
-fn is_contained(path: &str) -> bool {
+pub(crate) fn is_contained(path: &str) -> bool {
     if path.is_empty() || path.starts_with('/') || path.starts_with('\\') {
         return false;
     }

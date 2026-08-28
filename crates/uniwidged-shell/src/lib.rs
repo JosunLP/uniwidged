@@ -42,6 +42,23 @@ pub mod platform;
 
 use uniwidged_core::geom::PhysicalRect;
 
+/// One monitor, as the platform reports it.
+///
+/// Reported by name, because that is the only identifier that survives a
+/// laptop being docked: indices renumber and desktop coordinates move
+/// wholesale when a screen is plugged in on the left. `uniwidged-host`'s
+/// `placement` module is what turns one of these into a position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Output {
+    /// `DP-1`, `HDMI-A-1`, `\\.\DISPLAY1`. Whatever the platform calls it,
+    /// as long as it calls it the same thing next time — which is the whole
+    /// reason a placement stores a name rather than an index.
+    pub name: String,
+    /// Its area in the desktop's coordinate space, in physical pixels.
+    pub rect: PhysicalRect,
+    pub primary: bool,
+}
+
 /// Where a widget sits, and on which output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placement {

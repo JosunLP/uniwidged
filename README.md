@@ -22,7 +22,8 @@ model.
 > icons, hit rectangles and an accessibility tree, all from one pass — with
 > fifteen golden images behind it. And widgets really are sandboxed WASM
 > components: `widgets/conformance` is built for `wasm32-wasip2`, instantiated
-> by the real runtime, and thirteen tests assert what the sandbox *refuses*.
+> by the real runtime, and twenty tests assert what the sandbox refuses — and,
+> since the gates acquired something behind them, what it serves.
 > And it runs on X11 as well as Wayland — the risk `ARCHITECTURE.md` §10.1
 > named, measured rather than assumed, with the documented fallback built and
 > forced so it stays honest. See
@@ -30,9 +31,29 @@ model.
 > [`spikes/m4_x11/FINDINGS.md`](spikes/m4_x11/FINDINGS.md).
 > And it runs: `uniwidged run` starts a real desktop on X11 with sandboxed WASM
 > widgets in it, drawing, responding to clicks, restarting when one fails, and
-> submitting nothing at all when nothing is happening. What is still missing is
-> named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over — dragging, the
-> Wayland shell, and the Windows and macOS platforms.
+> submitting nothing at all when nothing is happening. Four of the capability
+> gates now have something behind them — a widget's own data directory, which
+> it cannot leave even through a symlink; dates and times in the machine's
+> locale; text measured against the host's real fonts in the theme it is about
+> to be drawn in; and the machine's CPU load, sampled without ever blocking a
+> widget's deadline. `net`, `secrets` and `command` are what is left, and the
+> conformance suite asserts that, so implementing one and forgetting to say so
+> fails a test. The
+> workspace builds from crates.io alone: no sibling checkout, no private
+> repository, `git clone && cargo test`. Widgets can be dragged, resized and
+> pinned, and they remember which monitor they were on — measured against a
+> real X server with synthetic pointer input, not asserted. What is still
+> missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over — the
+> Wayland shell, the network and keychain capabilities, and the Windows and
+> macOS platforms.
+>
+> And somebody else can write one. `uniwidged new` scaffolds a widget that
+> already builds, draws and responds; [the authoring
+> guide](docs/writing-a-widget.md) is written; and there are three reference
+> widgets, one per served capability. A test runs the scaffold, builds what it
+> wrote for `wasm32-wasip2`, instantiates it in the real runtime and clicks its
+> button — so the guide's first four commands are checked on every change
+> rather than believed.
 
 ![Two sandboxed WASM widgets running on a desktop](docs/images/desktop.png)
 
@@ -51,12 +72,17 @@ macOS, Wayland and X11, with all the flags and protocols that implies, and all
 the ways each platform gets it wrong. That is `uniwidged-shell`.
 
 [**Ferrum UI**](https://github.com/j-pfalzgraf/ferrumui) is a GPU-rendered UI
-stack on Vello, wgpu, Parley, taffy and AccessKit. That is everything above the
-surface.
+stack on Vello, wgpu, Parley, taffy and AccessKit, and it is where the
+rendering, layout and text techniques above the surface come from.
 
-What is new is the seam between them — handing a desktop-layer surface to wgpu
-instead of to Cairo — and the sandbox boundary that lets somebody else write a
-widget.
+Both are **adopted, not depended on**. This workspace has no path dependency on
+a sibling checkout and nothing outside crates.io: `git clone && cargo test`
+works on a machine with neither project on it. `NOTICE.md` records what came
+from where, and every adapted file says so in its own module documentation.
+
+What is new is the seam between the two — handing a desktop-layer surface to
+wgpu instead of to Cairo — and the sandbox boundary that lets somebody else
+write a widget.
 
 ## What makes it fast
 
@@ -82,6 +108,18 @@ Every one of those has a golden-image test behind it, rendered headlessly in CI
 on a software rasterizer. See [`ARCHITECTURE.md`](ARCHITECTURE.md) §7.
 
 ## Writing a widget
+
+```sh
+uniwidged new my-widget && cd my-widget
+cargo build --release --target wasm32-wasip2
+uniwidged install target/wasm32-wasip2/release/my_widget.wasm && uniwidged run
+```
+
+That is a working widget on your desktop. [**The authoring
+guide**](docs/writing-a-widget.md) is the rest of it, and
+[`widgets/clock`](widgets/clock), [`widgets/system-load`](widgets/system-load)
+and [`widgets/counter`](widgets/counter) are three worked examples, one per
+capability.
 
 You describe; the host decides what it looks like. That is what makes a screen
 full of widgets by different authors look like one product.
@@ -109,9 +147,11 @@ impl Widget for Clock {
 uniwidged_guest::export!(Clock);
 ```
 
-Every host call returns a `Result`: a user can decline anything, and a widget
-that disappears when they do is a worse answer than one that shows its last
-value and says it is stale. Off-target the whole thing still compiles and its
+Every host call returns a `Result`, and the refusals are distinguished: a
+capability the manifest never asked for answers `NotGranted`, and one the user
+approved that this host cannot serve answers `Unavailable`. A user can decline
+anything, and a widget that disappears when they do is a worse answer than one
+that shows its last value and says it is stale. Off-target the whole thing still compiles and its
 tests still run — `export!` expands to nothing there — so a widget's logic can
 be tested without a WASM toolchain.
 
@@ -145,10 +185,14 @@ crates/
   uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
   uniwidged-guest      the SDK widget authors compile against
   uniwidged-host       the daemon: scheduler, configuration, policy
-  uniwidged-cli        `uniwidged run · new · install · list · doctor`
+  uniwidged-cli        `uniwidged run · new · install · list · lock · move · doctor`
 wit/uniwidged.wit      the host/guest contract
+widgets/clock          the reference widget for `locale`
+widgets/system-load    the reference widget for `metrics`
+widgets/counter        the reference widget for `fs`, and a restart it survives
 widgets/conformance    a widget that tries everything, so the sandbox can be
                        tested for what it refuses
+docs/writing-a-widget.md  the guide
 spikes/m0_layer_shell  the proof that the whole thing is possible
 spikes/m4_x11          the same question on X11, where it was least certain
 ```
@@ -156,13 +200,11 @@ spikes/m4_x11          the same question on X11, where it was least certain
 ## Building
 
 ```sh
-git clone https://github.com/j-pfalzgraf/ferrumui  ../ferrumui   # a sibling checkout
 cargo test --workspace
 ```
 
-`uniwidged-compose` depends on `ferrum-layout` by path while Ferrum UI is
-unpublished — a sibling checkout is expected, and the dependency becomes a
-version requirement the moment it reaches crates.io.
+That is the whole of it: every dependency is on crates.io, and there is no
+sibling checkout to arrange.
 
 Some tests need more than a compiler, and say so rather than skipping quietly:
 
@@ -171,6 +213,7 @@ Some tests need more than a compiler, and say so rather than skipping quietly:
 | the golden images | a Vulkan driver — `mesa-vulkan-drivers` supplies a software one. Without it they skip; `UNIWIDGED_REQUIRE_GPU=1` turns that into a failure, and CI sets it. |
 | the sandbox conformance suite | `rustup target add wasm32-wasip2`. It builds the conformance widget itself, so there is nothing to skip. |
 | the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
+| the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
 
 ## Licence
 

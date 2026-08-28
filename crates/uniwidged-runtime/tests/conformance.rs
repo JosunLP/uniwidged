@@ -18,6 +18,7 @@ use uniwidged_runtime::capability::{Capability, Policy};
 use uniwidged_runtime::instance::{Event, Instance, Runtime, RuntimeError};
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::services::{CpuSampler, DataDir, Locale, Services, TextMetrics};
 use uniwidged_view::{Content, Node, View};
 
 fn widget_dir() -> PathBuf {
@@ -47,8 +48,16 @@ fn manifest() -> Manifest {
     Manifest::parse(&text).expect("the conformance manifest should parse")
 }
 
-/// Instantiates the widget under `policy`.
+/// Instantiates the widget under `policy`, with a host that can serve nothing.
+///
+/// The default on purpose: most of what this file asserts is about the gate,
+/// and a gate is tested by what it refuses. The tests that are about what is
+/// *behind* the gate say so by passing their own [`Services`].
 fn start(policy: Policy, limits: Option<Limits>) -> (Runtime, Instance) {
+    start_with(policy, limits, Services::none())
+}
+
+fn start_with(policy: Policy, limits: Option<Limits>, services: Services) -> (Runtime, Instance) {
     let runtime = Runtime::new().expect("runtime");
     let component = runtime.compile(&component_bytes()).expect("compile");
     let mut manifest = manifest();
@@ -56,9 +65,80 @@ fn start(policy: Policy, limits: Option<Limits>) -> (Runtime, Instance) {
         manifest.limits = limits;
     }
     let instance = runtime
-        .instantiate(&component, Arc::new(manifest), policy)
+        .instantiate(&component, Arc::new(manifest), policy, services)
         .expect("instantiate");
     (runtime, instance)
+}
+
+/// A directory that removes itself, so a test that writes leaves nothing.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(what: &str) -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "uniwidged-conformance-{what}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        Self(path)
+    }
+
+    /// Where this host would put the conformance widget's own directory.
+    fn widget_dir(&self) -> PathBuf {
+        self.0.join("conformance")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Everything a host that can serve `fs`, `locale`, `measure` and `metrics`
+/// hands one widget.
+///
+/// UTC, so the strings a test expects are the same on every machine it runs on.
+fn served(scratch: &Scratch) -> Services {
+    Services::none()
+        .with_data_dir(DataDir::new(scratch.widget_dir()))
+        .with_locale(Locale::default())
+        .with_text_metrics(Arc::new(Ruler))
+        .with_metrics(Arc::new(CpuSampler::new()))
+}
+
+/// A text measurer with no fonts in it.
+///
+/// The real one lives in `uniwidged-compose` and is tested there against the
+/// layout it has to agree with. What this file is testing is the *boundary* —
+/// that a granted `measure` reaches the host at all, with the role the widget
+/// named — so it uses something whose answers are arithmetic rather than
+/// typography, and can therefore be asserted exactly.
+struct Ruler;
+
+impl TextMetrics for Ruler {
+    fn width(&self, text: &str, role: uniwidged_view::Role) -> f32 {
+        let per_character = match role {
+            uniwidged_view::Role::Display => 20.0,
+            _ => 7.0,
+        };
+        text.chars().count() as f32 * per_character
+    }
+}
+
+/// The grants the served tests use: everything the widget attempts.
+fn everything() -> Policy {
+    Policy::from_granted([
+        Capability::Locale,
+        Capability::Measure,
+        Capability::Net("example.com".into()),
+        Capability::Fs("cache".into()),
+        Capability::Secrets,
+        Capability::Metrics,
+    ])
 }
 
 fn find(node: &Node, id: NodeId) -> Option<&Node> {
@@ -87,7 +167,19 @@ fn label(view: &View, name: &str) -> String {
 }
 
 /// Everything the widget attempts that needs a grant.
-const ATTEMPTS: &[&str] = &["locale", "measure", "net", "fs-read", "secrets", "metrics"];
+const ATTEMPTS: &[&str] = &[
+    "locale",
+    "locale-date",
+    "measure",
+    "net",
+    "fs-read",
+    "fs-roundtrip",
+    "secrets",
+    "metrics",
+];
+
+/// The ones this host still has nothing behind, however much is granted.
+const UNSERVED: &[&str] = &["net", "secrets"];
 
 #[test]
 fn a_real_widget_instantiates_and_renders() {
@@ -130,20 +222,13 @@ fn a_malformed_request_is_refused_before_the_grant_is_even_considered() {
 }
 
 #[test]
-fn granting_a_capability_changes_the_refusal_but_not_the_escape() {
-    // With the grant in place the answer becomes `unavailable` — the host
-    // cannot serve it yet — which is a different fact from `not-granted`, and
-    // a widget should be able to tell them apart. What must *not* change is
-    // the path escape: a grant for `cache` is not a grant for `../../.ssh`.
-    let policy = Policy::from_granted([
-        Capability::Locale,
-        Capability::Measure,
-        Capability::Net("example.com".into()),
-        Capability::Fs("cache".into()),
-        Capability::Secrets,
-        Capability::Metrics,
-    ]);
-    let (_runtime, mut instance) = start(policy, None);
+fn a_grant_a_host_cannot_serve_says_so_rather_than_refusing() {
+    // Two different facts, and a widget can act on the difference: with the
+    // grant in place but nothing behind it the answer becomes `unavailable`,
+    // where `not-granted` would have sent its author to fix a manifest that is
+    // already right. What must *not* change is the path escape: a grant for
+    // `cache` is not a grant for `../../.ssh`.
+    let (_runtime, mut instance) = start(everything(), None);
     let view = instance.view().expect("render");
     for attempt in ATTEMPTS {
         assert_eq!(
@@ -156,6 +241,109 @@ fn granting_a_capability_changes_the_refusal_but_not_the_escape() {
         outcome(&view, "fs-escape"),
         "malformed",
         "a grant for `cache` must not reach outside the widget's directory"
+    );
+}
+
+#[test]
+fn a_served_capability_returns_what_it_was_asked_for() {
+    // The positive half of the gate, and the half a sandbox suite usually
+    // omits: a capability that is granted *and* served has to actually work.
+    // The values are asserted rather than merely the absence of an error,
+    // because a host that answers `format_time` wrongly is not conformant
+    // either.
+    let scratch = Scratch::new("served");
+    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let view = instance.view().expect("render");
+
+    assert_eq!(outcome(&view, "locale"), "00:00");
+    assert_eq!(outcome(&view, "locale-date"), "1970-01-01");
+    // Nothing has written this one, and a first run finding nothing is the
+    // normal case rather than the failure case.
+    assert_eq!(outcome(&view, "fs-read"), "absent");
+    assert_eq!(
+        outcome(&view, "fs-roundtrip"),
+        "roundtrip",
+        "what the widget wrote should be what it reads back"
+    );
+    // The widget checked the relationship itself — a longer string is wider,
+    // an empty one is nothing — because the pixels depend on the host's fonts
+    // and the relationship does not.
+    assert_eq!(outcome(&view, "measure"), "measured");
+    assert_eq!(outcome(&view, "metrics"), "allowed");
+
+    // Everything still unbuilt says so, in the same view, so this test fails
+    // when one of them is implemented and nobody updated the list.
+    for attempt in UNSERVED {
+        assert_eq!(outcome(&view, attempt), "unavailable", "{attempt}");
+    }
+    assert_eq!(outcome(&view, "fs-escape"), "malformed");
+}
+
+#[test]
+fn what_a_widget_writes_lands_in_its_own_directory_and_stays_there() {
+    // Durability is what makes a restart cheap: a widget's in-memory state is
+    // derived from its data, so a fresh instance is a working widget again —
+    // *if* the data outlived the instance. This checks both ends of that, and
+    // checks the file is where the host said it would be rather than merely
+    // somewhere.
+    let scratch = Scratch::new("durable");
+    let expected = scratch.widget_dir().join("cache/roundtrip.bin");
+
+    {
+        let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+        assert_eq!(
+            outcome(&instance.view().expect("render"), "fs-roundtrip"),
+            "roundtrip"
+        );
+    }
+    assert_eq!(
+        std::fs::read(&expected).expect("the widget's file should be on disk"),
+        b"uniwidged-roundtrip-v1",
+        "{} should hold what the widget wrote",
+        expected.display()
+    );
+
+    // A second instance — which is what a restart is — finds it there. It is
+    // read through `fs-read` rather than the round trip, because a round trip
+    // would write it again and prove nothing.
+    std::fs::copy(&expected, scratch.widget_dir().join("cache/today.json")).expect("copy");
+    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "fs-read"),
+        "present",
+        "a fresh instance should find what the last one left"
+    );
+}
+
+#[test]
+fn a_host_with_storage_still_refuses_a_path_out_of_the_directory() {
+    // The escape has to be refused by the *same* host that would have served a
+    // legitimate path — a check that only holds when there is nothing behind
+    // it is not a check.
+    let scratch = Scratch::new("escape");
+    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let view = instance.view().expect("render");
+    assert_eq!(outcome(&view, "fs-escape"), "malformed");
+    assert!(
+        !scratch.0.join(".ssh").exists(),
+        "nothing should have been created outside the widget's directory"
+    );
+}
+
+#[test]
+fn a_widget_granted_storage_it_never_asked_for_still_cannot_use_it() {
+    // The grant is per subpath, and the host having a directory does not widen
+    // it. `fs:cache` is a grant for `cache`, and the round trip writes there —
+    // so this policy, which grants a *different* subpath, must refuse the same
+    // call the previous test allowed.
+    let scratch = Scratch::new("subpath");
+    let policy = Policy::from_granted([Capability::Fs("state".into())]);
+    let (_runtime, mut instance) = start_with(policy, None, served(&scratch));
+    let view = instance.view().expect("render");
+    assert_eq!(outcome(&view, "fs-roundtrip"), "not-granted");
+    assert!(
+        !scratch.widget_dir().join("cache").exists(),
+        "a refused write must not create the directory it was refused"
     );
 }
 
@@ -293,7 +481,12 @@ fn a_fresh_instance_recovers_a_widget_that_died() {
     });
 
     let mut first = runtime
-        .instantiate(&component, manifest.clone(), Policy::deny_all())
+        .instantiate(
+            &component,
+            manifest.clone(),
+            Policy::deny_all(),
+            Services::none(),
+        )
         .expect("first instance");
     first
         .on_event(Event::Clicked(NodeId::named("spin")))
@@ -302,7 +495,7 @@ fn a_fresh_instance_recovers_a_widget_that_died() {
     assert!(first.is_dead());
 
     let mut second = runtime
-        .instantiate(&component, manifest, Policy::deny_all())
+        .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a second instance of the same component");
     let view = second.view().expect("the fresh instance renders");
     assert_eq!(label(&view, "started"), "started");
@@ -364,4 +557,65 @@ fn the_manifest_travels_with_the_instance() {
     let (_runtime, instance) = start(Policy::deny_all(), None);
     assert_eq!(instance.manifest().name, "conformance");
     assert!(instance.manifest().capabilities.is_empty());
+}
+
+#[test]
+fn a_measurement_crosses_the_boundary_with_the_role_the_widget_named() {
+    // The role used to cross as a `u8` index into an enum, which nothing
+    // stopped a widget getting wrong. It is the enum now, and this is the
+    // assertion that the value survives the trip: the ruler answers 20 pixels
+    // per character for `Display` and 7 for everything else, and the widget
+    // asks for `Body`.
+    let scratch = Scratch::new("role");
+    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    // `measured` compares "MMMMMMMMMM" against "i" and "", so a host that
+    // ignored the text would fail before the role ever mattered.
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "measure"),
+        "measured"
+    );
+}
+
+#[test]
+fn a_widget_reading_the_machines_load_gets_a_fraction() {
+    // `cpu_load` is the one served capability whose answer nobody can predict,
+    // so what is asserted is the range — and that asking twice in one view
+    // does not block, which is the invariant a sampling implementation gets
+    // wrong by sleeping.
+    let scratch = Scratch::new("metrics");
+    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+
+    let began = std::time::Instant::now();
+    let view = instance.view().expect("render");
+    let took = began.elapsed();
+
+    // On a platform with no counters wired up the honest answer is a refusal,
+    // and the widget reports it as one rather than as a zero.
+    let answer = outcome(&view, "metrics");
+    assert!(
+        answer == "allowed" || answer == "unavailable",
+        "cpu_load answered {answer:?}"
+    );
+    assert!(
+        took < Duration::from_millis(100),
+        "reading a counter took {took:?}; a host function may not block"
+    );
+}
+
+#[test]
+fn the_abi_version_is_checked_before_anything_else_runs() {
+    // The ABI has moved twice in one day — `read-file` answering `ok(none)`,
+    // then `measure-text` taking a role rather than a `u8`. The check is what
+    // makes that safe: a widget built against an older world is refused at
+    // instantiation, in a sentence naming both numbers, rather than failing
+    // somewhere confusing later.
+    let runtime = Runtime::new().expect("runtime");
+    let component = runtime.compile(&component_bytes()).expect("compile");
+    let manifest = Arc::new(manifest());
+
+    // The real widget matches, which is the case that has to keep working.
+    runtime
+        .instantiate(&component, manifest, Policy::deny_all(), Services::none())
+        .expect("a widget built from this tree speaks this ABI");
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 3);
 }

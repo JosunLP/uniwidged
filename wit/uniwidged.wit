@@ -137,6 +137,8 @@ interface types {
 /// trapping, so a widget can degrade — a weather widget without `net` should
 /// show its last reading and say it is stale, not disappear.
 interface host {
+    use types.{role};
+
     variant denied {
         not-granted,
         malformed(string),
@@ -147,10 +149,14 @@ interface host {
     format-time: func(epoch-seconds: s64) -> result<string, denied>;
     format-date: func(epoch-seconds: s64) -> result<string, denied>;
 
-    /// How wide a string is in a named role, for a widget's own truncation
-    /// decisions — needs `measure`. The host owns the fonts; this is the only
-    /// window onto them.
-    measure-text: func(text: string, role: u8) -> result<f32, denied>;
+    /// How wide a string is in a named role, in logical pixels — needs
+    /// `measure`. The host owns the fonts; this is the only window onto them.
+    ///
+    /// It answers what the *layout* will do with that string, in this
+    /// desktop's current theme: the same font, size, weight and digit spacing
+    /// the compose pass would use. A widget deciding its own truncation
+    /// against a different number would be deciding against a guess.
+    measure-text: func(text: string, role: role) -> result<f32, denied>;
 
     /// An HTTPS request to a granted host — needs `net:<host>`.
     ///
@@ -161,7 +167,12 @@ interface host {
     take-response: func(token: u32) -> result<list<u8>, denied>;
 
     /// The widget's own data directory — needs `fs:<subpath>`.
-    read-file: func(path: string) -> result<list<u8>, denied>;
+    ///
+    /// A missing file is `ok(none)`, not an error. The first run of a caching
+    /// widget finds nothing, and that is its normal case rather than its
+    /// failure case — a widget forced to tell "no cache yet" apart from "this
+    /// host is broken" by reading an error string would get it wrong.
+    read-file: func(path: string) -> result<option<list<u8>>, denied>;
     write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
 
     /// The OS keychain, namespaced to this widget — needs `secrets`.
@@ -183,6 +194,13 @@ interface guest {
 
     /// Bumped when this world changes incompatibly. Checked at instantiation,
     /// before anything else is called.
+    ///
+    /// 1 → 2: `read-file` answers `ok(none)` for a file that is not there,
+    /// rather than a denial a widget had to read an error string to interpret.
+    ///
+    /// 2 → 3: `measure-text` takes the `role` enum rather than a `u8` index
+    /// into it. The index had no meaning a widget author could look up, and
+    /// nothing stopped one passing 200.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

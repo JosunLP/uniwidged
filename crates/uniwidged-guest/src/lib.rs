@@ -14,7 +14,7 @@
 //! impl Widget for Clock {
 //!     fn view(&mut self, cx: &Cx) -> View {
 //!         panel(NodeId::named("clock"))
-//!             .child(text(cx.format_time(cx.now()).unwrap_or_default()).role(Role::Display))
+//!             .child(text(cx.format_time(now()).unwrap_or_default()).role(Role::Display))
 //!             .view()
 //!     }
 //!
@@ -45,7 +45,6 @@
 //! unit-tested with no WASM toolchain at all — see `examples/hello_widget`.
 
 #![allow(clippy::needless_doctest_main)]
-
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub mod bindings;
@@ -66,7 +65,7 @@ use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
 /// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 3;
 
 /// Something that happened to your widget.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,10 +105,18 @@ pub trait Widget: Default {
         Wake::Never
     }
 
-    /// Called once, before the first view. Returning an error stops the widget
-    /// from starting at all, which is right for a configuration it cannot work
-    /// without and wrong for anything it could show a message about.
-    fn start(&mut self) -> Result<(), String> {
+    /// Called once, before the first view.
+    ///
+    /// This is where a widget loads what it remembered — its cache, its saved
+    /// state — which is why it is handed a [`Cx`]: a `start` that cannot reach
+    /// the host can only initialise things the widget already knew, and every
+    /// widget with anything to restore ended up doing it lazily in `view`
+    /// behind a `loaded` flag instead.
+    ///
+    /// Returning an error stops the widget from starting at all, which is right
+    /// for a configuration it cannot work without and wrong for anything it
+    /// could show a message about. A missing cache is the second kind.
+    fn start(&mut self, _cx: &Cx) -> Result<(), String> {
         Ok(())
     }
 
@@ -151,7 +158,8 @@ macro_rules! export {
                 }
 
                 fn start() -> ::core::result::Result<(), ::std::string::String> {
-                    WIDGET.with(|w| $crate::Widget::start(&mut *w.borrow_mut()))
+                    let cx = $crate::Cx::new();
+                    WIDGET.with(|w| $crate::Widget::start(&mut *w.borrow_mut(), &cx))
                 }
 
                 fn view() -> $crate::bindings::uniwidged::widget::types::Tree {
@@ -194,6 +202,6 @@ macro_rules! export {
 }
 
 #[cfg(target_arch = "wasm32")]
-mod convert;
+pub(crate) mod convert;
 #[cfg(target_arch = "wasm32")]
 pub use convert::{event_from_wire, to_wire, wake_to_wire};

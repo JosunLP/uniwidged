@@ -32,7 +32,7 @@ pub struct Conformance {
 }
 
 impl Widget for Conformance {
-    fn start(&mut self) -> Result<(), String> {
+    fn start(&mut self, _cx: &Cx) -> Result<(), String> {
         self.started = true;
         Ok(())
     }
@@ -63,14 +63,36 @@ impl Widget for Conformance {
 
         // Every capability, every time. Order matters only in that it is
         // stable, so the host can address a row by index.
+        //
+        // Where a capability is *served*, the row carries what it returned
+        // rather than the word "allowed": a host that answers the call and
+        // answers it wrongly is not conformant either, and only the value can
+        // show the difference.
         let attempts = vec![
             Attempt {
                 name: "locale",
-                outcome: describe(cx.format_time(0)),
+                // The epoch, so the expected answer is the same everywhere a
+                // host is UTC and the difference is the host's offset rather
+                // than the day this ran.
+                outcome: value(cx.format_time(0)),
+            },
+            Attempt {
+                name: "locale-date",
+                outcome: value(cx.format_date(0)),
             },
             Attempt {
                 name: "measure",
-                outcome: describe(cx.measure_text("x", 0)),
+                outcome: measured(cx),
+            },
+            Attempt {
+                // The number itself, rounded, so a host test can watch it
+                // change when the theme does — which is the whole reason the
+                // measurer follows the compositor rather than copying it.
+                name: "measure-px",
+                outcome: match cx.measure_text("Weather", Role::Body) {
+                    Ok(width) => format!("{}", width.round() as i32),
+                    Err(denied) => refusal(&denied),
+                },
             },
             Attempt {
                 name: "net",
@@ -82,11 +104,15 @@ impl Widget for Conformance {
             },
             Attempt {
                 name: "fs-read",
-                outcome: describe(cx.read_file("cache/today.json")),
+                outcome: describe_bytes(cx.read_file("cache/today.json")),
+            },
+            Attempt {
+                name: "fs-roundtrip",
+                outcome: roundtrip(cx),
             },
             Attempt {
                 name: "fs-escape",
-                outcome: describe(cx.read_file("../../.ssh/id_rsa")),
+                outcome: describe_bytes(cx.read_file("../../.ssh/id_rsa")),
             },
             Attempt {
                 name: "secrets",
@@ -144,18 +170,94 @@ impl Widget for Conformance {
     }
 }
 
+/// Measures two strings and checks the answer means something.
+///
+/// A width is a number, and a host that returned a constant would pass any
+/// test that only asked for one. So this asks for two and checks the
+/// relationship: a longer string in the same role is wider, and an empty one
+/// is nothing. That holds in every font, which is what makes it assertable at
+/// all — the actual pixels depend on what the desktop has installed.
+fn measured(cx: &Cx) -> String {
+    let long = match cx.measure_text("MMMMMMMMMM", Role::Body) {
+        Ok(width) => width,
+        Err(denied) => return refusal(&denied),
+    };
+    let short = match cx.measure_text("i", Role::Body) {
+        Ok(width) => width,
+        Err(denied) => return refusal(&denied),
+    };
+    let empty = match cx.measure_text("", Role::Body) {
+        Ok(width) => width,
+        Err(denied) => return refusal(&denied),
+    };
+    if empty != 0.0 {
+        return "empty-is-not-zero".to_string();
+    }
+    if !(long > short && short > 0.0) {
+        return "degenerate".to_string();
+    }
+    "measured".to_string()
+}
+
+/// Writes a file and reads it back, which is the only way to find out whether
+/// a granted `fs` really works.
+///
+/// A capability that answers without erroring has not been shown to do
+/// anything. This one has: the bytes have to come back, from a directory the
+/// widget cannot name and has never seen.
+fn roundtrip(cx: &Cx) -> String {
+    const PAYLOAD: &[u8] = b"uniwidged-roundtrip-v1";
+    if let Err(denied) = cx.write_file("cache/roundtrip.bin", PAYLOAD) {
+        return refusal(&denied);
+    }
+    match cx.read_file("cache/roundtrip.bin") {
+        Ok(Some(bytes)) if bytes == PAYLOAD => "roundtrip".to_string(),
+        Ok(Some(_)) => "mismatch".to_string(),
+        // The host took the write and then could not find it. Worth its own
+        // word: it is a broken host rather than a refused request.
+        Ok(None) => "vanished".to_string(),
+        Err(denied) => refusal(&denied),
+    }
+}
+
 /// The outcome of one attempt, as a word the host can assert on.
 ///
 /// `not-granted` and `unavailable` are deliberately distinguished: the first
 /// means the manifest never asked, the second that it did and the host cannot
 /// serve it. A widget that conflated them would tell its user the wrong thing.
 fn describe<T>(result: Result<T, uniwidged_guest::Denied>) -> String {
-    use uniwidged_guest::Denied;
     match result {
         Ok(_) => "allowed".to_string(),
-        Err(Denied::NotGranted) => "not-granted".to_string(),
-        Err(Denied::Malformed(_)) => "malformed".to_string(),
-        Err(Denied::Unavailable(_)) => "unavailable".to_string(),
+        Err(denied) => refusal(&denied),
+    }
+}
+
+/// The same, for a read: absence is not a refusal.
+///
+/// `absent` is what a caching widget's first run sees, and telling it apart
+/// from `unavailable` is the whole reason the host answers with an option.
+fn describe_bytes(result: Result<Option<Vec<u8>>, uniwidged_guest::Denied>) -> String {
+    match result {
+        Ok(Some(_)) => "present".to_string(),
+        Ok(None) => "absent".to_string(),
+        Err(denied) => refusal(&denied),
+    }
+}
+
+/// A value where the host served one, and the refusal where it did not.
+fn value(result: Result<String, uniwidged_guest::Denied>) -> String {
+    match result {
+        Ok(value) => value,
+        Err(denied) => refusal(&denied),
+    }
+}
+
+fn refusal(denied: &uniwidged_guest::Denied) -> String {
+    use uniwidged_guest::Denied;
+    match denied {
+        Denied::NotGranted => "not-granted".to_string(),
+        Denied::Malformed(_) => "malformed".to_string(),
+        Denied::Unavailable(_) => "unavailable".to_string(),
     }
 }
 

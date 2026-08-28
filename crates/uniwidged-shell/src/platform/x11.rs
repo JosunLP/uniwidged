@@ -49,7 +49,7 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 
-use crate::{Capabilities, Placement};
+use crate::{Capabilities, Output, Placement};
 use uniwidged_core::geom::PhysicalRect;
 
 /// Which of the three transparency paths this session ended up on.
@@ -227,8 +227,31 @@ impl X11Window {
 
     /// As [`X11Window::open`], for a window of any kind.
     pub fn open_kind(rect: PhysicalRect, title: &str, kind: WindowKind) -> Result<Self, X11Error> {
-        let (conn, screen_num) =
-            XCBConnection::connect(None).map_err(|e| X11Error::Connect(e.to_string()))?;
+        Self::open_on(None, rect, title, kind)
+    }
+
+    /// As [`X11Window::open_kind`], on a named display.
+    ///
+    /// `None` is `$DISPLAY`, which is what a desktop wants. A name is for the
+    /// two cases where the environment is the wrong place to say it: a test
+    /// that starts its own server — setting `DISPLAY` from inside a running
+    /// process is a data race, and the compiler says so since edition 2024 —
+    /// and running two desktops side by side, which the configuration file
+    /// already contemplates.
+    pub fn open_on(
+        display: Option<&str>,
+        rect: PhysicalRect,
+        title: &str,
+        kind: WindowKind,
+    ) -> Result<Self, X11Error> {
+        let (conn, screen_num) = XCBConnection::connect(
+            display
+                .map(std::ffi::CString::new)
+                .transpose()
+                .map_err(|e| X11Error::Connect(e.to_string()))?
+                .as_deref(),
+        )
+        .map_err(|e| X11Error::Connect(e.to_string()))?;
         let setup = conn.setup();
         let screen = setup.roots[screen_num].clone();
 
@@ -514,6 +537,95 @@ impl X11Window {
         self.conn.flush().map_err(protocol)
     }
 
+    /// Where the window is now, in physical pixels.
+    pub fn geometry(&self) -> PhysicalRect {
+        self.placement.rect
+    }
+
+    /// Moves and resizes the window.
+    ///
+    /// The caller is responsible for the surface: a window that changed size
+    /// has a swapchain that has not, and presenting into it stretches the last
+    /// frame until somebody resizes and redraws. `uniwidged-host` owns both, so
+    /// it does both — see `uniwidged-cli`'s loop.
+    pub fn set_geometry(&mut self, rect: PhysicalRect) -> Result<(), X11Error> {
+        if rect == self.placement.rect {
+            return Ok(());
+        }
+        self.conn
+            .configure_window(
+                self.window,
+                &xproto::ConfigureWindowAux::new()
+                    .x(rect.x)
+                    .y(rect.y)
+                    .width(rect.width)
+                    .height(rect.height),
+            )
+            .map_err(protocol)?;
+        self.conn.flush().map_err(protocol)?;
+        self.placement.rect = rect;
+        Ok(())
+    }
+
+    /// The whole desktop, in physical pixels.
+    ///
+    /// One rectangle covering every monitor, which is what a widget must stay
+    /// reachable inside. Per-monitor placement is a separate question and a
+    /// separate call.
+    pub fn desktop_bounds(&self) -> PhysicalRect {
+        let screen = &self.conn.setup().roots[self.screen];
+        PhysicalRect::new(
+            0,
+            0,
+            screen.width_in_pixels as u32,
+            screen.height_in_pixels as u32,
+        )
+    }
+
+    /// Routes the pointer to this window until [`X11Window::release_pointer`].
+    ///
+    /// Without it a drag faster than the compositor loses the pointer the
+    /// moment it leaves the window, and the widget stops half way — which
+    /// looks like the drag was dropped and is the single most common way
+    /// hand-rolled window dragging is wrong.
+    pub fn grab_pointer(&self) -> Result<(), X11Error> {
+        self.conn
+            .grab_pointer(
+                // `owner_events` true: our own window keeps receiving its
+                // events normally, so nothing about the non-drag path changes.
+                true,
+                self.window,
+                xproto::EventMask::BUTTON_RELEASE | xproto::EventMask::POINTER_MOTION,
+                xproto::GrabMode::ASYNC,
+                xproto::GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            )
+            .map_err(protocol)?;
+        self.conn.flush().map_err(protocol)?;
+        Ok(())
+    }
+
+    /// The monitors this display has, by name.
+    ///
+    /// Empty means the server cannot say — RandR missing or too old — which is
+    /// a different thing from having no monitors and is treated as such by
+    /// `uniwidged_host::placement`: the stored coordinates are used as they
+    /// stand rather than resolved against a layout nobody knows.
+    pub fn outputs(&self) -> Result<Vec<Output>, X11Error> {
+        let root = self.conn.setup().roots[self.screen].root;
+        outputs_of(&self.conn, root)
+    }
+
+    pub fn release_pointer(&self) -> Result<(), X11Error> {
+        self.conn
+            .ungrab_pointer(x11rb::CURRENT_TIME)
+            .map_err(protocol)?;
+        self.conn.flush().map_err(protocol)?;
+        Ok(())
+    }
+
     /// Blocks until an X11 event arrives or `timeout` elapses.
     ///
     /// `None` means block indefinitely, which is the common case on an idle
@@ -558,10 +670,28 @@ impl X11Window {
         while let Some(event) = self.conn.poll_for_event().map_err(protocol)? {
             match event {
                 x11rb::protocol::Event::ButtonPress(press) if press.detail == 1 => {
-                    out.push(Input::Click {
+                    out.push(Input::Pressed {
                         window: press.event,
-                        x: press.event_x as f64,
-                        y: press.event_y as f64,
+                        local: (press.event_x as i32, press.event_y as i32),
+                        root: (press.root_x as i32, press.root_y as i32),
+                    });
+                }
+                x11rb::protocol::Event::ButtonRelease(release) if release.detail == 1 => {
+                    out.push(Input::Released {
+                        window: release.event,
+                        root: (release.root_x as i32, release.root_y as i32),
+                    });
+                }
+                // Only while a button is down. Motion with no button is a
+                // hover, which nothing here acts on — and delivering it would
+                // wake the loop on every pointer twitch across the desktop,
+                // which is exactly what `ARCHITECTURE.md` §5 is about.
+                x11rb::protocol::Event::MotionNotify(motion)
+                    if motion.state.contains(xproto::KeyButMask::BUTTON1) =>
+                {
+                    out.push(Input::Motion {
+                        window: motion.event,
+                        root: (motion.root_x as i32, motion.root_y as i32),
                     });
                 }
                 x11rb::protocol::Event::Expose(expose) if expose.count == 0 => {
@@ -647,14 +777,33 @@ impl X11Window {
 }
 
 /// Something the user did, in terms the host can act on.
+///
+/// Presses and releases are reported separately rather than as a click,
+/// because on a desktop widget the two are not the same event: a press that
+/// travels is a drag, and only the release knows which it was. Which *node* a
+/// press landed on remains the host's business — it did the layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Input {
-    /// A primary-button press, in the window's own coordinates. Which *node*
-    /// that is remains the host's business — it did the layout.
-    Click {
+    /// The primary button went down.
+    Pressed {
         window: u32,
-        x: f64,
-        y: f64,
+        /// In the window's own physical pixels. Used to find the node and the
+        /// resize edge.
+        local: (i32, i32),
+        /// In the desktop's coordinates. A drag is measured in these: a
+        /// window-relative delta feeds the window's own movement back into its
+        /// input, and the widget shivers instead of moving.
+        root: (i32, i32),
+    },
+    /// The primary button came up.
+    Released {
+        window: u32,
+        root: (i32, i32),
+    },
+    /// The pointer moved with the primary button down.
+    Motion {
+        window: u32,
+        root: (i32, i32),
     },
     /// The window's contents were lost and have to be put back. An X11 window
     /// has no backing store by default, so this is not optional.
@@ -664,6 +813,60 @@ pub enum Input {
     Closed {
         window: u32,
     },
+}
+
+/// The monitors on a display, without opening a window first.
+///
+/// Placement has to be decided *before* a window exists — that is what the
+/// window's initial geometry is — so this takes its own connection and closes
+/// it again.
+pub fn outputs(display: Option<&str>) -> Result<Vec<Output>, X11Error> {
+    let name = display
+        .map(std::ffi::CString::new)
+        .transpose()
+        .map_err(|e| X11Error::Connect(e.to_string()))?;
+    let (conn, screen) =
+        XCBConnection::connect(name.as_deref()).map_err(|e| X11Error::Connect(e.to_string()))?;
+    let root = conn.setup().roots[screen].root;
+    outputs_of(&conn, root)
+}
+
+fn outputs_of(conn: &XCBConnection, root: xproto::Window) -> Result<Vec<Output>, X11Error> {
+    use x11rb::protocol::randr::ConnectionExt as _;
+
+    // RandR 1.5's monitor list rather than the output list: a monitor is what
+    // a user sees, and two outputs mirroring one screen are one monitor. A
+    // server without it answers an error, which the caller reads as "cannot
+    // say".
+    let monitors = conn
+        .randr_get_monitors(root, true)
+        .map_err(protocol)?
+        .reply()
+        .map_err(protocol)?;
+
+    let mut out = Vec::with_capacity(monitors.monitors.len());
+    for monitor in monitors.monitors {
+        let name = conn
+            .get_atom_name(monitor.name)
+            .map_err(protocol)?
+            .reply()
+            .map_err(protocol)?;
+        out.push(Output {
+            // Atom names are Latin-1 by the protocol and ASCII in practice;
+            // `from_utf8_lossy` is the reading that never fails, and a monitor
+            // whose name did not round-trip would be worse than one whose name
+            // has a replacement character in it.
+            name: String::from_utf8_lossy(&name.name).into_owned(),
+            rect: PhysicalRect::new(
+                monitor.x as i32,
+                monitor.y as i32,
+                monitor.width as u32,
+                monitor.height as u32,
+            ),
+            primary: monitor.primary,
+        });
+    }
+    Ok(out)
 }
 
 /// The first 32-bit `TrueColor` visual on this screen, with its depth.

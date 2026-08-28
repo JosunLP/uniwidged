@@ -249,3 +249,165 @@ fn every_refusal_says_which_node_and_why() {
         assert!(message.len() > 25, "{message:?} explains nothing");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Random arenas
+// ---------------------------------------------------------------------------
+//
+// The tests above are the cases somebody thought of. This is the part that
+// covers the ones nobody did: thousands of arenas built from random indices,
+// checked against the properties the decoder promises rather than against
+// expected values.
+//
+// It is deliberately not a fuzzing framework. The generator is twenty lines and
+// the seed is fixed, so a failure is reproducible from the test name alone and
+// the suite costs milliseconds — a fuzzer that has to be run separately is a
+// fuzzer nobody runs before merging.
+
+/// xorshift64*. Deterministic, seeded per test, and good enough to shake out
+/// index arithmetic — which is all this needs, since the *interesting* inputs
+/// are near boundaries and those are generated deliberately below.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, bound: u64) -> u64 {
+        if bound == 0 { 0 } else { self.next() % bound }
+    }
+}
+
+/// An arena of `count` nodes whose child indices are drawn from a range that
+/// straddles every boundary the decoder checks: before the parent, after it,
+/// exactly at it, and past the end of the arena.
+fn arbitrary_arena(rng: &mut Rng, count: usize) -> Tree {
+    let mut nodes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let children = (0..rng.below(4))
+            .map(|_| rng.below(count as u64 + 2) as u32)
+            .collect();
+        nodes.push(WireNode {
+            children,
+            ..WireNode::default()
+        });
+    }
+    Tree { nodes }
+}
+
+#[test]
+fn no_arena_can_make_the_decoder_panic_or_hang() {
+    // The property that matters most, because the decoder runs on hostile
+    // input by definition: whatever a widget sends, the host answers rather
+    // than dying. A recursive decoder discovers a cycle by running out of
+    // stack, and on a desktop process that takes the desktop with it.
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut accepted = 0;
+    let mut refused = 0;
+    for _ in 0..4000 {
+        let count = 1 + rng.below(12) as usize;
+        match arbitrary_arena(&mut rng, count).into_view() {
+            Ok(_) => accepted += 1,
+            Err(_) => refused += 1,
+        }
+    }
+    // Both outcomes have to occur, or the generator is producing junk the
+    // decoder rejects out of hand and this test is measuring nothing.
+    assert!(accepted > 0, "no random arena was ever accepted");
+    assert!(refused > 0, "no random arena was ever refused");
+}
+
+#[test]
+fn every_accepted_arena_is_a_tree_that_round_trips() {
+    // What "accepted" has to mean: exactly the nodes that were reachable, each
+    // once, in a shape that flattens back to an equivalent arena. A decoder
+    // that duplicated a subtree or dropped one would pass every hand-written
+    // test above and fail here.
+    let mut rng = Rng(0x0123_4567_89AB_CDEF);
+    let mut checked = 0;
+    for _ in 0..4000 {
+        let count = 1 + rng.below(12) as usize;
+        let arena = arbitrary_arena(&mut rng, count);
+        let Ok(view) = arena.clone().into_view() else {
+            continue;
+        };
+        checked += 1;
+
+        // Every node in the arena is in the tree, once.
+        fn count_nodes(node: &Node) -> usize {
+            1 + node.children.iter().map(count_nodes).sum::<usize>()
+        }
+        assert_eq!(
+            count_nodes(&view.root),
+            arena.nodes.len(),
+            "an accepted arena has no unreachable nodes and no duplicates"
+        );
+
+        // And flattening it gives an arena the decoder accepts again, with the
+        // same shape.
+        let again = view.flatten();
+        assert_eq!(again.nodes.len(), arena.nodes.len());
+        let reparsed = again
+            .clone()
+            .into_view()
+            .expect("a flattened tree is always acceptable");
+        assert_eq!(reparsed.flatten(), again, "the round trip is stable");
+    }
+    assert!(checked > 50, "only {checked} arenas were accepted");
+}
+
+#[test]
+fn every_refusal_names_a_node_that_exists() {
+    // An error is a diagnostic somebody has to act on, so the index in it has
+    // to mean something. An off-by-one here points a widget author at the
+    // wrong node, which is worse than pointing at none.
+    let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
+    for _ in 0..4000 {
+        let count = 1 + rng.below(12) as usize;
+        let arena = arbitrary_arena(&mut rng, count);
+        let size = arena.nodes.len();
+        let Err(error) = arena.into_view() else {
+            continue;
+        };
+        let node = match error {
+            TreeError::TooLarge { .. } => continue,
+            TreeError::TextTooLong { node, .. }
+            | TreeError::ChildOutOfRange { node, .. }
+            | TreeError::ChildNotAfterParent { node, .. }
+            | TreeError::SharedChild { node, .. }
+            | TreeError::Unreachable { node } => node,
+        };
+        assert!(node < size, "{error:?} names node {node} of {size}");
+        assert!(!error.to_string().is_empty());
+    }
+}
+
+#[test]
+fn a_valid_arena_is_never_refused() {
+    // The other direction, and the one a too-strict checker fails: arenas
+    // built the way `flatten` builds them — every child after its parent, each
+    // node attached exactly once — must always be accepted. A widget whose
+    // legitimate view is rejected has no way to find out why.
+    let mut rng = Rng(0x5DEE_CE66_D000_0005);
+    for _ in 0..2000 {
+        let count = 1 + rng.below(20) as usize;
+        let mut nodes: Vec<WireNode> = (0..count).map(|_| WireNode::default()).collect();
+        // Attach each node to a uniformly chosen earlier one, which produces
+        // every shape from a single chain to a flat fan.
+        for child in 1..count {
+            let parent = rng.below(child as u64) as usize;
+            nodes[parent].children.push(child as u32);
+        }
+        let arena = Tree { nodes };
+        assert!(
+            arena.clone().into_view().is_ok(),
+            "a well-formed arena was refused: {arena:?}"
+        );
+    }
+}

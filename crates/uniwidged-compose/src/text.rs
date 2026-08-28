@@ -24,7 +24,7 @@
 //! through with **no conversion at all**.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontFeature,
@@ -100,9 +100,16 @@ impl Align {
 }
 
 /// A shaped run, ready to measure or paint.
+///
+/// `Arc` rather than `Rc`, and the difference is load-bearing rather than
+/// stylistic: the engine is shared into the WASM sandbox behind the `measure`
+/// capability, and Wasmtime requires a store's data to be `Send`. Nothing here
+/// actually crosses a thread — see `ARCHITECTURE.md` §5, which has one loop —
+/// but asserting `Send` on something built from `Rc` would be a lie the
+/// compiler cannot check for us.
 #[derive(Clone)]
 pub struct Shaped {
-    inner: Rc<Layout<peniko::Brush>>,
+    inner: Arc<Layout<peniko::Brush>>,
 }
 
 impl Shaped {
@@ -247,7 +254,7 @@ impl TextEngine {
             self.cache.clear();
         }
         let shaped = Shaped {
-            inner: Rc::new(built),
+            inner: Arc::new(built),
         };
         self.cache.insert(hash, (owned, shaped.clone()));
         shaped

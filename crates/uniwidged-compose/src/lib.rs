@@ -33,7 +33,8 @@ pub mod paint;
 pub mod text;
 pub mod theme;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use uniwidged_core::{NodeId, Point, Rect, Size, WidgetId};
 use uniwidged_render::Scene;
@@ -62,6 +63,15 @@ pub struct Composed {
     /// Named nodes in paint order, so the topmost can be found without
     /// re-walking the tree. The last thing drawn is the thing on top.
     pub order: Vec<NodeId>,
+    /// The nodes the widget said it wants activations on — a button, a toggle,
+    /// a list item, a link.
+    ///
+    /// Recorded in the same pass as the hit rectangles, for the reason
+    /// `ARCHITECTURE.md` §4 gives about the accessibility tree: a second walk
+    /// is a second answer, and the two would eventually disagree. The host
+    /// needs it to tell a *click* from the start of a *drag* — a press on a
+    /// button belongs to the widget, and a press anywhere else moves it.
+    pub interactive: HashSet<NodeId>,
     /// The flat node list for AccessKit, root first. See [`a11y`].
     pub a11y: Vec<(accesskit::NodeId, accesskit::Node)>,
     /// The size the tree wanted, before the surface's own constraints.
@@ -69,6 +79,15 @@ pub struct Composed {
 }
 
 impl Composed {
+    /// Does this node want activations of its own?
+    ///
+    /// The host asks before treating a press as the start of a drag: a press
+    /// on a button is the widget's, and a press on the panel around it moves
+    /// the widget.
+    pub fn is_interactive(&self, id: NodeId) -> bool {
+        self.interactive.contains(&id)
+    }
+
     /// What a click at `point` (logical pixels) landed on.
     ///
     /// Uses the recorded rectangles rather than re-walking the tree, so the
@@ -94,8 +113,17 @@ impl Composed {
 /// particular is expensive to build and must not be per-widget: eight widgets
 /// each enumerating the system's fonts at start-up would be visible.
 pub struct Compositor {
-    theme: Theme,
-    text: text::TextEngine,
+    /// Shared with every [`Measurer`] it has handed out, so a theme change
+    /// reaches a widget's own measurements as well as the pixels.
+    theme: Arc<Mutex<Theme>>,
+    /// Shared for the same reason, and because Parley's font collection is
+    /// expensive enough that a second one would be visible at start-up.
+    ///
+    /// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>` because this reaches the
+    /// WASM sandbox, whose store Wasmtime requires to be `Send`. There is one
+    /// thread and the lock is never contended; what it buys is that the claim
+    /// is checked rather than asserted.
+    text: Arc<Mutex<text::TextEngine>>,
 }
 
 impl Default for Compositor {
@@ -115,11 +143,41 @@ impl Compositor {
     /// snapshot is a picture of this code rather than of whichever fonts the
     /// machine happened to have installed.
     pub fn with_text_engine(theme: Theme, text: text::TextEngine) -> Self {
-        Self { theme, text }
+        Self {
+            theme: Arc::new(Mutex::new(theme)),
+            text: Arc::new(Mutex::new(text)),
+        }
     }
 
-    pub fn theme(&self) -> &Theme {
-        &self.theme
+    pub fn theme(&self) -> Theme {
+        *self
+            .theme
+            .lock()
+            .expect("the theme lock is never held across a panic")
+    }
+
+    /// A handle that measures strings exactly as this compositor lays them out.
+    ///
+    /// What the host puts behind the `measure` capability. It shares this
+    /// compositor's fonts and follows its theme, which is the point: a widget
+    /// deciding its own truncation against a different number is deciding
+    /// against a guess.
+    ///
+    /// Safe to hold across a `set_theme`, and safe to call from anywhere the
+    /// compositor is not itself running — which is everywhere, because
+    /// [`Compositor::compose`] never calls into guest code and guest code is
+    /// the only thing that calls this.
+    pub fn measurer(&self) -> Measurer {
+        Measurer {
+            theme: self.theme.clone(),
+            text: self.text.clone(),
+        }
+    }
+
+    fn text(&self) -> std::sync::MutexGuard<'_, text::TextEngine> {
+        self.text
+            .lock()
+            .expect("the font lock is never held across a panic")
     }
 
     /// Replaces the theme, for an appearance or contrast change.
@@ -128,7 +186,10 @@ impl Compositor {
     /// position, and re-shaping every string on a light/dark switch would make
     /// the switch visibly slow with several widgets on screen.
     pub fn set_theme(&mut self, theme: Theme) {
-        self.theme = theme;
+        *self
+            .theme
+            .lock()
+            .expect("the theme lock is never held across a panic") = theme;
     }
 
     /// Composes one widget's view.
@@ -137,27 +198,36 @@ impl Compositor {
     /// per logical pixel; the returned scene is already scaled, so the caller
     /// hands it straight to the renderer.
     pub fn compose(&mut self, request: Compose<'_>) -> Composed {
+        let theme = self.theme();
+        let mut text = self.text();
         let placed = layout::compute(
             request.view,
-            &self.theme,
-            &mut self.text,
+            &theme,
+            &mut text,
             (request.size.width as f32, request.size.height as f32),
         );
 
         let mut scene = Scene::new();
         let painter = paint::Painter {
-            theme: &self.theme,
+            theme: &theme,
             width: request.size.width,
             rtl: request.rtl,
             scale: request.scale,
         };
-        painter.paint(&mut scene, &placed, &mut self.text);
+        painter.paint(&mut scene, &placed, &mut text);
 
         let mut hit_rects = HashMap::new();
         let mut order = Vec::new();
+        let mut interactive = HashSet::new();
         placed.walk(&mut |node| {
             if !node.node.id.is_anonymous() {
                 order.push(node.node.id);
+                if !matches!(
+                    node.node.semantics.interaction,
+                    uniwidged_view::Interaction::None
+                ) {
+                    interactive.insert(node.node.id);
+                }
                 // Mirrored, because a click arrives in the coordinates the user
                 // sees. Recording the unmirrored rectangle would make every
                 // right-to-left widget clickable in the wrong place — silently,
@@ -172,6 +242,7 @@ impl Compositor {
             scene,
             hit_rects,
             order,
+            interactive,
             a11y,
             intrinsic: Size::new(placed.rect.width(), placed.rect.height()),
         }
@@ -182,13 +253,47 @@ impl Compositor {
     /// For a host that needs a widget's natural size — to give a new widget a
     /// sensible default box — without paying for a scene it will not present.
     pub fn measure(&mut self, view: &View, available: Size) -> Size {
+        let theme = self.theme();
+        let mut text = self.text();
         let placed = layout::compute(
             view,
-            &self.theme,
-            &mut self.text,
+            &theme,
+            &mut text,
             (available.width as f32, available.height as f32),
         );
         Size::new(placed.rect.width(), placed.rect.height())
+    }
+}
+
+/// Measures one string the way the layout would.
+///
+/// Handed to a widget granted `measure`, so that it can decide for itself
+/// whether a label fits — the host owns the fonts, and this is the only window
+/// onto them.
+#[derive(Clone)]
+pub struct Measurer {
+    theme: Arc<Mutex<Theme>>,
+    text: Arc<Mutex<text::TextEngine>>,
+}
+
+impl Measurer {
+    /// The natural width of `text` in `role`, in logical pixels.
+    ///
+    /// Goes through the same [`Shaping`](text::Shaping) the layout pass builds
+    /// — including tabular figures, which change the width of anything with a
+    /// digit in it — so the two cannot drift apart. `layout::tests` asserts
+    /// they agree.
+    pub fn width(&self, text: &str, role: uniwidged_view::Role) -> f32 {
+        let theme = *self
+            .theme
+            .lock()
+            .expect("the theme lock is never held across a panic");
+        let shaping = text::Shaping::from_style(theme.text(role), layout::is_numeric(role));
+        self.text
+            .lock()
+            .expect("the font lock is never held across a panic")
+            .measure(text, shaping)
+            .0
     }
 }
 

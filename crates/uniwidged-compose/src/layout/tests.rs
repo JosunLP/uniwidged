@@ -370,3 +370,99 @@ fn a_chip_is_always_wide_enough_for_its_own_text() {
         }
     }
 }
+
+#[test]
+fn what_a_widget_measures_is_what_the_layout_gives_it() {
+    // The `measure` capability's whole reason for existing: a widget deciding
+    // its own truncation has to be deciding against the number the layout will
+    // actually arrive at. Two paths compute that width — the measure callback
+    // in `compute`, and `Measurer::width` — and nothing but a test keeps them
+    // from drifting.
+    //
+    // A caption is used because it is the role that fits comfortably: this is
+    // about agreement, not about what happens when a string does not fit.
+    let compositor = crate::Compositor::new(Theme::default());
+    let measurer = compositor.measurer();
+
+    for (string, role) in [
+        ("Weather", Role::Caption),
+        ("18°C", Role::Caption),
+        ("A much longer caption than that one", Role::Caption),
+    ] {
+        // Inside a row, so that the text keeps its natural width: a column's
+        // default cross-axis alignment stretches a child to the full panel,
+        // and a stretched box says nothing about how wide the string is.
+        let view = panel(NodeId::named("root"))
+            .padding(0)
+            .child(row().child(text(string).role(role).id(NodeId::named("subject"))))
+            .view();
+        let root = placed(&view);
+        let laid_out = find(&root, NodeId::named("subject")).rect.width();
+        let measured = measurer.width(string, role) as f64;
+
+        // The layout rounds a text box up to a whole pixel — see the `ceil` in
+        // `compute` — so the box is the measurement, rounded, and never less.
+        assert!(
+            laid_out >= measured && laid_out - measured < 1.0,
+            "{string:?} measures {measured} and is laid out at {laid_out}"
+        );
+    }
+}
+
+#[test]
+fn a_measurement_follows_the_theme_it_will_be_drawn_in() {
+    // A widget that measured against one theme and was laid out in another
+    // would truncate a label that fits, or fail to truncate one that does not.
+    // The handle follows the compositor, so a scale change reaches it.
+    let mut compositor = crate::Compositor::new(Theme::default());
+    let measurer = compositor.measurer();
+    let before = measurer.width("Weather", Role::Body);
+
+    compositor.set_theme(Theme {
+        base_font_size: Theme::default().base_font_size * 2.0,
+        ..Theme::default()
+    });
+    let after = measurer.width("Weather", Role::Body);
+
+    assert!(
+        after > before * 1.5,
+        "doubling the base size should widen the string: {before} then {after}"
+    );
+}
+
+#[test]
+fn a_measurement_uses_tabular_figures_where_the_layout_would() {
+    // `Role::Display` gets `tnum`, which changes the advance of every digit.
+    // A measurer that forgot it would answer a width the layout never uses —
+    // and only for strings with numbers in them, which is most of what a
+    // widget measures.
+    let compositor = crate::Compositor::new(Theme::default());
+    let measurer = compositor.measurer();
+
+    // Same string, two roles whose sizes are known. What is asserted is the
+    // agreement with layout, which is what would break if `is_numeric` were
+    // consulted in only one of the two places.
+    let view = panel(NodeId::named("root"))
+        .padding(0)
+        .child(
+            row().child(
+                text("11:11")
+                    .role(Role::Display)
+                    .id(NodeId::named("subject")),
+            ),
+        )
+        .view();
+    let root = placed(&view);
+    let laid_out = find(&root, NodeId::named("subject")).rect.width();
+    let measured = measurer.width("11:11", Role::Display) as f64;
+    assert!(
+        laid_out >= measured && laid_out - measured < 1.0,
+        "a display clock measures {measured} and is laid out at {laid_out}"
+    );
+}
+
+#[test]
+fn an_empty_string_measures_nothing() {
+    let compositor = crate::Compositor::new(Theme::default());
+    assert_eq!(compositor.measurer().width("", Role::Body), 0.0);
+}

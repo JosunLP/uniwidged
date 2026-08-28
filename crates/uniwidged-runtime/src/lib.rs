@@ -21,19 +21,26 @@
 //!   last frame. **The desktop never blocks on guest code**, which is the one
 //!   invariant that makes running other people's code on a desktop reasonable.
 //! * **State** — its own data directory, its own keychain namespace, and no
-//!   path out of either.
+//!   path out of either. The directory is [`services::DataDir`], and it
+//!   checks containment twice: once textually, and once more after the
+//!   filesystem has resolved the path, which is the only check that can see a
+//!   symlink.
 //!
 //! ## Status
 //!
 //! [`Capability`] and [`Policy`] are complete and are the security boundary,
-//! so they are tested for what they *refuse*. The Wasmtime wiring is behind
-//! the `wasmtime` feature and lands in milestone M3.
+//! so they are tested for what they *refuse*. [`Services`] is what is behind
+//! the gate, and it is deliberately partial: `fs` and `locale` are served,
+//! and `net`, `secrets`, `measure`, `metrics` and `command` still answer
+//! `unavailable` — which is a different fact from `not-granted`, and one a
+//! widget can act on.
 
 #![allow(dead_code)]
 
 pub mod capability;
 pub mod limits;
 pub mod manifest;
+pub mod services;
 
 #[cfg(feature = "wasmtime")]
 pub mod instance;
@@ -41,3 +48,4 @@ pub mod instance;
 pub use capability::{Capability, Policy, Request};
 pub use limits::Limits;
 pub use manifest::{ABI_VERSION, Manifest, ManifestError};
+pub use services::{DataDir, Locale, Services};

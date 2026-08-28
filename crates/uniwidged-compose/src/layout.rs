@@ -1,8 +1,8 @@
 //! Where everything goes.
 //!
-//! Turns a [`View`] into a tree of absolute rectangles, using taffy through
-//! [`ferrum_layout`] for the box model and [`crate::text`] for the one thing
-//! taffy cannot know: how wide a string is.
+//! Turns a [`View`] into a tree of absolute rectangles, using [`boxes`] for the
+//! box model — taffy, behind a vocabulary a widget can express — and
+//! [`crate::text`] for the one thing taffy cannot know: how wide a string is.
 //!
 //! ## Sizes come from the theme, not from the widget
 //!
@@ -19,7 +19,9 @@
 //! alternative — deciding truncation during measurement — needs the final width
 //! before layout has computed it, which is circular.
 
-use ferrum_layout::{Align as FAlign, Axis, Edges, Justify as FJustify, LayoutTree, Length, Style};
+pub mod boxes;
+
+use boxes::{Align as FAlign, Axis, Edges, Justify as FJustify, LayoutTree, Length, Style};
 use uniwidged_core::{NodeId, Rect};
 use uniwidged_view::{Align, Content, Direction, Justify, Node, Role, View};
 
@@ -84,8 +86,9 @@ pub fn compute<'a>(
     let root = build(&view.root, theme, text, &mut tree, &mut leaves);
 
     tree.compute(root, available.0, available.1, |m| {
-        // Key 0 means "not a measured leaf"; `ferrum_layout` never calls us
-        // with it, but the arithmetic below would silently underflow.
+        // Key 0 means "not a measured leaf"; `boxes` never calls us with it —
+        // it has a test for that — but the arithmetic below would silently
+        // underflow if it ever did.
         let Some(leaf) = leaves.get(m.key as usize - 1) else {
             return (0.0, 0.0);
         };
@@ -120,11 +123,12 @@ fn build(
     engine: &mut TextEngine,
     tree: &mut LayoutTree,
     leaves: &mut Vec<TextLeaf>,
-) -> ferrum_layout::NodeId {
+) -> boxes::NodeId {
     let style = box_style(node, theme);
     match &node.content {
         Content::Text(string) => {
-            let shaping = Shaping::from_style(theme.text(node.style.role), is_numeric(node));
+            let shaping =
+                Shaping::from_style(theme.text(node.style.role), is_numeric(node.style.role));
             if node.style.role == Role::Chip {
                 // A chip is a pill around its text, so it has to hug it. An
                 // explicit width overrides the parent's stretch, exactly as in
@@ -195,14 +199,19 @@ fn build(
     }
 }
 
-/// Should this node's digits be tabular?
+/// Should this role's digits be tabular?
 ///
 /// [`Role::Display`] is the large numeric readout — a clock, a temperature, a
 /// percentage — and it is the one that visibly twitches without `tnum`.
 /// [`Role::Chip`] is usually a count, and a chip that changes width as its
 /// number ticks moves everything after it.
-fn is_numeric(node: &Node) -> bool {
-    matches!(node.style.role, Role::Display | Role::Chip)
+///
+/// Takes a role rather than a node so that [`crate::Measurer`] can ask the
+/// same question. Tabular figures change a string's width, so a widget
+/// measuring one thing and being laid out as another would truncate against
+/// the wrong number.
+pub(crate) fn is_numeric(role: Role) -> bool {
+    matches!(role, Role::Display | Role::Chip)
 }
 
 fn box_style(node: &Node, theme: &Theme) -> Style {
@@ -248,7 +257,7 @@ fn box_style(node: &Node, theme: &Theme) -> Style {
 
 fn read_back<'a>(
     node: &'a Node,
-    taffy: ferrum_layout::NodeId,
+    taffy: boxes::NodeId,
     tree: &LayoutTree,
     theme: &Theme,
     origin: (f64, f64),

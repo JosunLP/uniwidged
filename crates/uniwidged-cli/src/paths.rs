@@ -43,15 +43,26 @@ pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// A widget's own data directory. Named by the widget, which is why the
-/// manifest is strict about what a name may contain.
+/// Where every widget's own directory lives.
 ///
-/// Unused so far: the `fs` and `secrets` capabilities pass their check and then
-/// answer `unavailable`, because the storage behind them is still to be written
-/// — see M7 in `ROADMAP.md`. Kept here because the *shape* of the answer is
-/// settled and putting it somewhere else later would move a security-relevant
-/// path.
-#[allow(dead_code)]
-pub fn widget_data_dir(name: &str) -> PathBuf {
-    config_dir().join("widgets").join(name)
+/// Beside the configuration rather than under `XDG_DATA_HOME`, for the reason
+/// in the module note: a user who copies their configuration directory to a
+/// second machine should get their widgets *and* what those widgets remembered,
+/// and splitting the two across two trees is how half of it gets left behind.
+///
+/// One widget's own directory is `<root>/<its manifest name>`, joined by the
+/// host rather than here — which is why the manifest is strict about what a
+/// name may contain: the name becomes a directory, and two widgets sharing one
+/// would share their data.
+///
+/// It follows `UNIWIDGED_CONFIG` when that is set, so a test desktop — or two
+/// desktops running side by side — cannot write into the real one.
+pub fn data_root() -> PathBuf {
+    match std::env::var_os("UNIWIDGED_CONFIG") {
+        Some(explicit) => PathBuf::from(explicit)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("widgets"),
+        None => config_dir().join("widgets"),
+    }
 }

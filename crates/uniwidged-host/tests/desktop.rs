@@ -22,6 +22,7 @@ use uniwidged_runtime::capability::{Capability, Policy};
 use uniwidged_runtime::instance::Event;
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::services::Locale;
 
 const SIZE: Size = Size {
     width: 240.0,
@@ -76,6 +77,52 @@ fn install(host: &mut Host, name: &str, policy: Policy) -> WidgetId {
 
 fn now() -> (Instant, SystemTime) {
     (Instant::now(), SystemTime::now())
+}
+
+/// A directory that removes itself, standing in for a user's data root.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(what: &str) -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "uniwidged-desktop-{what}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The right-hand text of the conformance widget's row named `name`.
+///
+/// The widget reports what each capability did as its own view, so a host test
+/// reads the answer the same way a screen would show it.
+fn outcome(host: &Host, id: WidgetId, name: &str) -> String {
+    fn find(node: &uniwidged_view::Node, id: NodeId) -> Option<&uniwidged_view::Node> {
+        if node.id == id {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, id))
+    }
+    let view = host
+        .widget(id)
+        .and_then(|w| w.last_view())
+        .expect("the widget should have produced a view");
+    let row =
+        find(&view.root, NodeId::named(name)).unwrap_or_else(|| panic!("no row named {name}"));
+    match &row.children.last().expect("an outcome").content {
+        uniwidged_view::Content::Text(text) => text.clone(),
+        other => panic!("expected text, got {other:?}"),
+    }
 }
 
 /// Ticks until something is redrawn, or gives up.
@@ -407,4 +454,182 @@ fn a_configuration_round_trips_through_a_file() {
     assert_eq!(again.widget("ticker").unwrap().placement.x, 300);
     assert!(again.widget("ticker").unwrap().policy(&manifest).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_widget_gets_its_own_directory_under_the_hosts_data_root() {
+    // The desktop end of the `fs` capability: the host names the directory
+    // after the manifest, creates nothing until the widget writes, and what
+    // the widget wrote is on disk where a user could back it up.
+    let scratch = Scratch::new("data-root");
+    let mut host = host();
+    host.set_data_root(&scratch.0);
+    // Fixed rather than the machine's, so the assertion below is the same
+    // wherever this runs.
+    host.set_locale(Locale::default());
+
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Fs("cache".into()), Capability::Locale]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    assert_eq!(outcome(&host, id, "fs-roundtrip"), "roundtrip");
+    assert_eq!(outcome(&host, id, "locale-date"), "1970-01-01");
+    assert_eq!(
+        std::fs::read(scratch.0.join("conformance/cache/roundtrip.bin"))
+            .expect("the widget's own directory should hold what it wrote"),
+        b"uniwidged-roundtrip-v1"
+    );
+}
+
+#[test]
+fn a_host_with_no_data_root_creates_nothing() {
+    // What `uniwidged snapshot` and every other test in this file do:
+    // rendering a widget must not leave files on somebody's disk, so a host
+    // that was given no root serves `fs` as `unavailable` rather than
+    // inventing somewhere to put things.
+    let scratch = Scratch::new("no-root");
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Fs("cache".into())]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    assert_eq!(outcome(&host, id, "fs-roundtrip"), "unavailable");
+    assert!(!scratch.0.exists());
+}
+
+#[test]
+fn two_widgets_of_the_same_kind_do_not_share_a_directory() {
+    // Two instances of one component, installed twice — which is what a user
+    // does when they want two clocks. They have the same manifest name, so
+    // they *do* share a directory, and that is the documented behaviour rather
+    // than an oversight: the name is the identity. What must not happen is a
+    // widget reaching a directory belonging to a different name.
+    let scratch = Scratch::new("neighbours");
+    let mut host = host();
+    host.set_data_root(&scratch.0);
+    let policy = Policy::from_granted([Capability::Fs("cache".into())]);
+
+    let one = install(&mut host, "conformance", policy.clone());
+    let two = install(
+        &mut host,
+        "ticker",
+        Policy::from_granted([Capability::Timer]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    assert_eq!(outcome(&host, one, "fs-roundtrip"), "roundtrip");
+    assert!(
+        scratch.0.join("conformance").is_dir(),
+        "the widget that wrote has a directory"
+    );
+    assert!(
+        !scratch.0.join("ticker").exists(),
+        "the widget that did not write has none"
+    );
+    let _ = two;
+}
+
+#[test]
+fn a_widget_measures_against_the_hosts_real_fonts_and_current_theme() {
+    // The end of the chain the `measure` capability exists for: the widget
+    // asks the host how wide its own label is, the host answers from the same
+    // font context and the same theme the compose pass is about to use, and
+    // the answer follows a theme change.
+    //
+    // The measurer shares the compositor rather than copying it, and a copy is
+    // exactly what this test would not catch any other way: a stale one keeps
+    // answering, plausibly, with the old number.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Measure]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    assert_eq!(outcome(&host, id, "measure"), "measured");
+    let before: f32 = outcome(&host, id, "measure-px")
+        .parse()
+        .expect("a width should be a number");
+    assert!(before > 0.0, "a string with letters in it has a width");
+
+    // Doubling the base font size doubles what `Role::Body` resolves to.
+    host.set_theme(Theme {
+        base_font_size: Theme::default().base_font_size * 2.0,
+        ..Theme::default()
+    });
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    let after: f32 = outcome(&host, id, "measure-px")
+        .parse()
+        .expect("a width should still be a number");
+    assert!(
+        after > before * 1.5,
+        "a widget measuring in the new theme should see a wider string: \
+         {before} then {after}"
+    );
+}
+
+#[test]
+fn a_widget_reading_the_machines_load_gets_one_the_desktop_shares() {
+    // One sampler for the whole host: it is one machine, and two widgets
+    // sampling separately would each see half the window. Both report the same
+    // number in the same turn of the loop, which is what a user would expect
+    // of two system monitors side by side.
+    let mut host = host();
+    let policy = Policy::from_granted([Capability::Metrics]);
+    let one = install(&mut host, "conformance", policy.clone());
+    let two = install(&mut host, "conformance", policy);
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    // `allowed` on a platform with counters, `unavailable` on one without —
+    // and whichever it is, both widgets are told the same thing.
+    assert_eq!(
+        outcome(&host, one, "metrics"),
+        outcome(&host, two, "metrics")
+    );
+}
+
+#[test]
+fn a_host_can_say_which_capabilities_it_serves() {
+    // What `uniwidged doctor` prints, and the thing a widget author needs when
+    // their widget reports `unavailable`. The unserved list is the same one the
+    // runtime's conformance suite asserts from the other side; if one of these
+    // is implemented and only one list is updated, one of the two tests fails.
+    let scratch = Scratch::new("capabilities");
+    let mut host = host();
+
+    let unserved: Vec<&str> = host
+        .capabilities()
+        .into_iter()
+        .filter(|(_, served)| !served)
+        .map(|(name, _)| name)
+        .collect();
+    // `fs` is here too, but for a different reason: this host was given no
+    // data root, so it *could* serve it and has nowhere to. The other three
+    // have nothing behind them at all.
+    assert_eq!(unserved, vec!["fs", "net", "secrets", "command"]);
+
+    // `fs` is the one that depends on how the host was set up rather than on
+    // what is implemented — which is the distinction the report exists to
+    // make visible.
+    host.set_data_root(&scratch.0);
+    assert!(
+        host.capabilities()
+            .into_iter()
+            .any(|(name, served)| name == "fs" && served),
+        "a host with a data root serves fs"
+    );
 }
