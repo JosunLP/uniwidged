@@ -90,6 +90,18 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "f
 sha2 = "0.10"
 getrandom = "0.3"
 
+# --- The keychain ---------------------------------------------------------
+# What the `secrets` capability is served with where no platform keychain is
+# reachable. XChaCha20-Poly1305 rather than AES-GCM for one reason that
+# matters here: a 24-byte nonce may be drawn at random with no counter and no
+# bookkeeping, and nonce reuse is the way a file-backed store gets this wrong.
+# An AEAD rather than a cipher, so a store somebody edited fails to open
+# instead of decrypting to something a widget then believes.
+#
+# `default-features = false` with `alloc` drops the heapless and stream
+# machinery; `getrandom` is already in the graph and generates the store's key.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+
 # --- Utilities ------------------------------------------------------------
 # `localtime_r`, for the one thing no std API exposes: this machine's offset
 # from UTC, daylight saving included. Unix only, and already in the graph

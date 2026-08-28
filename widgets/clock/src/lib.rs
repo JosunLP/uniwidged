@@ -34,9 +34,7 @@ impl Widget for Clock {
         let now = now();
         // A refusal is shown, not hidden. A user who declined `locale` should
         // see why the clock is blank rather than a widget that looks broken.
-        let time = cx
-            .format_time(now)
-            .unwrap_or_else(|_| "--:--".to_string());
+        let time = cx.format_time(now).unwrap_or_else(|_| "--:--".to_string());
         let date = cx
             .format_date(now)
             .unwrap_or_else(|_| "locale not granted".to_string());
@@ -45,11 +43,7 @@ impl Widget for Clock {
             .gap(1)
             .align(Align::Center)
             .justify(Justify::Center)
-            .child(
-                text(time)
-                    .role(Role::Display)
-                    .id(NodeId::named("time")),
-            )
+            .child(text(time).role(Role::Display).id(NodeId::named("time")))
             .child(
                 text(date)
                     .role(Role::Caption)

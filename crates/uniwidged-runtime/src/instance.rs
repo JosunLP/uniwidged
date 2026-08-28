@@ -526,18 +526,36 @@ impl uniwidged::widget::host::Host for State {
             // rather than about this host — so the answer is the one it can do
             // something about.
             too_large @ StoreError::TooLarge { .. } => Denied::Malformed(too_large.to_string()),
+            // A full quota falls through to `unavailable` on purpose, and the
+            // difference from the line above is worth the sentence: a widget
+            // asking to write more than a file may hold has a bug in *this*
+            // write, which its author can fix; a widget that has filled its
+            // directory made a well-formed request the host cannot serve until
+            // something is deleted. So the second is the answer that tells a
+            // widget to degrade rather than to try a smaller string.
             other => Denied::Unavailable(other.to_string()),
         })
     }
 
-    fn get_secret(&mut self, _key: String) -> Result<Vec<u8>, Denied> {
+    fn get_secret(&mut self, key: String) -> Result<Option<Vec<u8>>, Denied> {
         self.check(Request::Secrets)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let keyring = self.services.secrets.as_ref().ok_or_else(no_keyring)?;
+        // A key that was never set is `ok(none)`, not an error, for the reason
+        // `read_file` answers the same way — see the ABI 4 → 5 note in the WIT
+        // file. The widget's first run has nothing stored.
+        keyring.get(&key).map_err(keyring_denied)
     }
 
-    fn set_secret(&mut self, _key: String, _value: Vec<u8>) -> Result<(), Denied> {
+    fn set_secret(&mut self, key: String, value: Vec<u8>) -> Result<(), Denied> {
         self.check(Request::Secrets)?;
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let keyring = self.services.secrets.as_ref().ok_or_else(no_keyring)?;
+        keyring.set(&key, &value).map_err(keyring_denied)
+    }
+
+    fn remove_secret(&mut self, key: String) -> Result<bool, Denied> {
+        self.check(Request::Secrets)?;
+        let keyring = self.services.secrets.as_ref().ok_or_else(no_keyring)?;
+        keyring.remove(&key).map_err(keyring_denied)
     }
 
     fn cpu_load(&mut self) -> Result<f32, Denied> {
@@ -562,16 +580,31 @@ impl uniwidged::widget::host::Host for State {
     }
 }
 
-/// What the capability check passes before the backing implementation exists.
-///
-/// The gate has been real since M3. `fs`, `locale`, `measure` and `metrics`
-/// now have something behind them; `net`, `secrets` and `command` do not yet,
-/// and say so. A widget therefore gets `not-granted` when it never asked
-/// and `unavailable` when it did — which are different facts, and a widget
-/// that conflated them would report the wrong thing to its user.
-const NOT_YET: &str = "granted, but this host cannot serve it yet — see ROADMAP.md";
-
 const ESCAPED: &str = "that path leaves the widget's own directory";
+
+/// Granted, but this embedder gave the widget no keychain.
+///
+/// A headless test and `uniwidged snapshot` both run widgets with nowhere to
+/// keep a secret, on purpose: rendering a widget should not create a keychain
+/// on somebody's disk. The distinction a widget can act on is the same one it
+/// has everywhere else — this is `unavailable`, not `not-granted`.
+fn no_keyring() -> Denied {
+    Denied::Unavailable("granted, but this host has no keychain".into())
+}
+
+/// Which of the two answers a keychain failure is.
+///
+/// A key name the store will not take and a value too large are facts about
+/// the *request*, which the widget's author can fix; a store that will not
+/// open is a fact about this host, which they cannot. Collapsing the two is
+/// how a widget author is sent to change a manifest that is already right.
+fn keyring_denied(error: crate::keyring::KeyringError) -> Denied {
+    use crate::keyring::KeyringError;
+    match error {
+        KeyringError::BadKey(why) | KeyringError::TooMuch(why) => Denied::Malformed(why),
+        KeyringError::Unavailable(why) => Denied::Unavailable(why),
+    }
+}
 
 /// The most arguments one command may be given, and their total size.
 ///

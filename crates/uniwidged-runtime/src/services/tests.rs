@@ -533,3 +533,112 @@ fn a_command_gets_no_standard_input() {
     assert!(output.stdout.is_empty());
     assert!(began.elapsed() < Duration::from_secs(2));
 }
+
+// ---------------------------------------------------------------------------
+// The quota
+// ---------------------------------------------------------------------------
+
+/// The per-file cap bounds one call; this bounds a loop. Both are needed, and
+/// the tests below are mostly about the widget that is *not* misbehaving —
+/// refusing a widget that rewrites its own cache file would break every honest
+/// widget and leave the loop working.
+
+#[test]
+fn a_widget_cannot_fill_a_disk_one_file_at_a_time() {
+    let scratch = Scratch::new("quota");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    for i in 0..8 {
+        dir.write(&format!("chunk{i}"), &[0u8; 128]).expect("write");
+    }
+    assert_eq!(dir.used_bytes(), Ok(1024));
+    let error = dir
+        .write("one-more", &[0u8; 1])
+        .expect_err("should be refused");
+    assert!(matches!(
+        error,
+        StoreError::Full {
+            limit: 1024,
+            used: 1024
+        }
+    ));
+    // Refused, and nothing written: a quota that leaves the file behind is a
+    // quota that can be exceeded by ignoring the error.
+    assert_eq!(dir.read("one-more"), Ok(None));
+}
+
+#[test]
+fn rewriting_the_same_file_at_full_size_is_not_refused() {
+    let scratch = Scratch::new("quota-rewrite");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("cache", &[0u8; 1024]).expect("write");
+    // The ordinary case for the widget this quota exists to bound: a cache
+    // that is rewritten every hour and stays the same size. Checking the
+    // directory as it stands would refuse it forever.
+    dir.write("cache", &[1u8; 1024]).expect("rewrite");
+    assert_eq!(dir.read("cache"), Ok(Some(vec![1u8; 1024])));
+    assert_eq!(dir.used_bytes(), Ok(1024));
+}
+
+#[test]
+fn a_smaller_rewrite_makes_room() {
+    let scratch = Scratch::new("quota-shrink");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("cache", &[0u8; 1000]).expect("write");
+    assert!(dir.write("other", &[0u8; 100]).is_err());
+    dir.write("cache", &[0u8; 100]).expect("shrink");
+    dir.write("other", &[0u8; 100]).expect("now there is room");
+    assert_eq!(dir.used_bytes(), Ok(200));
+}
+
+#[test]
+fn nested_directories_are_counted() {
+    let scratch = Scratch::new("quota-nested");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("a/b/c/deep", &[0u8; 900]).expect("write");
+    assert_eq!(dir.used_bytes(), Ok(900));
+    assert!(matches!(
+        dir.write("shallow", &[0u8; 200]),
+        Err(StoreError::Full { .. })
+    ));
+}
+
+#[test]
+fn an_empty_directory_uses_nothing_and_a_missing_one_is_not_an_error() {
+    let scratch = Scratch::new("quota-empty");
+    // Nothing has been written, so the root does not exist. A widget's first
+    // write must not fail because the walk found no directory.
+    assert_eq!(scratch.dir().used_bytes(), Ok(0));
+    let dir = scratch.dir();
+    dir.write("first", b"x").expect("write");
+    assert_eq!(dir.used_bytes(), Ok(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_directory_is_not_charged_to_the_widget() {
+    let scratch = Scratch::new("quota-symlink");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("real", &[0u8; 100]).expect("write");
+    let outside = scratch.0.join("elsewhere");
+    std::fs::create_dir_all(&outside).expect("outside");
+    std::fs::write(outside.join("huge"), vec![0u8; 100_000]).expect("huge");
+    std::os::unix::fs::symlink(
+        outside.join("huge"),
+        scratch.0.join("widgets/example/pointer"),
+    )
+    .expect("symlink");
+    // Counting the target would let a user who symlinked something in hand the
+    // widget a bill for it, and would let a widget shrink its own apparent
+    // usage by pointing at an empty file elsewhere. Neither is the widget's
+    // storage. Writing *through* it is what the containment checks refuse.
+    assert_eq!(dir.used_bytes(), Ok(100));
+}
+
+#[test]
+fn the_default_quota_is_generous_enough_not_to_be_hit_by_accident() {
+    // A number, asserted, so that lowering it is a decision somebody makes
+    // rather than a typo. Thirty-two megabytes: far more than a widget's
+    // cache, far less than an amount worth noticing.
+    assert_eq!(DEFAULT_MAX_TOTAL_BYTES, 32 * 1024 * 1024);
+    assert!(DEFAULT_MAX_TOTAL_BYTES > DEFAULT_MAX_FILE_BYTES as u64);
+}

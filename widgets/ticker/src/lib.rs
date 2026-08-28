@@ -78,13 +78,8 @@ impl Ticker {
 // The trait's `view` is what the host calls, so the counter is advanced from
 // inside it. Written as a wrapper rather than inline so that `advance` above
 // can say why it exists.
+#[derive(Default)]
 struct Exported(Ticker);
-
-impl Default for Exported {
-    fn default() -> Self {
-        Self(Ticker::default())
-    }
-}
 
 impl Widget for Exported {
     fn view(&mut self, cx: &Cx) -> View {

@@ -34,6 +34,13 @@ pub struct Conformance {
     /// point of it — so it is observed across two.
     command: Option<u32>,
     command_said: Option<String>,
+    /// What the keychain did the first time it was tried.
+    ///
+    /// Once, not once per view. Two of the four calls in that sequence write
+    /// the store, and a widget that rewrote a file twice on every frame would
+    /// be measuring the host's disk rather than its sandbox — and would churn
+    /// a real keychain, since this widget runs beside real widgets.
+    secrets_said: Option<String>,
 }
 
 impl Widget for Conformance {
@@ -125,7 +132,15 @@ impl Widget for Conformance {
             },
             Attempt {
                 name: "secrets",
-                outcome: describe(cx.get_secret("token")),
+                outcome: self.secrets_row(cx),
+            },
+            Attempt {
+                // A key the store will not take. Refused as *malformed* rather
+                // than ungranted, on a host where `secrets` is granted and
+                // served — which is the distinction a widget author needs and
+                // the one an implementation is most likely to collapse.
+                name: "secrets-key",
+                outcome: describe(cx.get_secret("not a key")),
             },
             Attempt {
                 name: "metrics",
@@ -142,9 +157,13 @@ impl Widget for Conformance {
         cx.log("conformance ran");
 
         let mut root = panel(NodeId::named("root")).gap(1).child(
-            text(if self.started { "started" } else { "not started" })
-                .role(Role::Caption)
-                .id(NodeId::named("started")),
+            text(if self.started {
+                "started"
+            } else {
+                "not started"
+            })
+            .role(Role::Caption)
+            .id(NodeId::named("started")),
         );
         root = root.child(
             text(format!("events: {}", self.events))
@@ -209,6 +228,16 @@ impl Widget for Conformance {
 }
 
 impl Conformance {
+    /// The keychain lifecycle, run once and then remembered.
+    fn secrets_row(&mut self, cx: &Cx) -> String {
+        if let Some(said) = &self.secrets_said {
+            return said.clone();
+        }
+        let said = secrets_roundtrip(cx);
+        self.secrets_said = Some(said.clone());
+        said
+    }
+
     /// Starts a command once, then reports what happened to it.
     ///
     /// Three states, and a host test can watch it move through them: the
@@ -278,6 +307,52 @@ fn roundtrip(cx: &Cx) -> String {
         // The host took the write and then could not find it. Worth its own
         // word: it is a broken host rather than a refused request.
         Ok(None) => "vanished".to_string(),
+        Err(denied) => refusal(&denied),
+    }
+}
+
+/// Stores a secret, reads it back, and forgets it.
+///
+/// The same argument as `roundtrip` above, and one more on top: this is the
+/// only capability where a *stale* answer is as bad as a wrong one. So the
+/// sequence is the whole lifecycle rather than a write and a read — the key is
+/// absent to begin with, holds what was put in it, and is absent again after
+/// being removed. A host that quietly kept the old value would pass a
+/// write-then-read and fail here.
+///
+/// It runs on every view, so the key is set and removed again each time and
+/// the keychain is left as it was found. That matters: this widget runs beside
+/// real ones.
+fn secrets_roundtrip(cx: &Cx) -> String {
+    const KEY: &str = "conformance.token";
+    const PAYLOAD: &[u8] = b"uniwidged-secret-v1";
+
+    match cx.get_secret(KEY) {
+        // The first run of a widget that has never signed in. Absence is not a
+        // refusal, which is the ABI 4 → 5 change and the reason for it.
+        Ok(None) => {}
+        Ok(Some(_)) => return "left-over".to_string(),
+        Err(denied) => return refusal(&denied),
+    }
+    if let Err(denied) = cx.set_secret(KEY, PAYLOAD) {
+        return refusal(&denied);
+    }
+    match cx.get_secret(KEY) {
+        Ok(Some(bytes)) if bytes == PAYLOAD => {}
+        Ok(Some(_)) => return "mismatch".to_string(),
+        // The host took the secret and then could not find it: a broken host
+        // rather than a refused request, and worth its own word.
+        Ok(None) => return "vanished".to_string(),
+        Err(denied) => return refusal(&denied),
+    }
+    match cx.remove_secret(KEY) {
+        Ok(true) => {}
+        Ok(false) => return "not-removed".to_string(),
+        Err(denied) => return refusal(&denied),
+    }
+    match cx.get_secret(KEY) {
+        Ok(None) => "roundtrip".to_string(),
+        Ok(Some(_)) => "still-there".to_string(),
         Err(denied) => refusal(&denied),
     }
 }

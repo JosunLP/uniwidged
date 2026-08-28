@@ -2,9 +2,9 @@
 //!
 //! Every visual decision in uniwidged lands here, which is what makes a screen
 //! of unrelated widgets look like one product. A widget names
-//! [`Role::Title`](uniwidged_view::Role::Title); this decides that is 15 px at
+//! [`Role::Title`]; this decides that is 15 px at
 //! weight 600 and 92 % opacity. A widget names
-//! [`Accent::Critical`](uniwidged_view::Accent::Critical); this decides which
+//! [`Accent::Critical`]; this decides which
 //! red is legible in the current appearance.
 //!
 //! ## Colours are authored in Oklch

@@ -45,6 +45,10 @@ pub struct Services {
     /// Carries the widget's own id, so no host function can start or collect a
     /// task without saying whose it is.
     pub tasks: Option<crate::tasks::TaskHandle>,
+    /// This widget's corner of the keychain. Carries its namespace for the
+    /// same reason `tasks` carries its id: there is then no argument through
+    /// which a host function could reach somebody else's.
+    pub secrets: Option<crate::keyring::Keyring>,
 }
 
 impl std::fmt::Debug for Services {
@@ -58,6 +62,7 @@ impl std::fmt::Debug for Services {
             .field("measure", &self.measure.is_some())
             .field("metrics", &self.metrics.is_some())
             .field("tasks", &self.tasks)
+            .field("secrets", &self.secrets)
             .finish()
     }
 }
@@ -93,6 +98,11 @@ impl Services {
         self.tasks = Some(tasks);
         self
     }
+
+    pub fn with_secrets(mut self, keyring: crate::keyring::Keyring) -> Self {
+        self.secrets = Some(keyring);
+        self
+    }
 }
 
 /// How wide a string is, as the host's own layout would measure it.
@@ -122,11 +132,26 @@ pub trait TextMetrics: Send + Sync {
 /// memory cap would catch.
 pub const DEFAULT_MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 
+/// The most one widget may put in its directory altogether.
+///
+/// The per-file cap above bounds what a single host call can allocate; this
+/// bounds what a widget can do with a *loop*. Without it, `fs` is a way to
+/// fill somebody's disk one four-megabyte file at a time, which was named as
+/// missing in `ROADMAP.md` for exactly as long as it took somebody to write
+/// the loop.
+///
+/// Thirty-two megabytes is far more than any widget's cache and far less than
+/// an amount worth noticing on a desktop. An embedder that knows better sets
+/// its own with [`DataDir::with_max_total_bytes`]; there is deliberately no
+/// per-widget setting in the manifest, because a quota a widget asks for is a
+/// quota every widget asks to raise.
+pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+
 /// One widget's own directory on disk.
 ///
 /// The path a widget asks for is relative and stays relative: it is refused
-/// unless [`crate::capability::is_contained`] accepts it, joined onto this
-/// root, and then checked *again* after the filesystem has resolved it. The
+/// unless `capability::is_contained` accepts it, joined onto this root, and
+/// then checked *again* after the filesystem has resolved it. The
 /// second check is the one that matters, because the first cannot see a
 /// symlink — and a widget's directory is somewhere a user can reach with a
 /// file manager.
@@ -134,6 +159,7 @@ pub const DEFAULT_MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 pub struct DataDir {
     root: PathBuf,
     max_file_bytes: usize,
+    max_total_bytes: u64,
 }
 
 /// Why a read or a write did not happen.
@@ -145,6 +171,14 @@ pub enum StoreError {
     TooLarge {
         limit: usize,
     },
+    /// The widget's directory is already as large as it may be. Reported
+    /// separately from [`StoreError::TooLarge`] because the two have different
+    /// fixes: a widget writing one oversized file has a bug in that write, and
+    /// a widget that filled its quota has one in what it keeps.
+    Full {
+        limit: u64,
+        used: u64,
+    },
     Io(String),
 }
 
@@ -155,6 +189,11 @@ impl std::fmt::Display for StoreError {
             StoreError::TooLarge { limit } => {
                 write!(f, "a widget's file may be at most {limit} bytes")
             }
+            StoreError::Full { limit, used } => write!(
+                f,
+                "a widget may store at most {limit} bytes and this one is \
+                 already using {used}"
+            ),
             StoreError::Io(why) => write!(f, "{why}"),
         }
     }
@@ -167,12 +206,76 @@ impl DataDir {
         Self {
             root: root.into(),
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
         }
     }
 
     pub fn with_max_file_bytes(mut self, bytes: usize) -> Self {
         self.max_file_bytes = bytes;
         self
+    }
+
+    pub fn with_max_total_bytes(mut self, bytes: u64) -> Self {
+        self.max_total_bytes = bytes;
+        self
+    }
+
+    pub fn max_total_bytes(&self) -> u64 {
+        self.max_total_bytes
+    }
+
+    /// What this widget is using, in bytes, counting only regular files.
+    ///
+    /// Walked rather than remembered. A cached total would be wrong after
+    /// anything outside this process touched the directory — a `--purge` that
+    /// did not finish, a user deleting a cache by hand, a restore from a
+    /// backup — and a quota that is wrong in the permissive direction is not a
+    /// quota. The directory holds a widget's cache, so the walk is over tens
+    /// of files and happens on writes rather than on every frame.
+    ///
+    /// Symlinks are **not** followed and their targets are not counted: a
+    /// widget cannot make its own quota look smaller by pointing at somebody
+    /// else's file, and a user who symlinks something in has not thereby given
+    /// the widget a bill for it. The containment checks are what stop the
+    /// widget writing *through* one.
+    pub fn used_bytes(&self) -> Result<u64, StoreError> {
+        fn walk(dir: &Path, total: &mut u64, budget: &mut u32) -> Result<(), StoreError> {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(StoreError::Io(e.to_string())),
+            };
+            for entry in entries {
+                // A directory that grew a file mid-walk is not an error; the
+                // next write recounts.
+                let Ok(entry) = entry else { continue };
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_symlink() {
+                    continue;
+                }
+                if kind.is_dir() {
+                    // A widget can nest directories, and a walk with no floor
+                    // is a stack overflow in the desktop process. The depth
+                    // budget is generous for a cache and finite, which is the
+                    // property that matters.
+                    if *budget == 0 {
+                        continue;
+                    }
+                    *budget -= 1;
+                    walk(&entry.path(), total, budget)?;
+                    *budget += 1;
+                } else if let Ok(meta) = entry.metadata() {
+                    *total = total.saturating_add(meta.len());
+                }
+            }
+            Ok(())
+        }
+        let mut total = 0;
+        let mut budget = 32u32;
+        walk(&self.root, &mut total, &mut budget)?;
+        Ok(total)
     }
 
     pub fn path(&self) -> &Path {
@@ -235,6 +338,23 @@ impl DataDir {
                 limit: self.max_file_bytes,
             });
         }
+        // The quota is checked against what this write *replaces*, not against
+        // the directory as it stands: a widget rewriting the same cache file
+        // at its full size must not be refused because the old copy is still
+        // there. That is the ordinary case for the widget this exists to
+        // bound, so getting it wrong would break the honest widgets and leave
+        // the loop working.
+        let used = self.used_bytes()?;
+        let replacing = self.existing_size(relative);
+        let after = used
+            .saturating_sub(replacing)
+            .saturating_add(bytes.len() as u64);
+        if after > self.max_total_bytes {
+            return Err(StoreError::Full {
+                limit: self.max_total_bytes,
+                used,
+            });
+        }
         std::fs::create_dir_all(&self.root).map_err(|e| StoreError::Io(e.to_string()))?;
         let root = self
             .root
@@ -266,6 +386,22 @@ impl DataDir {
             let _ = std::fs::remove_file(&temporary);
             StoreError::Io(e.to_string())
         })
+    }
+}
+
+impl DataDir {
+    /// How large the file this write replaces is, or zero if there is none.
+    ///
+    /// Deliberately forgiving: anything that cannot be read counts as absent,
+    /// which makes the quota check err towards refusing rather than towards
+    /// allowing. The containment checks have already run by the time this is
+    /// called.
+    fn existing_size(&self, relative: &str) -> u64 {
+        std::fs::symlink_metadata(self.root.join(relative))
+            .ok()
+            .filter(|meta| meta.is_file())
+            .map(|meta| meta.len())
+            .unwrap_or(0)
     }
 }
 
@@ -475,7 +611,7 @@ fn wait_with_timeout(
 /// inside `view()`. See `instance.rs`: that is the one thing a host function
 /// may not do.
 ///
-/// A second call arriving sooner than [`MIN_WINDOW`] gets the previous answer
+/// A second call arriving sooner than `MIN_WINDOW` (250 ms) gets the previous answer
 /// rather than a new one computed over three milliseconds, which would be
 /// noise rather than a measurement.
 pub struct CpuSampler {
@@ -494,7 +630,7 @@ struct Sample {
     at: Instant,
     busy: u64,
     total: u64,
-    /// What was reported for this sample, so a repeat within [`MIN_WINDOW`]
+    /// What was reported for this sample, so a repeat within `MIN_WINDOW`
     /// answers consistently rather than recomputing over nothing.
     load: f32,
 }

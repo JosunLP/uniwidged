@@ -177,12 +177,30 @@ impl Cx {
         raw::write_file(path, bytes).map_err(Into::into)
     }
 
-    pub fn get_secret(&self, key: &str) -> Result<Vec<u8>, Denied> {
+    /// Reads one of your widget's own secrets from the OS keychain.
+    ///
+    /// `Ok(None)` means you never set that key — what your first run finds,
+    /// and not an error, for the same reason [`Cx::read_file`] answers the
+    /// same way. A key is at most 64 characters of `[A-Za-z0-9._-]`; anything
+    /// else is [`Denied::Malformed`].
+    ///
+    /// Nothing here can name another widget's secrets: the namespace is the
+    /// handle's, not an argument.
+    pub fn get_secret(&self, key: &str) -> Result<Option<Vec<u8>>, Denied> {
         raw::get_secret(key).map_err(Into::into)
     }
 
+    /// Stores one, replacing whatever was there. At most 64 KiB, and at most
+    /// 64 keys per widget — both [`Denied::Malformed`] past that, because both
+    /// are facts about the request rather than about the host.
     pub fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), Denied> {
         raw::set_secret(key, value).map_err(Into::into)
+    }
+
+    /// Forgets one. `Ok(false)` means there was nothing to forget, so signing
+    /// out twice is not something to guard against.
+    pub fn remove_secret(&self, key: &str) -> Result<bool, Denied> {
+        raw::remove_secret(key).map_err(Into::into)
     }
 
     pub fn cpu_load(&self) -> Result<f32, Denied> {

@@ -91,3 +91,27 @@ pub fn data_root() -> PathBuf {
         None => config_dir().join("widgets"),
     }
 }
+
+/// Where the keychain behind `secrets` lives.
+///
+/// Beside the configuration, not under it: a user who copies their
+/// configuration directory to a second machine should get their widgets and
+/// what those widgets remembered, and a keychain left behind is a desktop full
+/// of widgets asking to sign in again.
+///
+/// It is two files — the store and its key — and both are written `0600`. They
+/// are in the same directory on purpose and it is worth being plain about what
+/// that does and does not buy: see `uniwidged_runtime::keyring`, and
+/// `uniwidged doctor`, which prints the honest sentence.
+///
+/// Follows `UNIWIDGED_CONFIG` like everything else here, so a test desktop
+/// cannot write into the real one.
+pub fn keyring_dir() -> PathBuf {
+    match std::env::var_os("UNIWIDGED_CONFIG") {
+        Some(explicit) => PathBuf::from(explicit)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf(),
+        None => config_dir(),
+    }
+}

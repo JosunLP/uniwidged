@@ -106,6 +106,15 @@ pub fn doctor() {
     ) {
         Ok(mut host) => {
             host.set_data_root(crate::paths::data_root());
+            host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::new(
+                crate::paths::keyring_dir(),
+            )));
+            if let Some(what) = host.keyring_description() {
+                // Two very different things are both "secrets are served", and
+                // a user deciding whether to let a widget keep a password is
+                // entitled to know which one this is.
+                println!("  keychain: {what}");
+            }
             let (served, unserved): (Vec<_>, Vec<_>) =
                 host.capabilities().into_iter().partition(|(_, yes)| *yes);
             println!(
@@ -116,15 +125,24 @@ pub fn doctor() {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            println!(
-                "  not yet: {} — a widget granted one of these is told \
-                 `unavailable`, which is not the same as being refused",
-                unserved
-                    .iter()
-                    .map(|(name, _)| *name)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            // Empty on a desktop now that the keychain is served: every
+            // capability has something behind it. Not empty on a host that was
+            // given no data root and no keychain — which is what `snapshot`
+            // and every headless test are — so the line still has to exist and
+            // still has to say what the answer means.
+            if unserved.is_empty() {
+                println!("  every capability this build knows about is served");
+            } else {
+                println!(
+                    "  not yet: {} — a widget granted one of these is told \
+                     `unavailable`, which is not the same as being refused",
+                    unserved
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
         }
         Err(e) => println!("  capabilities: cannot say — {e}"),
     }
@@ -216,6 +234,13 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // desktop should not leave an empty folder for every widget that never
     // stores anything.
     host.set_data_root(crate::paths::data_root());
+    // What is behind the `secrets` gate. One store for the desktop, namespaced
+    // per widget by the host — a widget has no argument through which to name
+    // another's. Like the data directory, nothing is created until a widget
+    // actually stores something.
+    host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::new(
+        crate::paths::keyring_dir(),
+    )));
     // Every widget's window, kept alive for as long as the desktop is: dropping
     // one destroys the window and, with it, the surface wgpu is drawing into.
     // X11 can be asked before a window exists; Wayland reports its outputs

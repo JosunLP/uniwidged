@@ -195,7 +195,7 @@ impl TextEngine {
 
     /// An engine that shapes everything in one supplied font.
     ///
-    /// For tests that compare pixels. See the note on [`TextEngine::family`].
+    /// For tests that compare pixels. See the note on `TextEngine::family`.
     pub fn with_font(data: Vec<u8>, family: &str) -> Self {
         let mut engine = Self::new();
         engine

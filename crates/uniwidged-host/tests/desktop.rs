@@ -617,22 +617,94 @@ fn a_host_can_say_which_capabilities_it_serves() {
         .filter(|(_, served)| !served)
         .map(|(name, _)| name)
         .collect();
-    // `fs` is here for a different reason from `secrets`: this host was given
-    // no data root, so it *could* serve it and has nowhere to. `secrets` has
-    // nothing behind it at all. `command` and then `net` left this list as
-    // each landed, and this assertion is what noticed both times.
+    // Both are here for the same reason now, and it is not the reason the list
+    // used to be about: this host was given no data root and no keychain, so
+    // it *could* serve either and has nowhere to. Nothing is unimplemented.
+    // `command`, then `net`, then `secrets` left the unimplemented list as
+    // each landed, and this assertion is what noticed every time.
     assert_eq!(unserved, vec!["fs", "secrets"]);
 
-    // `fs` is the one that depends on how the host was set up rather than on
+    // Both are the ones that depend on how the host was set up rather than on
     // what is implemented — which is the distinction the report exists to
     // make visible.
     host.set_data_root(&scratch.0);
+    host.set_keyring(std::sync::Arc::new(
+        uniwidged_runtime::keyring::FileKeyring::new(&scratch.0),
+    ));
     assert!(
+        host.capabilities().into_iter().all(|(_, served)| served),
+        "a host with a data root and a keychain serves everything: {:?}",
         host.capabilities()
-            .into_iter()
-            .any(|(name, served)| name == "fs" && served),
-        "a host with a data root serves fs"
     );
+    assert!(
+        host.keyring_description()
+            .is_some_and(|what| what.contains("encrypted file")),
+        "the host should be able to say what its keychain actually is"
+    );
+}
+
+#[test]
+fn a_desktop_serves_the_keychain_and_keeps_it_across_a_restart() {
+    // The host's half of `secrets`: that it namespaces by the widget's name,
+    // that the conformance widget's whole lifecycle really runs through a real
+    // desktop, and that what is stored outlives the process.
+    //
+    // The restart is the point. A widget's in-memory state is derived from
+    // what it stored — that is the assumption the supervisor rests on — and a
+    // credential is the piece of that state whose loss the user actually
+    // notices, because it puts a sign-in screen where a widget was.
+    let scratch = Scratch::new("keychain");
+    let store: std::sync::Arc<dyn uniwidged_runtime::keyring::SecretStore> =
+        std::sync::Arc::new(uniwidged_runtime::keyring::FileKeyring::new(&scratch.0));
+
+    {
+        let mut host = host();
+        host.set_data_root(scratch.0.join("widgets"));
+        host.set_keyring(store.clone());
+        let id = install(
+            &mut host,
+            "conformance",
+            Policy::from_granted([Capability::Secrets]),
+        );
+        host.tick(now().0, now().1).expect("tick");
+        assert_eq!(
+            outcome(&host, id, "secrets"),
+            "roundtrip",
+            "a granted, served keychain should take a secret and give it back"
+        );
+    }
+
+    // Stored from outside the widget, so that what is being checked is the
+    // host's namespace reaching disk rather than the widget's own bookkeeping.
+    uniwidged_runtime::keyring::Keyring::new(store, "conformance")
+        .set("token", b"hunter2")
+        .expect("set");
+
+    let reopened = uniwidged_runtime::keyring::Keyring::new(
+        std::sync::Arc::new(uniwidged_runtime::keyring::FileKeyring::new(&scratch.0)),
+        "conformance",
+    );
+    assert_eq!(
+        reopened.get("token"),
+        Ok(Some(b"hunter2".to_vec())),
+        "a whole new desktop over the same directory should find it"
+    );
+}
+
+#[test]
+fn a_desktop_with_no_keychain_says_unavailable_rather_than_refusing() {
+    // The distinction the whole `Services` split exists for, at desktop level:
+    // the user granted `secrets`, so `not-granted` would send the widget's
+    // author to fix a manifest that is already right. What is missing is this
+    // host's storage, and the widget is told exactly that.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Secrets]),
+    );
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(outcome(&host, id, "secrets"), "unavailable");
 }
 
 #[test]

@@ -16,6 +16,7 @@ use std::time::Duration;
 use uniwidged_core::NodeId;
 use uniwidged_runtime::capability::{Capability, Policy};
 use uniwidged_runtime::instance::{Event, Instance, Runtime, RuntimeError};
+use uniwidged_runtime::keyring::{FileKeyring, Keyring};
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
@@ -91,6 +92,11 @@ impl Scratch {
     fn widget_dir(&self) -> PathBuf {
         self.0.join("conformance")
     }
+
+    /// The desktop's keychain — one store, shared, namespaced per widget.
+    fn keyring(&self) -> Keyring {
+        Keyring::new(Arc::new(FileKeyring::new(&self.0)), "conformance")
+    }
 }
 
 impl Drop for Scratch {
@@ -119,6 +125,7 @@ fn served_with_tasks(scratch: &Scratch, tasks: Arc<Tasks>) -> Services {
                 .with_commands(Arc::new(Commands::new()))
                 .with_http(Arc::new(uniwidged_runtime::net::Http::new())),
         )
+        .with_secrets(scratch.keyring())
 }
 
 /// A text measurer with no fonts in it.
@@ -187,12 +194,19 @@ const ATTEMPTS: &[&str] = &[
     "fs-read",
     "fs-roundtrip",
     "secrets",
+    "secrets-key",
     "metrics",
     "command",
 ];
 
 /// The ones this host still has nothing behind, however much is granted.
-const UNSERVED: &[&str] = &["secrets"];
+///
+/// **Empty since the keychain landed**, and the mechanism stays anyway. It is
+/// what makes "implement a capability and forget to say so" a failing test
+/// rather than a stale sentence in three documents, and the next capability to
+/// be added will spend a while on this list. Emptiness is asserted below, so
+/// the list cannot quietly stop being checked either.
+const UNSERVED: &[&str] = &[];
 
 #[test]
 fn a_real_widget_instantiates_and_renders() {
@@ -291,12 +305,68 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     // on the way is `net`'s own suite, against a server it starts itself.
     assert_eq!(outcome(&view, "net"), "allowed");
 
+    // The whole lifecycle, not a write and a read: absent, then holding what
+    // was put in it, then absent again. A host that quietly kept the old value
+    // would pass a write-then-read and fail this.
+    assert_eq!(outcome(&view, "secrets"), "roundtrip");
+    // And on a host that serves `secrets`, a key the store will not take is
+    // *malformed* rather than unavailable — the widget's author can fix it,
+    // and telling them the host is broken would send them somewhere else.
+    assert_eq!(outcome(&view, "secrets-key"), "malformed");
+
     // Everything still unbuilt says so, in the same view, so this test fails
     // when one of them is implemented and nobody updated the list.
     for attempt in UNSERVED {
         assert_eq!(outcome(&view, attempt), "unavailable", "{attempt}");
     }
+    assert!(
+        UNSERVED.is_empty(),
+        "every capability is served; if one is added, this changes with it"
+    );
     assert_eq!(outcome(&view, "fs-escape"), "malformed");
+}
+
+#[test]
+fn a_secret_outlives_the_instance_that_stored_it_and_no_neighbour_sees_it() {
+    // The same argument as the file durability test, and one the keychain
+    // needs on its own: a widget's credential has to survive the restart the
+    // supervisor performs, or every failure signs the user out.
+    //
+    // The widget removes what it stored on its way out, so this drives the
+    // store directly on either side of it rather than through the view — what
+    // is under test is that the *host's* namespace reaches disk and stays
+    // separate, not the widget's own bookkeeping.
+    let scratch = Scratch::new("secrets-durable");
+    let mine = scratch.keyring();
+    mine.set("token", b"hunter2").expect("set");
+
+    {
+        let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+        assert_eq!(
+            outcome(&instance.view().expect("render"), "secrets"),
+            "roundtrip",
+            "the widget's own key is its own, and untouched by the one above"
+        );
+    }
+
+    let reopened = Keyring::new(Arc::new(FileKeyring::new(&scratch.0)), "conformance");
+    assert_eq!(
+        reopened.get("token"),
+        Ok(Some(b"hunter2".to_vec())),
+        "a secret should outlive the instance that stored it"
+    );
+    let neighbour = Keyring::new(Arc::new(FileKeyring::new(&scratch.0)), "somebody-else");
+    assert_eq!(
+        neighbour.get("token"),
+        Ok(None),
+        "another widget's namespace is another widget's"
+    );
+    // And it is not lying around in the clear next to the config.
+    let bytes = std::fs::read(scratch.0.join("keyring.enc")).expect("store");
+    assert!(
+        !bytes.windows(7).any(|w| w == b"hunter2"),
+        "the keychain should not hold the secret in the clear"
+    );
 }
 
 #[test]
@@ -624,10 +694,12 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
 
 #[test]
 fn the_abi_version_is_checked_before_anything_else_runs() {
-    // The ABI has moved three times while the framework was pre-release:
+    // The ABI has moved four times while the framework was pre-release:
     // `read-file` answering `ok(none)`, `measure-text` taking a role rather
-    // than a `u8`, and one asynchronous mechanism replacing one per
-    // capability. The check is what makes that safe: a widget built against an
+    // than a `u8`, one asynchronous mechanism replacing one per capability,
+    // and `get-secret` answering `ok(none)` — which is the first of those
+    // made again, in the one other place where absence was being reported as
+    // an error. The check is what makes that safe: a widget built against an
     // older world is refused at instantiation, in a sentence naming both
     // numbers, rather than failing somewhere confusing later.
     let runtime = Runtime::new().expect("runtime");
@@ -638,7 +710,7 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 4);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 5);
 }
 
 #[test]

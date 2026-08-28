@@ -21,7 +21,8 @@
 //! ## Ids are stable, because focus depends on it
 //!
 //! An AccessKit id is derived from the widget instance and the author's own
-//! [`NodeId`], never from a traversal index. If the id of the row a screen
+//! [`NodeId`](uniwidged_core::NodeId), never from a traversal index. If the
+//! id of the row a screen
 //! reader is on changed when the row above it updated, focus would jump — and
 //! a traversal index changes exactly that way.
 
@@ -40,7 +41,7 @@ use crate::layout::Placed;
 /// cannot collide, and neither can reach the other's nodes.
 ///
 /// The flag separates author-chosen ids from the synthetic ones given to
-/// unnamed content — see [`synthetic_id`]. Without it the two share a 32-bit
+/// unnamed content — see `synthetic_id`. Without it the two share a 32-bit
 /// space, and [`uniwidged_core::NodeId::named`] hashes across all of it, so a
 /// synthetic id could land on a real one and steal a screen reader's focus.
 pub fn access_id(widget: WidgetId, node: uniwidged_core::NodeId) -> AccessId {

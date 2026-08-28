@@ -1,0 +1,16 @@
+# The reference widget for `secrets`. Unlike `fs:state`, this grant has no
+# subpath to narrow it: a widget either reaches its own corner of the keychain
+# or it does not. The namespace is the host's doing and is this widget's name,
+# so there is nothing here for a user to scope and nothing for a widget to
+# name.
+#
+# Note what is *not* on this list. A widget that keeps a credential is usually
+# a widget that sends it somewhere, and that would need `net:<host>` as well —
+# a second line, a second sentence in the consent screen, and a second decision
+# for the user. This one keeps the credential and nothing else, which is what
+# makes it readable as an example.
+name = "vault"
+version = "1.0.0"
+description = "Remembers a credential, in the keychain rather than in a file"
+capabilities = ["secrets"]
+memory-mb = 8

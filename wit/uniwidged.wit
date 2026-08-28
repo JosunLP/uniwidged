@@ -221,8 +221,22 @@ interface host {
     write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
 
     /// The OS keychain, namespaced to this widget — needs `secrets`.
-    get-secret: func(key: string) -> result<list<u8>, denied>;
+    ///
+    /// A key that was never set is `ok(none)`, not an error, for the reason
+    /// `read-file` answers the same way: a widget's first run has nothing
+    /// stored, and that is its normal case rather than its failure case. A
+    /// widget forced to tell "not signed in yet" from "this host is broken" by
+    /// reading an error string would get it wrong.
+    ///
+    /// A key is at most 64 characters of `[A-Za-z0-9._-]`, and a value at most
+    /// 64 KiB. Both are refused as `malformed`, which is a fact about the
+    /// request rather than about this host.
+    get-secret: func(key: string) -> result<option<list<u8>>, denied>;
     set-secret: func(key: string, value: list<u8>) -> result<_, denied>;
+    /// Forgets a key. Removing one that was never there is not an error, so
+    /// signing out twice is not a bug a widget has to guard against. Answers
+    /// whether something was actually removed.
+    remove-secret: func(key: string) -> result<bool, denied>;
 
     /// Machine counters — needs `metrics`.
     cpu-load: func() -> result<f32, denied>;
@@ -251,6 +265,12 @@ interface guest {
     /// `take-response` is gone; `take-result` collects any request by token
     /// and says what kind of answer it is. `run-command` joins `fetch` as the
     /// second thing that can start one.
+    ///
+    /// 4 → 5: `get-secret` answers `ok(none)` for a key that was never set.
+    /// The 1 → 2 change again, in the one other place where absence was being
+    /// reported as an error — a widget's first run has no token, and that is
+    /// its normal case. `remove-secret` is new: a widget that cannot forget a
+    /// credential is one that keeps it forever.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

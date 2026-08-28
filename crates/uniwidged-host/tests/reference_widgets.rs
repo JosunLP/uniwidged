@@ -1,7 +1,8 @@
 //! The widgets somebody else is meant to copy.
 //!
-//! `widgets/clock`, `widgets/system-load` and `widgets/counter` are the
-//! framework's worked examples, one per served capability. Examples rot, and a
+//! `widgets/clock`, `widgets/system-load`, `widgets/counter`, `widgets/uptime`
+//! and `widgets/vault` are the framework's worked examples, one per served
+//! capability. Examples rot, and a
 //! rotted example is worse than none: it is the first thing a new author reads
 //! and the last thing anybody runs. So they are built here, installed under
 //! **exactly the capabilities their own manifests declare**, and asserted to
@@ -84,6 +85,12 @@ impl Drop for Scratch {
 fn desktop(data_root: &Path) -> Host {
     let mut host = Host::new(Theme::default(), Duration::from_millis(16)).expect("a host");
     host.set_data_root(data_root);
+    // The keychain goes beside the data root rather than inside it: on a real
+    // machine it sits with the configuration, and one widget's directory is
+    // not somewhere another widget's secrets belong.
+    host.set_keyring(std::sync::Arc::new(
+        uniwidged_runtime::keyring::FileKeyring::new(data_root.join("..")),
+    ));
     host.set_locale(Locale::default());
     host
 }
@@ -101,6 +108,26 @@ fn install(host: &mut Host, name: &str) -> WidgetId {
 
 fn tick(host: &mut Host) {
     host.tick(Instant::now(), SystemTime::now()).expect("tick");
+}
+
+/// Clicks a named node through the host's own hit-testing.
+///
+/// Through the compose pass's rectangles at a point inside the button, rather
+/// than by handing the widget a node id: what these tests are for is the whole
+/// path, and a test that shortcut the hit-testing would keep passing after the
+/// buttons stopped being where the layout puts them.
+fn click(host: &mut Host, id: WidgetId, node: &str) {
+    let button = host
+        .composed(id)
+        .expect("a composition")
+        .hit_rects
+        .get(&NodeId::named(node))
+        .copied()
+        .unwrap_or_else(|| panic!("`{node}` should be on screen"));
+    let hit = host
+        .click(id, Point::new(button.center().x, button.center().y))
+        .expect("click");
+    assert_eq!(hit, Some(NodeId::named(node)));
 }
 
 /// The text of a named node in a widget's current view.
@@ -250,6 +277,7 @@ fn every_reference_widget_declares_only_what_it_uses() {
         ("system-load", vec!["timer", "metrics"]),
         ("counter", vec!["fs:state"]),
         ("uptime", vec!["timer", "command:uptime"]),
+        ("vault", vec!["secrets"]),
     ] {
         let declared: Vec<String> = manifest(name)
             .capabilities
@@ -307,5 +335,85 @@ fn the_uptime_widget_runs_a_command_and_shows_what_it_said() {
             .and_then(|w| w.last_view())
             .is_some_and(|v| !format!("{v:?}").contains("trouble")),
         "nothing went wrong"
+    );
+}
+
+#[test]
+fn the_vault_signs_in_and_out_and_remembers_across_a_restart() {
+    // The reference widget for `secrets`, and the same demonstration the
+    // counter makes for `fs`: a widget's state is derived from what it stored,
+    // so a restart is cheap. For a credential that matters more than for a
+    // number — a widget that forgets its token on every restart puts a sign-in
+    // screen where a widget was.
+    let scratch = Scratch::new("vault");
+
+    {
+        let mut host = desktop(&scratch.0.join("widgets"));
+        let id = install(&mut host, "vault");
+        tick(&mut host);
+        assert_eq!(
+            text_of(&host, id, "state"),
+            "not signed in",
+            "a first run has nothing stored, and that is not an error"
+        );
+
+        click(&mut host, id, "store");
+        tick(&mut host);
+        assert_eq!(
+            text_of(&host, id, "state"),
+            "signed in",
+            "the vault was granted `secrets` and should have used it"
+        );
+    }
+
+    // A whole new desktop over the same machine — which is what a log-out is.
+    {
+        let mut host = desktop(&scratch.0.join("widgets"));
+        let id = install(&mut host, "vault");
+        tick(&mut host);
+        assert_eq!(
+            text_of(&host, id, "state"),
+            "signed in",
+            "the credential should have outlived the desktop that stored it"
+        );
+
+        click(&mut host, id, "forget");
+        tick(&mut host);
+        assert_eq!(text_of(&host, id, "state"), "not signed in");
+    }
+
+    // And signing out is durable too: a widget that appeared to sign out and
+    // came back signed in would be the worse half of the same bug.
+    let mut host = desktop(&scratch.0.join("widgets"));
+    let id = install(&mut host, "vault");
+    tick(&mut host);
+    assert_eq!(text_of(&host, id, "state"), "not signed in");
+}
+
+#[test]
+fn the_vault_keeps_the_credential_out_of_the_view_and_off_the_disk_in_the_clear() {
+    // Two places a secret leaks without anybody meaning it to. The view is
+    // composed, hit-tested and handed to an accessibility tree, so a secret in
+    // it is a secret a screen reader reads aloud. The store is a file in
+    // somebody's configuration directory, so a secret in it in the clear is a
+    // secret in their backups.
+    let scratch = Scratch::new("vault-quiet");
+    let mut host = desktop(&scratch.0.join("widgets"));
+    let id = install(&mut host, "vault");
+    tick(&mut host);
+    click(&mut host, id, "store");
+    tick(&mut host);
+
+    let view = host.widget(id).and_then(|w| w.last_view()).expect("a view");
+    let rendered = format!("{view:?}");
+    assert!(
+        !rendered.contains("a token a real widget"),
+        "the credential reached the view"
+    );
+
+    let store = std::fs::read(scratch.0.join("keyring.enc")).expect("the keychain");
+    assert!(
+        !store.windows(5).any(|w| w == b"token"),
+        "the credential is on disk in the clear"
     );
 }

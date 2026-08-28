@@ -130,8 +130,10 @@ mod tests {
     fn an_answer_for_a_token_we_are_not_waiting_on_is_ignored() {
         // The host does not deliver somebody else's token, and a widget that
         // acted on one anyway would show whatever arrived.
-        let mut widget = Uptime::default();
-        widget.pending = Some(7);
+        let mut widget = Uptime {
+            pending: Some(7),
+            ..Default::default()
+        };
         assert!(!widget.on_event(&Event::Delivered { token: 9 }, &Cx::new()));
         assert_eq!(widget.pending, Some(7), "still waiting for its own");
     }

@@ -22,8 +22,8 @@ model.
 > icons, hit rectangles and an accessibility tree, all from one pass — with
 > fifteen golden images behind it. And widgets really are sandboxed WASM
 > components: `widgets/conformance` is built for `wasm32-wasip2`, instantiated
-> by the real runtime, and twenty tests assert what the sandbox refuses — and,
-> since the gates acquired something behind them, what it serves.
+> by the real runtime, and twenty-four tests assert what the sandbox refuses —
+> and, since every gate acquired something behind it, what it serves.
 > And it runs on X11 as well as Wayland — the risk `ARCHITECTURE.md` §10.1
 > named, measured rather than assumed, with the documented fallback built and
 > forced so it stays honest. See
@@ -31,16 +31,24 @@ model.
 > [`spikes/m4_x11/FINDINGS.md`](spikes/m4_x11/FINDINGS.md).
 > And it runs: `uniwidged run` starts a real desktop on X11 with sandboxed WASM
 > widgets in it, drawing, responding to clicks, restarting when one fails, and
-> submitting nothing at all when nothing is happening. Four of the capability
-> gates now have something behind them — a widget's own data directory, which
+> submitting nothing at all when nothing is happening. Behind the capability
+> gates is a widget's own data directory, which
 > it cannot leave even through a symlink; dates and times in the machine's
 > locale; text measured against the host's real fonts in the theme it is about
 > to be drawn in; the machine's CPU load, sampled without ever blocking a
 > widget's deadline; declared commands, run asynchronously so that a widget
 > never waits; and HTTPS to a granted host — where a redirect off that host is
 > refused, because otherwise a grant for one name is a grant for wherever that
-> name points. `secrets` is what is left, and the conformance suite asserts
-> that, so implementing it and forgetting to say so fails a test.
+> name points.
+>
+> **And now the last one.** `secrets` is served: an encrypted keychain, one
+> namespace per widget with no argument through which to name another's, and a
+> description of what that encryption does and does not buy which `install`
+> prints at the moment somebody is asked to approve it — because "store
+> passwords in your keychain" is a sentence whose weight depends entirely on
+> what the keychain is. Every capability this framework defines now has
+> something behind it, and the conformance suite asserts the empty list from
+> the widget's side, so one that stops being served fails a test.
 >
 > **And a widget you did not write is checked before it runs.** `install`
 > refuses one that is not signed by a key this machine was told to trust, and
@@ -50,9 +58,11 @@ model.
 > workspace builds from crates.io alone: no sibling checkout, no private
 > repository, `git clone && cargo test`. Widgets can be dragged, resized and
 > pinned, and they remember which monitor they were on — measured against a
-> real X server with synthetic pointer input, not asserted. What is still
-> missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over — the
-> network and keychain capabilities, and the Windows and macOS platforms.
+> real X server with synthetic pointer input, not asserted. It starts with the
+> session, it will not overwrite an autostart entry somebody wrote by hand, and
+> a widget granted `fs` can no longer fill a disk one file at a time. What is
+> still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over
+> — the Windows and macOS platforms, packaging, and somewhere to find widgets.
 >
 > **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
 > surface on the bottom layer; an X11 session gets a 32-bit
@@ -129,10 +139,11 @@ uniwidged install target/wasm32-wasip2/release/my_widget.wasm && uniwidged run
 ```
 
 That is a working widget on your desktop. [**The authoring
-guide**](docs/writing-a-widget.md) is the rest of it, and
-[`widgets/clock`](widgets/clock), [`widgets/system-load`](widgets/system-load)
-and [`widgets/counter`](widgets/counter) are three worked examples, one per
-capability.
+guide**](docs/writing-a-widget.md) is the rest of it, [**the API
+reference**](docs/api-reference.md) is every function and limit on one page, and
+[`widgets/clock`](widgets/clock), [`widgets/system-load`](widgets/system-load),
+[`widgets/counter`](widgets/counter), [`widgets/uptime`](widgets/uptime) and
+[`widgets/vault`](widgets/vault) are five worked examples, one per capability.
 
 You describe; the host decides what it looks like. That is what makes a screen
 full of widgets by different authors look like one product.
@@ -205,9 +216,12 @@ widgets/clock          the reference widget for `locale`
 widgets/system-load    the reference widget for `metrics`
 widgets/counter        the reference widget for `fs`, and a restart it survives
 widgets/uptime         the reference widget for `command`, and the async shape
+widgets/vault          the reference widget for `secrets`, and a credential
+                       that never reaches the view
 widgets/conformance    a widget that tries everything, so the sandbox can be
                        tested for what it refuses
 docs/writing-a-widget.md  the guide
+docs/api-reference.md     every function, type, limit and refusal, on one page
 spikes/m0_layer_shell  the proof that the whole thing is possible
 spikes/m4_x11          the same question on X11, where it was least certain
 ```

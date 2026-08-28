@@ -232,7 +232,7 @@ simply absent rather than denied.
 | `timer` | returning a `Wake` other than `Never` |
 | `net:<host>` | HTTPS to exactly those hosts, through the host's client |
 | `fs:<subpath>` | read/write inside the widget's own data directory |
-| `secrets` | the OS keychain, namespaced to this widget |
+| `secrets` | the keychain, namespaced to this widget |
 | `locale` | the user's locale-formatted dates, times and numbers |
 | `measure` | measuring a string in a named style, for its own truncation calls |
 | `command:<name>` | running one declared external command |
@@ -256,9 +256,51 @@ The gate and what is behind it are separate, and a widget can tell them apart.
 *can*. An ungranted capability answers `not-granted`, and a granted one with
 nothing behind it answers `unavailable` — which are different facts, and a
 widget told the first when the second is true sends its author to fix a
-manifest that is already right. As of 2026-08-28, everything but `secrets` is
-served; the conformance suite asserts exactly that, so implementing it and
-forgetting to say so fails a test.
+manifest that is already right. Every capability in the table is served on
+Linux as of 2026-08-28; the conformance suite asserts the unserved list from
+the widget's side, so a capability that stops being served — or a new one that
+is added and forgotten — fails a test rather than a sentence in a document.
+
+### The keychain
+
+`secrets` was the last gate with nothing behind it, and it was right to be
+last: it is the only capability where getting the storage wrong is worse than
+not having it. A widget that cannot reach a keychain shows a sign-in button. A
+widget whose token was written somewhere readable has already leaked it, and
+nothing later undoes that.
+
+So the shape is a seam, not an implementation. `SecretStore` is the trait;
+`Keyring` is the per-widget handle cut out of it, carrying the namespace the
+same way `TaskHandle` carries the widget's id — there is no argument through
+which a host function could name somebody else's secrets.
+
+Behind it today is one store: a file, encrypted whole with XChaCha20-Poly1305
+under a key in a second file at mode `0600`. The honest description of what
+that buys is the one `uniwidged doctor` prints and `install` shows at the
+moment of consent:
+
+* **It protects against** a backup, a synced dotfiles repository, a shared
+  screen, another user on the machine, and anybody who ends up with the store
+  without the key. Also against *editing*: the store is one AEAD message, so a
+  file somebody changed fails to open rather than decrypting to something a
+  widget then believes. And the store is one message rather than one per entry
+  because the key *names* are as telling as the values — `github.token` says
+  most of it.
+* **It does not protect against** a program already running as the user.
+  Nothing that keeps its key on the same disk can, and a framework that implied
+  otherwise would have people store things here that they should not. A session
+  keychain — the Secret Service, DPAPI, the macOS keychain — can, because the
+  key is held by a daemon that a login unlocked and that can refuse. Those are
+  backends behind the same trait.
+
+Two decisions come from these calls happening inside a widget's `view`, on its
+sixteen-millisecond deadline. A **read is memory**: the store is opened once
+and every `get` after that is a lookup. A **write has no `fsync`**: the first
+version had one, and an `fsync` waits on a device, so under a parallel test run
+it interrupted widgets for the crime of storing a token — the same mistake
+`Tasks::start` made by spawning a thread per request. The atomic rename is what
+actually matters, and it is kept: a power cut can cost the most recent secret,
+and cannot leave a keychain that will not open.
 
 `measure` is worth a sentence of its own, because it is the one capability that
 hands a widget something the host would otherwise keep. The handle behind it
@@ -384,6 +426,13 @@ the digest is domain-separated.
   after the filesystem has resolved it, because only the second can see a
   symlink somebody planted in a folder the user can open. Writes land through a
   rename, so a widget interrupted at its deadline leaves a whole file or none.
+* **Disk** — two bounds, because they stop two different things. A per-file cap
+  bounds what one host call can allocate: without it, a widget could ask the
+  host to read a file somebody else put in its directory and make the *desktop*
+  allocate a gigabyte, which no guest memory cap would catch. A per-widget
+  quota bounds a loop, which is the only other way `fs` reaches a disk — and
+  the two report differently, because a write that is too large is a bug in
+  that call and a directory that is full is not.
 
 ## 7. Graphical quality, concretely
 

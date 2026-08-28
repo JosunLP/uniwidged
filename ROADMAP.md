@@ -168,6 +168,8 @@ arithmetic land differently.
 * A DirectComposition visual tree; wgpu attached via
   `SurfaceTargetUnsafe::CompositionVisual`.
 * Per-monitor-v2 DPI; `DWMWA_SYSTEMBACKDROP_TYPE` for the backdrop.
+* A `SecretStore` backed by DPAPI, so `secrets` gets the stronger claim: a key
+  held by the OS rather than beside the store. The seam is already there.
 
 **Exit:** the widget stays below a maximised window, never steals focus, has no
 Alt-Tab entry, and shows the wallpaper through its glass.
@@ -180,6 +182,7 @@ Alt-Tab entry, and shows the wallpaper through its glass.
 * Layer-backed `NSView` with a non-opaque `CAMetalLayer`; wgpu attached via
   `SurfaceTargetUnsafe::CoreAnimationLayer`.
 * `NSVisualEffectView` behind it for the backdrop.
+* A `SecretStore` backed by the macOS keychain, as M5.
 
 **Exit:** as M5, plus: the widget follows the user across Spaces and does not
 slide away under Mission Control.
@@ -582,15 +585,12 @@ there.
 
 **Not done, and named rather than glossed over:**
 
-* **The keychain namespace.** `secrets` is the last capability still answering
-  `unavailable`. The conformance suite asserts that, so implementing it and
-  forgetting the list fails a test.
-* **A disk quota.** The cap is per file, not per widget: a widget granted `fs`
-  can still fill a disk one file at a time.
+* ~~**The keychain namespace.**~~ Done — see below.
+* ~~**A disk quota.**~~ Done — see below.
+* ~~**Autostart.**~~ Done — see below.
 * **Two monitors, actually tested.** The placement logic is tested against a
   docked-laptop layout, and the enumeration against a nested server — which has
   one screen. Nobody has yet watched a widget move between two real monitors.
-* **Autostart.**
 * **Pointer input on Wayland**, which is wired but unmeasured — headless sway
   has no input device. The shared interaction model above it is covered by the
   X11 pointer tests; what is unverified is the Wayland plumbing into it.
@@ -600,6 +600,147 @@ surviving a restart — is met except for the two monitors, which this machine
 does not have. Everything that criterion stood in for holds: a desktop full of
 real sandboxed widgets runs, draws, responds, can be moved and resized and
 pinned, remembers where it was put, and costs nothing at rest.
+
+### The keychain, the quota, and starting with the session — **done, 2026-08-28**
+
+The last three things M7 named and did not build. Two of them turned out to be
+one paragraph of code and one page of reasoning, which is the ratio this
+project keeps producing; the third found a bug in the first version of itself.
+
+#### `secrets` — the last gate with nothing behind it
+
+It was right to be last. Every other capability degrades harmlessly when it is
+missing: a widget without `net` shows stale data, one without `metrics` shows a
+dash. A keychain is the one where *having* it badly is worse than not having
+it, because a token written somewhere readable has already leaked and nothing
+later undoes that.
+
+So what landed is a seam rather than an implementation. `SecretStore` is the
+trait, `Keyring` is the handle a widget is served through — carrying its
+namespace exactly as `TaskHandle` carries its id, so there is no argument
+through which a host function could reach somebody else's secrets. Behind it,
+today, one store: **one file, encrypted whole with XChaCha20-Poly1305**, under
+a key in a second file at mode `0600`.
+
+**The store is one message, not one per entry**, and that is the interesting
+decision. A per-entry format leaks the list of key names to anybody holding the
+file, and the names are frequently the whole story — `github.token` says more
+than its ciphertext does. It also makes editing detectable: change a byte and
+the file does not open, rather than decrypting to something a widget believes.
+
+**And the description is part of the feature.** "Store passwords in your
+keychain" is a sentence whose weight depends entirely on what the keychain is,
+so `SecretStore::describe` returns the honest one — *safe from a backup or
+another user, not from a program already running as you* — and `install` prints
+it at the moment somebody is asked to approve it, not only in `doctor` where
+nobody looks first. A session keychain can make the stronger claim, because its
+key is held by a daemon a login unlocked; those are backends behind the same
+trait and are named in M5 and M6.
+
+**The bug worth recording.** The first version called `fsync` before the
+rename, which reads as the careful choice and is not: these functions run
+inside a widget's `view`, on its sixteen-millisecond deadline, and an `fsync`
+waits on a device. Under a full-workspace test run it interrupted widgets for
+the crime of storing a token — the sandbox punishing a widget for something the
+host chose to do on its behalf, which is precisely the mistake `Tasks::start`
+made by spawning a thread per request, three sections above. The atomic rename
+is what actually protects the store and it is kept: a power cut can cost the
+most recent secret, and cannot leave a keychain that will not open. Reads were
+the other half — the store is opened once and cached, because re-decrypting a
+file on every frame is the same mistake in slower motion. Both are asserted:
+a hundred reads must fit inside one frame, which they cannot if any of them
+touches a disk.
+
+**ABI 4 → 5.** `get-secret` answers `ok(none)` for a key that was never set.
+This is the 1 → 2 change made a second time, in the one other place where
+absence was being reported as an error — a widget's first run has no token, and
+that is its normal case. `remove-secret` is new: a widget that cannot forget a
+credential is one that keeps it forever, which for a credential is a bug rather
+than a missing convenience.
+
+**A fifth reference widget.** [`widgets/vault`](widgets/vault) is the shape
+every widget that signs in to something ends up with — it has a credential or
+it does not, it says which, and it can forget one. It declares `secrets` and
+nothing else, and two of its tests are about what it must *not* do: the
+credential never reaches the view, which is composed and handed to an
+accessibility tree, and it is not on disk in the clear.
+
+Twenty-one tests on the keychain itself, of which the file backend's half is
+the interesting one — that the secret and the key name are not in the file,
+that a store somebody edited refuses to open, that a store restored without its
+key says so rather than reporting an empty keychain, and that a key file
+anybody can read stops the whole thing instead of making the encryption
+decorative. Plus the conformance widget's whole lifecycle — absent, holding,
+absent again — which a host that quietly kept the old value would fail where a
+write-then-read would pass.
+
+One crate: `chacha20poly1305` (MIT/Apache-2.0), inside the licence policy,
+`cargo deny` unchanged.
+
+**Not done, and deliberately.** The Secret Service — gnome-keyring, KWallet —
+is the Linux backend that would make the stronger claim, and it is a D-Bus
+client: a session bus connection, an `org.freedesktop.secrets` collection, a
+prompt when the keyring is locked. Two things make it more than an afternoon.
+It is not universally present, so the file store stays either way and the
+choice has to be reported rather than assumed. And **a prompt is unbounded** —
+a locked keyring can put a dialog in front of the user, and a `get_secret`
+inside `view` cannot wait for one. That is the same argument as the `fsync`
+above and has a real answer — the host opens the collection once, at start-up,
+off any widget's deadline — but it is a design rather than a binding, and doing
+it badly would be worse than the honest file.
+
+#### A disk quota
+
+Named as missing for as long as it took somebody to write the loop. The
+per-file cap bounds what one host call can allocate; this bounds what a widget
+can do with a `for`.
+
+Two things it has to get right, and only one of them is the refusal. The other
+is that a widget rewriting its own cache file at full size must **not** be
+refused — that is the ordinary behaviour of exactly the widget this exists to
+bound, so checking the directory as it stands would break every honest widget
+and leave the loop working. The check is against what the write *replaces*.
+
+Symlinks are not followed and their targets are not counted, in either
+direction: a user who symlinks something into a widget's folder has not handed
+the widget a bill for it, and a widget cannot make its own usage look smaller
+by pointing somewhere empty. And a full quota answers `unavailable` where an
+oversized file answers `malformed`, because the two have different fixes — one
+is a bug in that call, and the other is a well-formed request the host cannot
+serve until something is deleted.
+
+#### Autostart
+
+`uniwidged autostart enable | disable | status`. An XDG desktop entry, because
+that is the one mechanism GNOME, KDE, XFCE, Cinnamon, MATE, LXQt and every
+tiling compositor that bothers all read — and the one a user already knows how
+to find. A systemd user unit would work on the subset of those running systemd
+`--user` and would leave the widget host as the one thing in somebody's session
+they cannot turn off from their settings panel.
+
+Most of it is about what it will not do. The entry carries
+`X-Uniwidged-Managed=true`, and both `enable` and `disable` **stop** on a file
+without it: somebody who hand-wrote an autostart entry with their own wrapper
+script in it has said something, and replacing or deleting it would be this
+program deciding it knows better. `status` exists for the third state, which is
+the one that is impossible to debug from the symptom — an entry that is fine
+and points at a binary that has been moved, upgraded or `cargo clean`ed. At
+login that is silence.
+
+Seven tests, driven through the actual binary against a session directory of
+their own, because the answer a user gets is the one the command line prints.
+
+#### And a Wayland flake that was a test, not a bug
+
+`an_idle_widget_waits_without_spinning` asserted that one `wait` blocks. It
+failed once under a full-workspace run and passed alone — the shape that gets
+re-run and dismissed. It was the test: a single wait can return early and be
+perfectly correct, because the compositor sent the client something and `poll`
+reported the socket readable, which is the mechanism working. What would be a
+busy loop is that happening repeatedly with nothing behind it, so that is what
+is asserted now. Worth separating from the `Tasks` flake three sections above,
+which looked identical and was a real bug: the difference is whether the thing
+being sampled is allowed to vary.
 
 ## Independent of its parents — **done, 2026-08-28**
 
@@ -676,7 +817,38 @@ whose whole purpose is loading what it saved. Every widget with anything to
 restore was going to end up doing it lazily in `view` behind a `loaded` flag.
 It takes one now. That is what reference widgets are for.
 
-**Still to do:** packaging, the registry format, and an API reference.
+### The API reference — **done, 2026-08-28**
+
+[`docs/api-reference.md`](docs/api-reference.md) — every function, type, limit
+and refusal on one page, with the ABI history at the bottom. The third of M8's
+documentation bullets, and the one a guide cannot replace: `writing-a-widget.md`
+is an argument with worked examples, and somebody halfway through a widget
+wants a table.
+
+Writing it found a claim nobody had checked. `.link(url)` marks a node as a
+link, an assistive technology is told so — and **nothing opens it**. That is now
+said in the reference rather than implied away, and it stays unbuilt on purpose:
+handing a widget a way to make the host launch an arbitrary URL is a
+capability, with `file://` and `x-scheme-handler` behind it, and it has not been
+designed.
+
+**Still to do:** packaging and the registry format.
+
+### Reference widgets, one per served capability
+
+| | |
+|---|---|
+| [`clock`](widgets/clock) | `locale` |
+| [`system-load`](widgets/system-load) | `metrics` |
+| [`counter`](widgets/counter) | `fs` |
+| [`uptime`](widgets/uptime) | `command` |
+| [`vault`](widgets/vault) | `secrets` |
+
+`net` has none, and that is the gap in the set: a reference widget for it needs
+a service to talk to that will still be there in a year, and pointing the
+project's own worked example at somebody else's free API is a broken example
+waiting to happen. `widgets/conformance` exercises the gate; `net`'s own suite
+exercises the transport against a server it starts itself.
 
 ---
 

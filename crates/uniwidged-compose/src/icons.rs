@@ -18,7 +18,7 @@ use uniwidged_view::Icon;
 
 /// An icon in unit space, ready to be transformed into place.
 pub struct IconPath {
-    /// Drawn with a round cap and join, at [`IconPath::stroke_width`] of the
+    /// Drawn with a round cap and join, at `IconPath::stroke_width` of the
     /// icon's size.
     pub strokes: Vec<BezPath>,
     /// Solid parts — an arrowhead, a dot.

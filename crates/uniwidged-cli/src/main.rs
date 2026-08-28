@@ -13,6 +13,7 @@
 //! uniwidged lock <name>             pin a widget where it is
 //! uniwidged unlock <name>           let it be dragged again
 //! uniwidged move <name> [--x N …]   place a widget without a pointer
+//! uniwidged autostart enable        start with the session
 //! uniwidged doctor                  what this session can and cannot do
 //! uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG
 //! ```
@@ -27,6 +28,7 @@
 //! one is missing the symptom is visual and the cause is not. So it reports
 //! what the session actually offers, in the same words the start-up log uses.
 
+mod autostart;
 mod check;
 mod new;
 mod paths;
@@ -58,6 +60,7 @@ fn main() -> ExitCode {
         Some("lock") => command_lock(&rest, true),
         Some("unlock") => command_lock(&rest, false),
         Some("move") => command_move(&rest),
+        Some("autostart") => autostart::command(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
         Some("--help" | "-h" | "help") | None => {
@@ -93,6 +96,7 @@ fn print_usage() {
            uniwidged lock <name>             pin a widget where it is\n  \
            uniwidged unlock <name>           let it be dragged again\n  \
            uniwidged move <name> [--x N] [--y N] [--width N] [--height N] [--output NAME]\n  \
+           uniwidged autostart [enable|disable|status]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n"
     );
@@ -127,6 +131,7 @@ fn command_run(args: &[String]) -> Result<(), String> {
 
 fn command_install(args: &[String]) -> Result<(), String> {
     use uniwidged_host::config::{Config, WidgetConfig};
+    use uniwidged_runtime::SecretStore;
     use uniwidged_runtime::manifest::Manifest;
 
     let component = args
@@ -190,6 +195,21 @@ fn command_install(args: &[String]) -> Result<(), String> {
         "  It may use up to {} MB of memory.\n",
         manifest.limits.memory_bytes / (1024 * 1024)
     );
+    // "store passwords in your keychain" is a sentence whose weight depends
+    // entirely on what the keychain is, and a user cannot be asked to consent
+    // to something they have not been told. So the one capability whose
+    // backing store is a judgement call names it here, at the moment of the
+    // decision, rather than only in `doctor` where nobody looks first.
+    if manifest
+        .capabilities
+        .iter()
+        .any(|c| matches!(c, uniwidged_runtime::Capability::Secrets))
+    {
+        println!(
+            "  Its keychain here is {}.\n",
+            uniwidged_runtime::FileKeyring::new(paths::keyring_dir()).describe()
+        );
+    }
 
     let path = paths::config_file();
     let mut config = Config::read(&path).map_err(|e| e.to_string())?;

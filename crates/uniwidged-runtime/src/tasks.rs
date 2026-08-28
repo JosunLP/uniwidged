@@ -25,7 +25,7 @@
 //! ## What the host has to do
 //!
 //! Poll [`Tasks::finished`] on every turn and deliver an event for each token.
-//! [`Tasks::wake`] is how the loop learns to turn at all: it fires when a task
+//! [`Tasks::waker`] is how the loop learns to turn at all: it fires when a task
 //! completes, and the desktop's `wait` is watching it. Without that, a task
 //! that finished while the loop was blocked on `None` would sit there until
 //! something else happened.

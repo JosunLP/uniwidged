@@ -32,6 +32,7 @@ use uniwidged_core::{Deadline, NodeId, Point, Size, WidgetId};
 use uniwidged_render::{RenderError, Renderer, SurfaceId};
 use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::instance::{Runtime, RuntimeError};
+use uniwidged_runtime::keyring::{Keyring, SecretStore};
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::net::Http;
 use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
@@ -118,6 +119,15 @@ pub struct Host {
     /// test and for `uniwidged snapshot`: rendering a widget should not create
     /// files on somebody's disk.
     data_root: Option<PathBuf>,
+    /// Where every widget's secrets go. `None` — the default — makes `secrets`
+    /// answer `unavailable`, which is right for a test and for
+    /// `uniwidged snapshot`: rendering a widget should not create a keychain
+    /// on somebody's disk.
+    ///
+    /// One store for the desktop, and one namespace per widget cut out of it
+    /// by [`Keyring`] — because it is one keychain, and because a store per
+    /// widget would be a key file per widget to keep the modes right on.
+    keyring: Option<Arc<dyn SecretStore>>,
     /// How this desktop writes dates and times. Defaults to the machine's own,
     /// because a host that cannot format a date is not one anybody wants; a
     /// test that needs a fixed one sets it.
@@ -179,6 +189,7 @@ impl Host {
             scale: 1.0,
             rtl: false,
             data_root: None,
+            keyring: None,
             locale: Locale::system(),
             cpu: Arc::new(CpuSampler::new()),
             tasks: Arc::new(Tasks::new(waker)),
@@ -201,6 +212,30 @@ impl Host {
     /// setting nobody changes twice.
     pub fn set_data_root(&mut self, root: impl Into<PathBuf>) {
         self.data_root = Some(root.into());
+    }
+
+    /// Where every widget's secrets are kept.
+    ///
+    /// Set before installing anything, for the same reason as
+    /// [`Host::set_data_root`]: moving a widget's keychain out from under it
+    /// while it is reading is worse than an inconsistency in a setting nobody
+    /// changes twice.
+    ///
+    /// The store is shared and the namespacing is the host's, so a widget has
+    /// no argument through which to name another's secrets — see
+    /// `uniwidged_runtime::keyring`.
+    pub fn set_keyring(&mut self, store: Arc<dyn SecretStore>) {
+        self.keyring = Some(store);
+    }
+
+    /// What the keychain behind `secrets` actually is, in one line, or `None`
+    /// where there is no keychain.
+    ///
+    /// `uniwidged doctor` prints it. A file store and a session keychain are
+    /// both "secrets are served", and a user deciding whether to let a widget
+    /// keep a password is entitled to know which one they have.
+    pub fn keyring_description(&self) -> Option<String> {
+        self.keyring.as_ref().map(|store| store.describe())
     }
 
     /// How dates and times are written for every widget on this desktop.
@@ -244,6 +279,14 @@ impl Host {
                     .with_commands(self.commands.clone())
                     .with_http(self.http.clone()),
             ),
+            // Namespaced by the widget's name, which is the same thing the
+            // data directory is named after and is why the manifest is strict
+            // about what a name may contain: two widgets sharing a name would
+            // share their secrets.
+            secrets: self
+                .keyring
+                .as_ref()
+                .map(|store| Keyring::new(store.clone(), name)),
         }
     }
 
@@ -500,7 +543,7 @@ impl Host {
             ("metrics", services.metrics.is_some()),
             ("fs", services.data.is_some()),
             ("net", services.tasks.is_some()),
-            ("secrets", false),
+            ("secrets", services.secrets.is_some()),
             ("command", services.tasks.is_some()),
         ]
     }

@@ -101,11 +101,15 @@ impl Cx {
         Err(Denied::NotGranted)
     }
 
-    pub fn get_secret(&self, _key: &str) -> Result<Vec<u8>, Denied> {
+    pub fn get_secret(&self, _key: &str) -> Result<Option<Vec<u8>>, Denied> {
         Err(Denied::NotGranted)
     }
 
     pub fn set_secret(&self, _key: &str, _value: &[u8]) -> Result<(), Denied> {
+        Err(Denied::NotGranted)
+    }
+
+    pub fn remove_secret(&self, _key: &str) -> Result<bool, Denied> {
         Err(Denied::NotGranted)
     }
 

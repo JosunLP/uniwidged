@@ -19,6 +19,7 @@ ureq.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
 getrandom.workspace = true
+chacha20poly1305.workspace = true
 # Optional so that the capability, manifest and lifecycle logic — which is most
 # of this crate and all of its security boundary — stays testable without a
 # multi-minute Wasmtime compile. On by default since M3.

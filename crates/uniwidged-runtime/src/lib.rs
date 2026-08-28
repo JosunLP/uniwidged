@@ -30,14 +30,16 @@
 //!
 //! [`Capability`] and [`Policy`] are complete and are the security boundary,
 //! so they are tested for what they *refuse*. [`Services`] is what is behind
-//! the gate, and it is deliberately partial: `fs` and `locale` are served,
-//! and `net`, `secrets`, `measure`, `metrics` and `command` still answer
-//! `unavailable` — which is a different fact from `not-granted`, and one a
-//! widget can act on.
+//! the gate, and every one of them now has something there — the last, and
+//! the one it was right to leave until last, is [`keyring`]. An embedder that
+//! supplies nothing still gets the whole sandbox: an ungranted capability
+//! answers `not-granted` and a granted one this host cannot serve answers
+//! `unavailable`, which is a different fact and one a widget can act on.
 
 #![allow(dead_code)]
 
 pub mod capability;
+pub mod keyring;
 pub mod limits;
 pub mod manifest;
 pub mod net;
@@ -49,6 +51,7 @@ pub mod tasks;
 pub mod instance;
 
 pub use capability::{Capability, Policy, Request};
+pub use keyring::{FileKeyring, Keyring, MemoryKeyring, SecretStore};
 pub use limits::Limits;
 pub use manifest::{ABI_VERSION, Manifest, ManifestError};
 pub use net::Http;

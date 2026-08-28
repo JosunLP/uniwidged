@@ -26,7 +26,7 @@ use crate::capability::Capability;
 use crate::limits::Limits;
 
 /// The ABI version this host speaks. See `wit/uniwidged.wit`.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 /// The most memory a widget may ask for.
 ///

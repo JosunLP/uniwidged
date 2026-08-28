@@ -95,6 +95,26 @@ permissive, with no copyleft and no attribution requirement. It is allowed
 explicitly rather than by loosening the policy, so the next licence to appear
 still has to be read by somebody.
 
+## The keychain's cipher
+
+`secrets` is served through
+[chacha20poly1305](https://github.com/RustCrypto/AEADs) — one crate,
+`Apache-2.0 OR MIT`, from the RustCrypto project. It brings `chacha20`,
+`poly1305`, `aead`, `cipher`, `universal-hash`, `subtle` and `zeroize`, all
+under the same pair of licences, and `cargo deny` accepts the lot without an
+exception.
+
+XChaCha20-Poly1305 rather than AES-GCM for the reason that matters to a file
+store: a 24-byte nonce may be drawn at random with no counter and no
+bookkeeping, and nonce reuse is precisely how this kind of thing gets broken. An
+AEAD rather than a cipher so that a store somebody edited fails to open instead
+of decrypting to something a widget then believes.
+
+Not hand-rolled, and worth saying why the alternative was considered at all:
+`sha2` was already in the tree for signatures, and a keystream from a hash plus
+an HMAC would have added no dependency. It would also have been a construction
+nobody has reviewed, in the one file in this project that holds credentials.
+
 ## Third-party dependencies
 
 The Linebender stack (Vello, Parley, kurbo, peniko), taffy, AccessKit, wgpu and

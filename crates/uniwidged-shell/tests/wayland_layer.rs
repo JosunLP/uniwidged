@@ -268,21 +268,40 @@ fn a_widget_that_cannot_reach_a_compositor_says_so_rather_than_hanging() {
 
 #[test]
 fn an_idle_widget_waits_without_spinning() {
-    // Wayland's half of `ARCHITECTURE.md` §5. Nothing is happening, so `wait`
-    // must actually block for the timeout rather than return immediately and
-    // let the loop turn as fast as the machine can.
+    // Wayland's half of `ARCHITECTURE.md` §5. Nothing is happening, so the
+    // loop must actually block rather than turn as fast as the machine can.
+    //
+    // What is asserted is the *loop*, not one `wait`, and the difference is a
+    // flake this file used to have. A single wait can return early and be
+    // perfectly correct: the compositor sends the client something — a frame
+    // callback, an output change, a serial — and `poll` reports the socket
+    // readable, which is the mechanism working. What would be a busy loop is
+    // that happening again and again with nothing behind it.
+    //
+    // So the test drains, waits, and repeats: an early return is allowed as
+    // long as one of a small number of waits genuinely blocks. It failed under
+    // a full-workspace run and passed alone, which is exactly what an
+    // assertion about a single sample looks like when the sample is noisy.
     let Some(compositor) = compositor("idle") else {
         return;
     };
     let mut window = compositor.open(START, Prefer::LayerShell);
-    // Drain whatever the handshake left.
-    let _ = window.drain_events().expect("events");
 
-    let began = Instant::now();
-    window.wait(Some(Duration::from_millis(150))).expect("wait");
-    let waited = began.elapsed();
-    assert!(
-        waited >= Duration::from_millis(100),
-        "an idle wait returned after {waited:?}, which is a busy loop"
+    const ATTEMPTS: usize = 5;
+    let mut early = Vec::new();
+    for _ in 0..ATTEMPTS {
+        // Whatever woke the last attempt is consumed here, so an event
+        // delivered once cannot end every wait.
+        let _ = window.drain_events().expect("events");
+        let began = Instant::now();
+        window.wait(Some(Duration::from_millis(150))).expect("wait");
+        let waited = began.elapsed();
+        if waited >= Duration::from_millis(100) {
+            return;
+        }
+        early.push(waited);
+    }
+    panic!(
+        "{ATTEMPTS} waits in a row returned early ({early:?}) with nothing          happening, which is a busy loop"
     );
 }

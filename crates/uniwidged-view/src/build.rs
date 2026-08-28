@@ -75,7 +75,8 @@ impl Node {
         self
     }
 
-    /// Space between children, in theme steps — not pixels. See [`Layout`].
+    /// Space between children, in theme steps — not pixels. See
+    /// [`Layout`](crate::Layout).
     pub fn gap(mut self, steps: u8) -> Self {
         self.style.layout.gap = steps;
         self

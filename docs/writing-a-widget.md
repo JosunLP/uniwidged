@@ -225,6 +225,52 @@ a whole file or none.
 Your directory is yours. Paths are relative, `..` is refused, and so is a
 symlink somebody planted that points out of it.
 
+There are two bounds, and they refuse in different words because they have
+different fixes. One file may be **4 MB** — past that the write is
+`Denied::Malformed`, because it is a fact about that call and you can make it
+smaller. Your whole directory may be **32 MB** — past that it is
+`Denied::Unavailable`, because the request was fine and what is full is your
+storage. A widget that caches should delete what it no longer needs rather than
+grow towards the second one.
+
+### Secrets
+
+A token, a password, an API key. Not the same thing as storage, and worth the
+separate capability: what goes in a file goes into a backup, a synced dotfiles
+repository, and whatever is on screen when somebody shares it.
+
+```rust
+fn start(&mut self, cx: &Cx) -> Result<(), String> {
+    // `Ok(None)` is your first run, exactly as with `read_file`.
+    self.signed_in = matches!(cx.get_secret("api.token"), Ok(Some(_)));
+    Ok(())
+}
+```
+
+`cx.set_secret(key, bytes)` stores one and `cx.remove_secret(key)` forgets it —
+answering `Ok(false)` if there was nothing to forget, so signing out twice is
+not something to guard against. A key is at most 64 characters of
+`[A-Za-z0-9._-]`, a value at most 64 KiB, and you may keep 64 keys.
+
+Four things to do, and they are what [`widgets/vault`](../widgets/vault) is
+for:
+
+* **Read it in `start`, not in `view`.** `view` runs on a deadline and may run
+  sixty times a second.
+* **Keep the answer, not the bytes.** If all you need is "is there a token",
+  store a `bool`. Every copy of a credential is somewhere it can leak from.
+* **Never put it in the view.** The view is composed, hit-tested and handed to
+  an accessibility tree — a secret in it is a secret a screen reader reads out.
+* **Never log it.** `cx.log` goes to the host's log, which goes to a journal.
+
+The namespace is yours and is your widget's name. There is no argument through
+which to name another widget's secrets, so there is nothing here to get wrong.
+
+What is behind the capability depends on the host, and `uniwidged doctor` says
+which — a session keychain that a login unlocked, or an encrypted file that
+protects a backup but not a program already running as the user. `install`
+prints the same sentence at the moment somebody is asked to approve it.
+
 ## 6. Asking for something that takes time
 
 A widget must never wait. Every call into your code is bounded, and a widget
@@ -373,7 +419,7 @@ and then a restart costs nothing.
 
 ## 10. Worked examples
 
-Three reference widgets in this repository, one per capability, each small
+Five reference widgets in this repository, one per capability, each small
 enough to read in a sitting:
 
 | | |
@@ -382,6 +428,7 @@ enough to read in a sitting:
 | [`widgets/system-load`](../widgets/system-load) | `metrics`. How often to sample, and how to show a reading you could not take. |
 | [`widgets/counter`](../widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
 | [`widgets/uptime`](../widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
+| [`widgets/vault`](../widgets/vault) | `secrets`. Keeping a credential, and keeping it out of the view. |
 
 And [`widgets/conformance`](../widgets/conformance), which tries every
 capability and reports what happened — the fastest way to see what the sandbox
@@ -405,6 +452,7 @@ Named so nobody has to find out the hard way:
 
 ---
 
-`ARCHITECTURE.md` has the reasoning behind all of this, and `ROADMAP.md` says
-what is not built yet — `secrets` currently answers `Unavailable` however much
-is granted.
+[`api-reference.md`](api-reference.md) is every function, type and refusal in
+one page. `ARCHITECTURE.md` has the reasoning behind all of this, and
+`ROADMAP.md` says what is not built yet — every capability in the table above
+is served on Linux; what is missing is Windows and macOS.
