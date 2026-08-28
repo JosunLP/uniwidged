@@ -23,8 +23,9 @@ jobs:
       # The platform tests start their own nested server — Xvfb for X11, a
       # headless sway for Wayland — so this needs no session and no display,
       # only the binaries.
-      # `x11-xserver-utils` is `xrandr`, which the two-monitor tests use to
-      # declare virtual RandR monitors over the nested server's screen.
+      # `x11-xserver-utils` is `xrandr`: the two-monitor tests declare virtual
+      # RandR monitors over the nested server's screen, and the hotplug test
+      # turns its one output off and on again.
       - run: sudo apt-get update && sudo apt-get install -y xvfb sway x11-xserver-utils
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets
@@ -56,8 +57,14 @@ jobs:
   # golden images are only evidence if they run on every change. lavapipe is a
   # software Vulkan device and is deterministic, so this needs no GPU and no
   # display.
+  #
+  # It is also the only job with a device, which makes it the only one where
+  # `crates/uniwidged-cli/tests/live.rs` runs: that suite starts the real
+  # binary on a real X server and needs a swapchain to put a widget on. It
+  # skips itself in the job above, where there is no adapter — and
+  # `UNIWIDGED_REQUIRE_GPU` below is what stops it skipping silently here.
   snapshots:
-    name: golden images (lavapipe)
+    name: golden images (lavapipe), and a live desktop
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

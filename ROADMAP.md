@@ -187,7 +187,7 @@ Alt-Tab entry, and shows the wallpaper through its glass.
 **Exit:** as M5, plus: the widget follows the user across Spaces and does not
 slide away under Mission Control.
 
-## M7 · The host and the CLI — **partly done, 2026-08-27**
+## M7 · The host and the CLI ✅ **done, 2026-08-28**
 
 * Lifecycle: install, configure, enable, disable, remove; per-widget data
   directory and keychain namespace.
@@ -592,21 +592,19 @@ there.
   RandR monitors on a server the test starts. What remains untested is two
   *physical* monitors, which this machine does not have and which differ from
   the above only in the hardware behind the same protocol.
-* **Pointer input on Wayland**, which is wired but unmeasured — headless sway
-  has no input device. The shared interaction model above it is covered by the
-  X11 pointer tests; what is unverified is the Wayland plumbing into it.
+* ~~**Pointer input on Wayland.**~~ Done — see below, against a virtual pointer
+  device the test creates, because headless sway has no real one.
 * ~~**Applying a configuration without a restart.**~~ Done — see below.
-* **Installing and removing without a restart.** A reload applies settings,
-  placement and the lock switch to a running desktop, and *reports* a widget
-  that appeared or disappeared rather than acting on it — see
-  `uniwidged_host::reload` for why doing half of that on a signal is worse than
-  not doing it.
+* ~~**Installing and removing without a restart.**~~ Done — see below.
 
 The milestone's original exit criterion — eight widgets across two monitors
-surviving a restart — is met except for the two monitors, which this machine
-does not have. Everything that criterion stood in for holds: a desktop full of
+surviving a restart — is met except for two *physical* monitors, which this
+machine does not have; two virtual RandR ones are tested against a server the
+suite starts. Everything that criterion stood in for holds: a desktop full of
 real sandboxed widgets runs, draws, responds, can be moved and resized and
-pinned, remembers where it was put, and costs nothing at rest.
+pinned, remembers where it was put, costs nothing at rest — and can be filled
+and emptied while it is doing it, which the criterion did not think to ask for
+because restarting was assumed.
 
 ### The keychain, the quota, and starting with the session — **done, 2026-08-28**
 
@@ -983,6 +981,180 @@ hole with the warning written above it.
 They happened to agree, which is not a property anybody was maintaining. There
 is one now, and the link check uses it too, so a third reading cannot appear
 without deleting the same comment twice.
+
+### Widgets that arrive and leave while the desktop is up — **done, 2026-08-28**
+
+The last thing M7 named and refused, and the reason it refused was good: a
+widget arriving needs a component compiled, a window created, a swapchain
+attached and a placement resolved, and doing half of that on a signal is how a
+desktop ends up with a window nothing draws into. Until now the answer was
+`uniwidged install` writing a file and printing *it starts when the desktop
+does*, which is a sentence somebody reads once before deciding this is not a
+program you install widgets into.
+
+What changed is not the risk. It is that **each half is now one function that
+does all of it or none of it**, and both live in the only layer that owns
+windows.
+
+**The order inside a removal is the whole of its correctness.** `Host::remove`
+detaches the renderer's surface first, because while a surface is attached the
+next frame composes into it; the window is destroyed second, because dropping
+it destroys what wgpu was presenting to. Reversed, the renderer holds a surface
+over a window the X server has already forgotten — which is not a type error,
+not a panic, and not something any headless test can see.
+
+**Two things go with the widget, and one deliberately does not.** Its schedule
+goes, or the loop wakes once a second for a widget nobody can see. Its
+outstanding asynchronous work goes: ids come from a counter, so a `fetch` left
+in flight is an answer the *next* widget installed would collect — the same
+reasoning, and the same `Tasks::forget` call, that a suspension already made.
+What stays is everything the widget wrote. Removing a widget from a running
+desktop is not a decision to destroy what it saved; `uniwidged remove --purge`
+is where that is asked for, and it asks.
+
+**`reload::apply` still refuses to do either**, and that is the same split
+`ARCHITECTURE.md` §5 makes about surfaces rather than a leftover. It reports
+which names appeared and which disappeared, and every widget it names is *still
+running* when it returns. The caller — `uniwidged_cli::run`, which owns the
+windows — is what acts. A test asserts the widget is still there afterwards,
+because that contract is what makes the two halves separable at all.
+
+**Removals happen before additions**, which is not tidiness: a widget upgraded
+in place is a removal and an addition of the same name, and the other order
+would have two windows with the same title and two instances writing the same
+data directory for as long as it took.
+
+And an upgrade *is* now applied live, which is the case none of this would have
+covered otherwise. `uniwidged install` over an existing widget, and every
+`uniwidged update`, leave the name in the file and change what is underneath
+it — invisible to a diff of names. So a reload asks a second question of every
+widget still in the file: is the component path the one it was started from,
+and is the version beside it the version it is running? A widget that answers
+no is stopped and started, keeping what the file keeps — where it sits, what it
+was configured with, whether it is switched off.
+
+**Measured against a desktop that is actually running.**
+`crates/uniwidged-cli/tests/live.rs` starts the real binary on a real `Xvfb`
+with a real device, puts a real WASM widget on the screen, and then — from a
+second process, through the pid file, over `SIGHUP` — installs a second widget,
+removes it, disables one and enables it again. Three tests, and the third is
+the one that would have been left out: a desktop whose *last* widget is removed
+has no window to wait on, still has to block rather than spin, and has to
+accept a widget again afterwards.
+
+### The other end of the wait — **done, 2026-08-28**
+
+Two bugs, both found by reading the wait path rather than by any failure, and
+both invisible to every test in the repository — because every one of those
+drives a loop that is already awake. What was wrong was what happens on the way
+*into* a block.
+
+**A desktop waited on one widget's connection.** Every window carries its own:
+`XCBConnection::connect` per X11 window, a `wl_display` per Wayland one,
+because a window is opened by whoever wants one and neither protocol has a
+session object above them. The loop called `wait_with` on `windows[0]`. On an
+idle desktop `next_timeout` answers `None` — the property the entire wake model
+is built around — so the process blocked with no timer at all, and a click on
+the second widget sat unread on the second connection until something else
+happened to wake it. On a desktop of two clocks that is up to a second. On a
+desktop of two static widgets it is until the user gives up.
+
+`platform::linux::wait_any` polls every connection and the wake pipe in one
+call. `a_press_on_the_second_widget_wakes_a_desktop_that_is_blocked` blocks
+with no timeout at all, exactly as a desktop does, and would hang without it.
+
+**And the check that existed to stop an event being slept through threw it
+away.** Before sleeping, the X11 path asked whether anything was already
+queued — an event that arrived between the last drain and the call is in a
+queue, not on a socket, and no amount of polling will report it. It asked with
+`poll_for_event`, which *removes* what it returns. So the press was consumed
+and discarded, the release that followed reached an interaction model that had
+never seen a press, and the click did nothing. Once in a while, for no reason
+a user could describe. There is a pushback queue now, and `has_queued` is the
+question both the single-window path and `wait_any` ask.
+
+### The monitors, while the desktop is running — **done, 2026-08-28**
+
+M7 lists *placement restored on hotplug*, and that had always been half true in
+a way worth being precise about: `uniwidged_host::placement` could put a widget
+back on the monitor it was stored against, and did — at start-up, and on a
+reload, and at no other time. Nothing was watching. So a laptop docked while a
+desktop was running left every widget at coordinates belonging to a layout that
+had stopped existing, and undocking one left them off the screen; the placement
+was correct and nobody had asked for it.
+
+Both window systems can say. X11 has a RandR event mask on the root window and
+Wayland announces and withdraws `wl_output` globals, and both now arrive as one
+`Input::OutputsChanged` — a bare fact carrying no list, deliberately. Each
+reports a layout **one piece at a time**: a laptop being docked is several
+global announcements followed by several rounds of geometry and mode, and a
+desktop that acted on each would place every widget against a layout the
+compositor had already moved on from. So it means *ask again*, and the loop
+asks once, however many notifications arrived, and re-resolves every placement
+against the answer.
+
+**Four RandR masks rather than one, and that is a measurement.** A monitor
+declared or withdrawn produces an `RRNotify` with a resource-change subtype and
+no screen change at all, because the screen's own size has not moved; a cable
+produces the output and CRTC ones. Selecting only `SCREEN_CHANGE` reports some
+of the ways a layout can change and not the others.
+
+**A session that answers with nothing is left alone.** An X server without
+RandR or a compositor advertising `wl_output` below version 4 cannot say what
+its monitors are called, and the right response to an empty list is to leave
+every widget exactly where it is. Wiping the list would move all of them to the
+origin — which is the failure mode this feature exists to prevent, arrived at
+from the other direction.
+
+**Measured, and the measurement found something first.** `xrandr --setmonitor`
+— the command the two-monitor tests already used — declares a RandR 1.5 monitor
+and notifies **nobody**. The first version of the test used it and failed
+against a working implementation, which took a probe over the raw connection to
+tell apart. What `Xvfb` will actually do is turn its one output off and on, and
+that is what
+`a_monitor_going_away_and_coming_back_reaches_the_desktop` does.
+
+### Pointer input on Wayland, measured — **done, 2026-08-28**
+
+The last of M7's named gaps. `platform::wayland` binds a seat, takes its
+`wl_pointer` and turns enter/motion/button into the same `Input` values X11
+produces — and nothing had ever seen one arrive, because headless sway has no
+mouse and there was nothing to move.
+
+There is a way, and it is the Wayland spelling of what the X11 suite does with
+`XTest`: **`zwlr_virtual_pointer_v1`**, a mouse that does not exist. Every
+event it sends goes through the compositor's ordinary input handling — focus,
+surface-local coordinates, the implicit grab — before coming back out to
+whichever surface is under it, so what is measured is the whole path rather
+than a shortcut into it. Four tests: that a press arrives with surface-local
+coordinates *and* the desktop coordinates this client derives itself, that a
+drag is motion between a press and a release, that a press somewhere else is
+not delivered at all, and that a pointer leaving mid-drag keeps being
+delivered — which is Wayland's implicit grab, a claim in `grab_pointer`'s own
+documentation that nothing had checked.
+
+**Two things had to exist first, and both are worth naming.**
+
+A Wayland surface with **no buffer is not mapped**, and an unmapped surface is
+not under the pointer no matter where the pointer is. A widget's pixels come
+from wgpu, so the shipped desktop never needs shared memory — which left a test
+with nothing on screen to click. `WaylandWindow::present_blank` attaches
+4 × w × h bytes of zeroes, and lives behind a `test-support` feature that only
+a `[dev-dependencies]` line turns on, exactly as `uniwidged_runtime::test_server`
+does. Nothing in a release build can reach it.
+
+And **a headless seat has no pointer capability at all** — `wl_seat.capabilities`
+is literally zero — until a virtual one is created. A client binds its
+`wl_pointer` from that event, so a widget that opened its surface while the
+capability was still absent never took a pointer and every event afterwards
+went to a compositor with nowhere to deliver it. The first version of the file
+did exactly that and failed with an empty list and no other clue. The virtual
+pointer is now flushed into existence before any surface is opened.
+
+The compositor harness moved to `tests/wayland_harness/` on the way, because
+two suites needed it and two copies of a compositor harness is two harnesses
+drifting apart — the socket-length rule sway segfaults over being precisely the
+kind of detail that gets fixed in one of them.
 
 ## Independent of its parents — **done, 2026-08-28**
 

@@ -279,6 +279,30 @@ impl DesktopWindow {
         }
     }
 
+    /// The descriptor this window's events arrive on.
+    pub fn poll_fd(&self) -> std::os::fd::RawFd {
+        match self {
+            DesktopWindow::Wayland(w) => w.poll_fd(),
+            DesktopWindow::X11(w) => w.poll_fd(),
+        }
+    }
+
+    /// Sends everything this client has buffered.
+    pub fn flush(&self) -> Result<(), DesktopError> {
+        match self {
+            DesktopWindow::Wayland(w) => w.flush().map_err(DesktopError::Wayland),
+            DesktopWindow::X11(w) => w.flush().map_err(DesktopError::X11),
+        }
+    }
+
+    /// Whether anything is already waiting to become an [`Input`].
+    pub fn has_queued(&mut self) -> Result<bool, DesktopError> {
+        match self {
+            DesktopWindow::Wayland(w) => w.has_queued().map_err(DesktopError::Wayland),
+            DesktopWindow::X11(w) => w.has_queued().map_err(DesktopError::X11),
+        }
+    }
+
     /// A size the *compositor* chose, if it has chosen a new one.
     ///
     /// Only Wayland does this: a layer surface's size is the compositor's
@@ -303,6 +327,113 @@ impl DesktopWindow {
                 .map_err(DesktopError::X11),
         }
     }
+}
+
+/// Blocks until *any* of these windows has something to say, or the timeout
+/// elapses, or a background task finishes.
+///
+/// ## Why this exists
+///
+/// Every window on Linux carries its own connection — `XCBConnection::connect`
+/// per X11 window, `wl_display` per Wayland one — because a window is opened
+/// by whoever wants one and there is no session object above them. A desktop
+/// runs one loop over N widgets, so it has N descriptors, and
+/// [`DesktopWindow::wait_with`] waits on exactly one.
+///
+/// Waiting on the first window is enough only when the first window is the one
+/// the user touched. It is not, and the consequence was precise: on an idle
+/// desktop `next_timeout` is `None` — the property `ARCHITECTURE.md` §5 is
+/// built around — so the loop blocked with no timer, and a click on the second
+/// widget sat unread on the second connection until something *else* woke the
+/// process. Two widgets, and one of them stopped responding to the pointer.
+///
+/// So: one `poll` over every connection and the wake pipe together.
+///
+/// ## The order, which is the whole of the correctness
+///
+/// 1. **Ask every window whether it already has something.** An event that
+///    arrived between the last drain and this call is in a queue, not on a
+///    socket, and no amount of polling will report it. Returning early here is
+///    what stops the loop sleeping through work it already has.
+/// 2. **Flush.** A request still in this client's buffer is one the server has
+///    not seen, and waiting for a reply to it would wait forever.
+/// 3. **Poll every descriptor at once**, plus the wake pipe.
+/// 4. **Let every window read what it has**, with a zero timeout. Which
+///    descriptor `poll` reported is deliberately not matched back to a window:
+///    a zero-timeout wait costs one syscall on a window with nothing to say,
+///    and a mismatch would cost an event.
+///
+/// An empty slice is a desktop whose widgets have all been removed. It waits
+/// on the wake pipe and the timeout alone rather than returning immediately,
+/// which is what keeps such a desktop idle instead of spinning.
+pub fn wait_any(
+    windows: &mut [DesktopWindow],
+    timeout: Option<Duration>,
+    wake: Option<&crate::WakePipe>,
+) -> Result<(), DesktopError> {
+    use std::os::fd::AsRawFd;
+
+    for window in windows.iter_mut() {
+        if window.has_queued()? {
+            return Ok(());
+        }
+    }
+    for window in windows.iter() {
+        window.flush()?;
+    }
+
+    let millis = match timeout {
+        Some(d) => d.as_millis().min(i32::MAX as u128) as i32,
+        None => -1,
+    };
+    let mut fds: Vec<libc::pollfd> = windows
+        .iter()
+        .map(|window| libc::pollfd {
+            fd: window.poll_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    if let Some(wake) = wake {
+        fds.push(libc::pollfd {
+            fd: wake.as_fd().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
+    // A desktop with no windows and no wake pipe has nothing to wait for and no
+    // way to be told; sleeping the timeout is the only thing left that is not a
+    // busy loop.
+    if fds.is_empty() {
+        if let Some(d) = timeout {
+            std::thread::sleep(d);
+        }
+        return Ok(());
+    }
+
+    // SAFETY: descriptors borrowed for the duration of the call and not stored.
+    let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+    if result < 0 {
+        let error = std::io::Error::last_os_error();
+        // A signal is not a failure; the loop simply comes round again. This is
+        // also how `SIGHUP` ends the block — see `uniwidged_cli::daemon`.
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(DesktopError::X11(super::x11::X11Error::Protocol(
+                error.to_string(),
+            )));
+        }
+        return Ok(());
+    }
+    // Emptied whether or not it is what woke us: a pipe left readable makes
+    // every later poll return immediately, and an idle desktop becomes a busy
+    // one.
+    if let Some(wake) = wake {
+        wake.drain();
+    }
+    for window in windows.iter_mut() {
+        window.wait_with(Some(Duration::ZERO), None)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -57,6 +57,8 @@ use std::ptr::NonNull;
 use std::time::Duration;
 
 use uniwidged_core::geom::PhysicalRect;
+#[cfg(feature = "test-support")]
+use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool};
 use wayland_client::protocol::{
     wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_surface,
 };
@@ -125,6 +127,12 @@ impl std::error::Error for WaylandError {}
 /// `done`, so this accumulates and [`WaylandWindow::outputs`] reads it.
 #[derive(Default, Clone)]
 struct OutputState {
+    /// The registry name it was announced under.
+    ///
+    /// Kept because that is the *only* identifier a `global_remove` carries: a
+    /// monitor being unplugged arrives as a number, and without this there is
+    /// nothing to match it against.
+    global: u32,
     name: Option<String>,
     position: (i32, i32),
     size: (u32, u32),
@@ -142,6 +150,14 @@ struct State {
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    /// Bound only where [`WaylandWindow::present_blank`] exists.
+    ///
+    /// A widget's pixels come from wgpu, so the shipped desktop never needs
+    /// shared memory and never binds this. What does need it is a test: a
+    /// layer surface with no buffer attached is not *mapped*, and a compositor
+    /// has nothing to deliver a pointer event to. See the method.
+    #[cfg(feature = "test-support")]
+    shm: Option<wl_shm::WlShm>,
     outputs: Vec<(wl_output::WlOutput, OutputState)>,
 
     /// Set once the compositor has answered the first commit.
@@ -160,6 +176,24 @@ struct State {
     pointer_at: (f64, f64),
     /// What the loop will drain.
     pending: Vec<Input>,
+
+    /// A monitor was announced, withdrawn, moved or resized since the last
+    /// drain.
+    ///
+    /// A flag rather than an event per change, because Wayland reports a
+    /// layout one object at a time — a monitor moving is a `geometry` and
+    /// possibly a `mode`, and a laptop being docked is several `global`
+    /// announcements followed by several rounds of both. A desktop that acted
+    /// on each would place every widget against a layout the compositor had
+    /// already moved on from. One flag, one `Input::OutputsChanged`, one
+    /// re-resolve.
+    outputs_changed: bool,
+    /// Whether the first round trips are over.
+    ///
+    /// Every output announces its position, size and name when it is first
+    /// bound, and treating those as *changes* would report a hotplug before
+    /// the window is even on screen.
+    settled: bool,
 }
 
 impl State {
@@ -181,6 +215,18 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
+        // A monitor unplugged. The compositor withdraws its `wl_output` global
+        // and says nothing else — no name, no reason — so all that can be done
+        // is drop the one that was announced under that number and tell the
+        // desktop to ask again.
+        if let wl_registry::Event::GlobalRemove { name } = event {
+            let before = state.outputs.len();
+            state.outputs.retain(|(_, info)| info.global != name);
+            if state.outputs.len() != before {
+                state.outputs_changed = true;
+            }
+            return;
+        }
         let wl_registry::Event::Global {
             name,
             interface,
@@ -202,6 +248,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             "wl_seat" if state.seat.is_none() => {
                 state.seat = Some(registry.bind(name, version.min(7), qh, ()));
             }
+            #[cfg(feature = "test-support")]
+            "wl_shm" => {
+                state.shm = Some(registry.bind(name, version.min(1), qh, ()));
+            }
             "wl_output" => {
                 // Version 4 is where an output gained a `name` event, and a
                 // name is the only identifier a placement can be stored
@@ -210,7 +260,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 // desktop coordinates, which is the documented behaviour
                 // rather than a guess.
                 let output: wl_output::WlOutput = registry.bind(name, version.min(4), qh, ());
-                state.outputs.push((output, OutputState::default()));
+                state.outputs.push((
+                    output,
+                    OutputState {
+                        global: name,
+                        ..OutputState::default()
+                    },
+                ));
+                state.outputs_changed |= state.settled;
             }
             _ => {}
         }
@@ -229,6 +286,7 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
         let Some((_, info)) = state.outputs.iter_mut().find(|(known, _)| known == output) else {
             return;
         };
+        let before = (info.position, info.size);
         match event {
             wl_output::Event::Geometry { x, y, .. } => info.position = (x, y),
             wl_output::Event::Mode { width, height, .. } => {
@@ -236,6 +294,12 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
             }
             wl_output::Event::Name { name } => info.name = Some(name),
             _ => {}
+        }
+        // Only a real change, and only after the opening round trips: every
+        // output describes itself when it is bound, and reporting that as a
+        // hotplug would move every widget before the window is on screen.
+        if state.settled && before != (info.position, info.size) {
+            state.outputs_changed = true;
         }
     }
 }
@@ -419,6 +483,12 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
 delegate_noop!(State: ignore wl_compositor::WlCompositor);
 delegate_noop!(State: ignore wl_surface::WlSurface);
 delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
+#[cfg(feature = "test-support")]
+delegate_noop!(State: ignore wl_shm::WlShm);
+#[cfg(feature = "test-support")]
+delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
+#[cfg(feature = "test-support")]
+delegate_noop!(State: ignore wl_buffer::WlBuffer);
 
 /// Which shell to ask for.
 ///
@@ -595,6 +665,8 @@ impl WaylandWindow {
         // the caller already knows about: it is what `geometry()` returns.
         window.reported = window.state.size;
         window.state.origin = (window.placement.rect.x, window.placement.rect.y);
+        // Everything from here is a change rather than an introduction.
+        window.state.settled = true;
         Ok(window)
     }
 
@@ -821,6 +893,35 @@ impl WaylandWindow {
         Ok(())
     }
 
+    /// The descriptor this connection's events arrive on.
+    ///
+    /// Public for the same reason X11's is: a desktop with several widgets has
+    /// several connections, and waiting on one of them is waiting on one
+    /// widget. See [`crate::platform::linux::wait_any`].
+    pub fn poll_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::{AsFd, AsRawFd};
+        self.conn.as_fd().as_raw_fd()
+    }
+
+    /// Sends everything this client has buffered.
+    pub fn flush(&self) -> Result<(), WaylandError> {
+        self.conn
+            .flush()
+            .map_err(|e| WaylandError::Protocol(e.to_string()))
+    }
+
+    /// Whether anything is waiting to be turned into an [`Input`].
+    ///
+    /// Dispatches what libwayland has already read, which is where an event
+    /// sits between arriving on the socket and becoming an [`Input`]. Nothing
+    /// is consumed: what it finds stays in `pending` for the next drain.
+    pub fn has_queued(&mut self) -> Result<bool, WaylandError> {
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .map_err(|e| WaylandError::Protocol(e.to_string()))?;
+        Ok(!self.state.pending.is_empty() || self.state.closed || self.state.outputs_changed)
+    }
+
     /// Every event queued right now.
     pub fn drain_events(&mut self) -> Result<Vec<Input>, WaylandError> {
         self.queue
@@ -833,12 +934,93 @@ impl WaylandWindow {
                 window: self.window_id(),
             });
         }
+        // Once, however many announcements it took. See `State::outputs_changed`.
+        if self.state.outputs_changed {
+            self.state.outputs_changed = false;
+            events.push(Input::OutputsChanged);
+        }
         Ok(events)
     }
 
     /// Whether the compositor has resized the surface since this was last
     /// asked, and to what.
     ///
+    /// Attaches one fully transparent buffer and commits, so the compositor
+    /// considers this surface **mapped**.
+    ///
+    /// Test support, and behind a feature only a `[dev-dependencies]` line
+    /// turns on — the same bargain `uniwidged_runtime::test_server` makes, and
+    /// for the same reason: nothing in a release build should be able to reach
+    /// it. A widget's pixels come from wgpu, and the shipped desktop has no use
+    /// for shared memory at all.
+    ///
+    /// It exists because of a rule that is easy to miss and impossible to work
+    /// around: **a Wayland surface with no buffer is not mapped**, and an
+    /// unmapped surface is not under the pointer no matter where the pointer
+    /// is. So a test that wants to measure pointer input has to put *something*
+    /// on the screen first, and the cheapest something is 4 × w × h bytes of
+    /// zeroes — which, in `Argb8888`, is exactly the transparent pixel every
+    /// widget starts a frame with anyway.
+    #[cfg(feature = "test-support")]
+    pub fn present_blank(&mut self) -> Result<(), WaylandError> {
+        use std::os::fd::AsFd;
+
+        let shm = self
+            .state
+            .shm
+            .clone()
+            .ok_or(WaylandError::Missing("wl_shm"))?;
+        let (width, height) = (
+            self.placement.rect.width.max(1),
+            self.placement.rect.height.max(1),
+        );
+        let stride = width * 4;
+        let size = (stride * height) as usize;
+
+        // A real file rather than a `memfd`: `memfd_create` is a raw syscall on
+        // this target, and one dependency for a test buffer is not a trade
+        // worth making. Unlinked immediately, so nothing is left behind however
+        // the test ends.
+        let path = std::env::temp_dir().join(format!(
+            "uniwidged-blank-{}-{}",
+            std::process::id(),
+            self.surface.id().protocol_id()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| WaylandError::Protocol(e.to_string()))?;
+        let _ = std::fs::remove_file(&path);
+        file.set_len(size as u64)
+            .map_err(|e| WaylandError::Protocol(e.to_string()))?;
+
+        let qh = self.queue.handle();
+        let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+            &qh,
+            (),
+        );
+        self.surface.attach(Some(&buffer), 0, 0);
+        self.surface.damage(0, 0, width as i32, height as i32);
+        self.surface.commit();
+        self.queue
+            .roundtrip(&mut self.state)
+            .map_err(|e| WaylandError::Protocol(e.to_string()))?;
+        // The compositor has taken what it needs by the time the roundtrip
+        // returns, and this surface is never drawn into again — so the pool
+        // goes here, and the file's last descriptor with it.
+        pool.destroy();
+        Ok(())
+    }
+
     /// A layer surface's size is the compositor's decision, not the client's —
     /// it may be smaller than requested on a small output. The caller has to
     /// resize its swapchain to match, which is why this is separate from

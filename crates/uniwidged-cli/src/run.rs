@@ -43,11 +43,247 @@ use uniwidged_shell::{Input, Output, WakePipe};
 struct Running {
     id: WidgetId,
     name: String,
-    /// Index into the window list, which owns the windows for the process's
-    /// lifetime — dropping one destroys the surface wgpu is drawing into.
+    /// Index into the window list, which owns the windows: dropping one
+    /// destroys the surface wgpu is drawing into, so the list outlives every
+    /// use of the surface.
+    ///
+    /// Not stable across a removal — [`stop_widget`] closes the gap and fixes
+    /// up every index above it, which is cheap at the number of widgets a
+    /// desktop has and leaves no empty slots to reason about.
     window: usize,
     surface: SurfaceId,
     locked: bool,
+    /// What it was started from.
+    ///
+    /// Kept so that a reload can notice the file underneath a running widget
+    /// has been replaced — which is what `uniwidged install` over an existing
+    /// widget and `uniwidged update` both do, and which is invisible from the
+    /// name alone.
+    component: std::path::PathBuf,
+}
+
+/// Every widget on the screen, and the windows they draw into.
+///
+/// One struct rather than three parallel lists, because installing and removing
+/// a widget while the desktop runs has to keep them consistent and three
+/// arguments in that order is three chances to pass them in another.
+struct Desktop {
+    /// Owns every window for as long as anything draws into one: dropping a
+    /// window destroys the surface wgpu is presenting to, so this outlives the
+    /// renderer's surface for it.
+    windows: Vec<DesktopWindow>,
+    running: Vec<Running>,
+    /// Which widget an event on a window belongs to.
+    ///
+    /// Holds a [`WidgetId`] rather than an index into `running`, and that is
+    /// the whole reason this map is worth its allocation: an index stops
+    /// meaning what it did the moment a widget is removed, and a stale index
+    /// does not fail — it routes a click to somebody else's widget.
+    by_window: HashMap<u32, WidgetId>,
+}
+
+impl Desktop {
+    fn new() -> Self {
+        Desktop {
+            windows: Vec::new(),
+            running: Vec::new(),
+            by_window: HashMap::new(),
+        }
+    }
+
+    fn index_of(&self, id: WidgetId) -> Option<usize> {
+        self.running.iter().position(|widget| widget.id == id)
+    }
+
+    fn index_named(&self, name: &str) -> Option<usize> {
+        self.running.iter().position(|widget| widget.name == name)
+    }
+
+    fn index_for_window(&self, window: u32) -> Option<usize> {
+        self.by_window
+            .get(&window)
+            .and_then(|id| self.index_of(*id))
+    }
+}
+
+/// Compiles a widget, gives it a window and a swapchain, and starts it.
+///
+/// Called once per widget at start-up and again for every widget that appears
+/// in the configuration while the desktop is running. That it is *one* function
+/// is the point: a second copy for the reload path would be a second copy to
+/// forget the alpha-mode warning in, or the settings, or the order the surface
+/// and the window have to be created in.
+///
+/// Nothing here is fatal to the desktop when it is called from a reload — the
+/// caller decides, because at start-up a widget that will not start is a reason
+/// to stop and say so, and on a running desktop it is a reason to print a line
+/// and leave the other widgets alone.
+fn start_widget(
+    host: &mut Host,
+    desktop: &mut Desktop,
+    entry: &uniwidged_host::config::WidgetConfig,
+) -> Result<usize, String> {
+    let wasm = std::fs::read(&entry.component)
+        .map_err(|e| format!("{}: {e}", entry.component.display()))?;
+    let manifest_text = std::fs::read_to_string(entry.manifest_path())
+        .map_err(|e| format!("{}: {e}", entry.manifest_path().display()))?;
+    let manifest = Manifest::parse(&manifest_text).map_err(|e| e.to_string())?;
+    let policy = entry.policy(&manifest).map_err(|e| e.to_string())?;
+
+    let placement = &entry.placement;
+    let geometry = PhysicalRect::new(placement.x, placement.y, placement.width, placement.height);
+    let window = DesktopWindow::open(geometry, &entry.name).map_err(|e| e.to_string())?;
+    if !window.has_compositor() {
+        eprintln!(
+            "uniwidged: no compositing manager is running, so `{}` will be \
+             an opaque rectangle rather than a widget",
+            entry.name
+        );
+    }
+
+    // The user's own values, resolved against this manifest before the widget
+    // is asked for a view. `install` starts every widget at its declared
+    // defaults, so without this a configuration would be a file nothing reads.
+    let (values, complaints) = entry.settings(&manifest);
+    let id = host
+        .install(&wasm, manifest, policy)
+        .map_err(|e| e.to_string())?;
+    if let Err(e) = host.configure(id, &values) {
+        eprintln!("uniwidged: could not configure `{}`: {e}", entry.name);
+    }
+    for complaint in complaints {
+        // A line in somebody's configuration that is being ignored has to be
+        // findable. `uniwidged configure <name>` says the same thing without
+        // starting a desktop.
+        eprintln!("uniwidged: `{}`: {complaint}", entry.name);
+    }
+    let (display, handle) = window.raw_handles();
+    // SAFETY: the window is kept in `desktop.windows` for as long as the
+    // surface exists — `stop_widget` removes the surface first — and was
+    // configured and mapped above.
+    let surface = unsafe {
+        host.renderer_mut()
+            .add_swapchain_surface(display, handle, geometry.width, geometry.height)
+    }
+    .map_err(|e| e.to_string())?;
+    host.attach(id, surface).map_err(|e| e.to_string())?;
+
+    if host.renderer_mut().alpha_mode(surface)
+        == Some(uniwidged_render::wgpu::CompositeAlphaMode::Opaque)
+    {
+        eprintln!(
+            "uniwidged: this driver offers no transparent swapchain, so `{}` \
+             will sit on a solid rectangle — see ARCHITECTURE.md §10.1",
+            entry.name
+        );
+    }
+
+    desktop.by_window.insert(window.window_id(), id);
+    let index = desktop.running.len();
+    desktop.running.push(Running {
+        id,
+        name: entry.name.clone(),
+        window: desktop.windows.len(),
+        surface,
+        locked: placement.locked,
+        component: entry.component.clone(),
+    });
+    desktop.windows.push(window);
+    Ok(index)
+}
+
+/// Takes a widget off the desktop: its instance, its surface and its window.
+///
+/// **The order is the whole of it**, and it is the reason this is not three
+/// lines at the call site:
+///
+/// 1. [`Host::remove`] first, which detaches the surface from the renderer.
+///    While a surface is attached the next frame composes into it.
+/// 2. The window after, because dropping it destroys what wgpu was presenting
+///    to. Reversed, the renderer would hold a surface over a window the X
+///    server has already forgotten.
+///
+/// Removing from the middle of `windows` shifts every later index, so the
+/// entries that refer to them are fixed up here rather than left to be
+/// discovered — at the number of windows a desktop has, closing the gap costs
+/// nothing and leaves no empty slot to reason about.
+fn stop_widget(host: &mut Host, desktop: &mut Desktop, index: usize) {
+    let widget = desktop.running.remove(index);
+    if let Err(e) = host.remove(widget.id) {
+        // Only reachable if the host and this list disagree about what is
+        // running, which one thread cannot arrange. Said rather than ignored,
+        // because if it ever happens the window is about to go anyway.
+        eprintln!("uniwidged: could not stop `{}`: {e}", widget.name);
+    }
+    let window = desktop.windows.remove(widget.window);
+    desktop.by_window.remove(&window.window_id());
+    drop(window);
+    for other in &mut desktop.running {
+        if other.window > widget.window {
+            other.window -= 1;
+        }
+    }
+}
+
+/// Puts a widget where its placement says, against the monitors that are here.
+///
+/// Separate from [`start_widget`] because at start-up the two cannot happen
+/// together: Wayland reports its outputs through a connection, and a connection
+/// here means a surface — so the first window has to exist before anything
+/// knows what the monitors are called.
+fn place_widget(
+    host: &mut Host,
+    desktop: &mut Desktop,
+    index: usize,
+    entry: &uniwidged_host::config::WidgetConfig,
+    outputs: &[Output],
+    announce: bool,
+) -> Result<(), String> {
+    let resolved = placement::resolve(&entry.placement, outputs);
+    if resolved.displaced {
+        eprintln!(
+            "uniwidged: `{}` belongs on {}, which is not connected; it is \
+             on {} for now and will go back when that monitor returns",
+            entry.name,
+            entry
+                .placement
+                .output
+                .as_deref()
+                .unwrap_or("another monitor"),
+            resolved.output.as_deref().unwrap_or("this one"),
+        );
+    }
+    let window = desktop.running[index].window;
+    if resolved.rect != desktop.windows[window].geometry() {
+        desktop.windows[window]
+            .set_geometry(resolved.rect)
+            .map_err(|e| e.to_string())?;
+        host.renderer_mut()
+            .resize(
+                desktop.running[index].surface,
+                resolved.rect.width,
+                resolved.rect.height,
+            )
+            .map_err(|e| e.to_string())?;
+        host.redraw(desktop.running[index].id);
+    }
+    if announce {
+        let at = desktop.windows[window].geometry();
+        println!(
+            "  {} at {},{} {}x{}{}",
+            entry.name,
+            at.x,
+            at.y,
+            at.width,
+            at.height,
+            resolved
+                .output
+                .as_deref()
+                .map(|o| format!(" on {o}"))
+                .unwrap_or_default(),
+        );
+    }
+    Ok(())
 }
 
 /// Hands a URL to whatever this desktop opens web pages with.
@@ -78,24 +314,77 @@ fn open_link(url: &str) {
     }
 }
 
-/// Reads the configuration again and applies what can be applied.
+/// Whether the widget running under this name is no longer the one the
+/// configuration describes.
+///
+/// Two ways that happens, and both are one command somebody ran:
+///
+/// * **The component moved.** `uniwidged install` over an existing widget
+///   keeps its placement and its settings and points the entry at a new file.
+/// * **The version changed.** `uniwidged update` writes a new component to the
+///   same path in the widget store, so the path proves nothing and the manifest
+///   beside it is what has to be read.
+///
+/// A manifest that will not parse answers `false` rather than `true`: a file
+/// somebody is halfway through editing is not a reason to restart a widget that
+/// is working. It becomes an error at the point something tries to start it.
+fn was_replaced(
+    host: &Host,
+    widget: &Running,
+    entry: &uniwidged_host::config::WidgetConfig,
+) -> bool {
+    if widget.component != entry.component {
+        return true;
+    }
+    let Some(running) = host.widget(widget.id) else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(entry.manifest_path()) else {
+        return false;
+    };
+    match Manifest::parse(&text) {
+        Ok(manifest) => manifest.version != running.manifest().version,
+        Err(_) => false,
+    }
+}
+
+/// Reads the configuration again and applies it to a running desktop.
 ///
 /// What a `SIGHUP` does. The split is the one `ARCHITECTURE.md` §5 makes about
 /// surfaces: [`uniwidged_host::reload::apply`] settles what the *widgets* do —
 /// which is settings, because a setting is a value behind a shared handle —
 /// and this settles what the *windows* do, because only this layer owns them.
 ///
-/// Everything is best effort and nothing here can stop the desktop. A
-/// configuration that has become unreadable is a reason to keep running with
-/// the one already loaded, not a reason to take somebody's widgets off their
-/// screen.
+/// ## Widgets that arrived and widgets that left
+///
+/// Until this did them, both were *reported* and the user was told to restart.
+/// That was the honest answer while there was no [`Host::remove`]: a widget
+/// leaving needs its surface detached before its window is destroyed, and a
+/// widget arriving needs a component compiled, a window created, a swapchain
+/// attached and a placement resolved — and doing half of either on a signal is
+/// how a desktop ends up with a window nothing draws into.
+///
+/// So the order is the feature. [`stop_widget`] and [`start_widget`] are the
+/// same two functions the desktop starts with, and each does the whole of its
+/// half or none of it.
+///
+/// **Removals happen before additions**, which is not arbitrary: a widget
+/// upgraded in place is a removal and an addition of the same name, and doing
+/// them the other way round would have two windows titled the same and two
+/// instances writing the same data directory for as long as it took.
+///
+/// Everything is best effort and nothing here can stop the desktop. A widget
+/// that will not start is one line on the terminal; at start-up the same
+/// failure is fatal, because a desktop that comes up with nothing on it should
+/// say why rather than sit there. A configuration that has become unreadable is
+/// a reason to keep running with the one already loaded, not a reason to take
+/// somebody's widgets off their screen.
 fn reload(
     host: &mut Host,
     config_path: &Path,
-    running: &mut [Running],
-    windows: &mut [DesktopWindow],
+    desktop: &mut Desktop,
     outputs: &[Output],
-) {
+) -> Option<Config> {
     let config = match Config::read(config_path) {
         Ok(config) => config,
         Err(e) => {
@@ -103,7 +392,7 @@ fn reload(
                 "uniwidged: {} is not readable, so nothing changed: {e}",
                 config_path.display()
             );
-            return;
+            return None;
         }
     };
 
@@ -119,11 +408,75 @@ fn reload(
             println!("  `{}` reconfigured", widget.name);
         }
     }
-    for name in &applied.added {
-        println!("  `{name}` is new; it starts when the desktop does");
-    }
+
+    let mut replaced = 0;
+
+    // Gone from the file, or switched off in it. First, for the reason in the
+    // doc comment above.
     for name in &applied.removed {
-        println!("  `{name}` is gone from the configuration; it stops when the desktop does");
+        let Some(index) = desktop.index_named(name) else {
+            continue;
+        };
+        stop_widget(host, desktop, index);
+        println!("  `{name}` stopped");
+    }
+
+    // Still in the file under the same name, and no longer the same widget.
+    // Stopped and started rather than reloaded in place: a new version is a
+    // new component, a new manifest and possibly a new set of settings, and
+    // there is no half of that worth doing separately. What it keeps is what
+    // the file keeps — where it sits, what it was configured with, and whether
+    // it is switched off.
+    for index in (0..desktop.running.len()).rev() {
+        let Some(entry) = config.widget(&desktop.running[index].name).cloned() else {
+            continue;
+        };
+        if !was_replaced(host, &desktop.running[index], &entry) {
+            continue;
+        }
+        stop_widget(host, desktop, index);
+        match start_widget(host, desktop, &entry) {
+            Ok(fresh) => {
+                if let Err(e) = place_widget(host, desktop, fresh, &entry, outputs, false) {
+                    eprintln!("uniwidged: could not place `{}`: {e}", entry.name);
+                }
+                println!("  `{}` replaced with a new version", entry.name);
+            }
+            // The old one is already gone — it had to be, or two instances
+            // would be writing the same data directory. Saying so is all that
+            // is left, and it is better than a desktop that refuses to apply
+            // any of the reload because one widget's new version is broken.
+            Err(e) => eprintln!(
+                "uniwidged: `{}` was replaced by a version that does not \
+                 start, and is now stopped: {e}",
+                entry.name
+            ),
+        }
+        replaced += 1;
+    }
+
+    // And in the file, enabled, and not running.
+    for name in &applied.added {
+        let Some(entry) = config.widget(name) else {
+            continue;
+        };
+        match start_widget(host, desktop, entry) {
+            Ok(index) => {
+                if let Err(e) = place_widget(host, desktop, index, entry, outputs, false) {
+                    eprintln!("uniwidged: could not place `{name}`: {e}");
+                }
+                let at = desktop.windows[desktop.running[index].window].geometry();
+                println!(
+                    "  `{name}` started at {},{} {}x{}",
+                    at.x, at.y, at.width, at.height
+                );
+            }
+            // The desktop keeps running. A widget whose component has gone
+            // missing, whose manifest no longer parses or which asks for a
+            // capability the file does not grant is a widget that does not
+            // start, and the others are none of its business.
+            Err(e) => eprintln!("uniwidged: `{name}` did not start: {e}"),
+        }
     }
 
     // Placement, which the host cannot do: it does not own windows. Counted,
@@ -131,24 +484,21 @@ fn reload(
     // host's half cannot see this one — a live run printed it over a window it
     // had just moved.
     let mut moved = 0;
-    for entry in &running[..] {
-        let Some(widget) = config.widget(&entry.name) else {
+    for index in 0..desktop.running.len() {
+        let Some(widget) = config.widget(&desktop.running[index].name) else {
             continue;
         };
         let resolved = placement::resolve(&widget.placement, outputs);
-        let window = &mut windows[entry.window];
-        if resolved.rect != window.geometry() {
-            if let Err(e) = window.set_geometry(resolved.rect) {
-                eprintln!("uniwidged: could not move `{}`: {e}", entry.name);
+        let window = desktop.running[index].window;
+        if resolved.rect != desktop.windows[window].geometry() {
+            let name = desktop.running[index].name.clone();
+            if let Err(e) = apply_geometry(host, desktop, index, resolved.rect) {
+                eprintln!("uniwidged: could not move `{name}`: {e}");
                 continue;
             }
             println!(
-                "  `{}` moved to {},{} {}x{}",
-                entry.name,
-                resolved.rect.x,
-                resolved.rect.y,
-                resolved.rect.width,
-                resolved.rect.height
+                "  `{name}` moved to {},{} {}x{}",
+                resolved.rect.x, resolved.rect.y, resolved.rect.width, resolved.rect.height
             );
             moved += 1;
         }
@@ -156,7 +506,7 @@ fn reload(
     // The lock switch is this layer's too: it decides what a press means, and
     // the host never sees a pointer.
     let mut relocked = 0;
-    for entry in running.iter_mut() {
+    for entry in desktop.running.iter_mut() {
         if let Some(widget) = config.widget(&entry.name)
             && entry.locked != widget.placement.locked
         {
@@ -174,9 +524,17 @@ fn reload(
         }
     }
 
-    if applied.is_quiet() && moved == 0 && relocked == 0 {
+    if applied.is_quiet() && replaced == 0 && moved == 0 && relocked == 0 {
         println!("  configuration read again; nothing changed");
     }
+    // Handed back so the loop keeps *this* as the configuration it works from.
+    // It is the one the widgets on the screen now match, and two other things
+    // read it: where a dragged widget's new position is written, and where
+    // every placement is re-resolved when the monitors change. Leaving the
+    // loop with the copy it started with would mean a widget installed since
+    // then is in neither — dragged and not saved, and left behind when a
+    // monitor is unplugged.
+    Some(config)
 }
 
 /// What `uniwidged doctor` can say about this session without starting one.
@@ -398,86 +756,20 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // Wayland.
     let mut outputs: Vec<Output> = linux::outputs();
 
-    let mut windows: Vec<DesktopWindow> = Vec::new();
-    let mut running: Vec<Running> = Vec::new();
-    let mut by_window: HashMap<u32, usize> = HashMap::new();
+    let mut desktop = Desktop::new();
 
     for widget in &enabled {
-        let wasm = std::fs::read(&widget.component)
-            .map_err(|e| format!("{}: {e}", widget.component.display()))?;
-        let manifest_text = std::fs::read_to_string(widget.manifest_path())
-            .map_err(|e| format!("{}: {e}", widget.manifest_path().display()))?;
-        let manifest = Manifest::parse(&manifest_text).map_err(|e| e.to_string())?;
-        let policy = widget.policy(&manifest).map_err(|e| e.to_string())?;
-
-        let placement = &widget.placement;
-        let geometry =
-            PhysicalRect::new(placement.x, placement.y, placement.width, placement.height);
-        let window = DesktopWindow::open(geometry, &widget.name).map_err(|e| e.to_string())?;
-        if windows.is_empty() {
-            println!("  shell: {}", window.describe());
+        start_widget(&mut host, &mut desktop, widget)?;
+        if desktop.windows.len() == 1 {
+            println!("  shell: {}", desktop.windows[0].describe());
+            // Wayland reports its outputs through a connection, and a
+            // connection here means a surface — so the monitors are not known
+            // until the first window exists, which is why placement is a
+            // second pass rather than part of opening one.
             if outputs.is_empty() {
-                outputs = window.outputs();
+                outputs = desktop.windows[0].outputs();
             }
         }
-        if !window.has_compositor() {
-            eprintln!(
-                "uniwidged: no compositing manager is running, so `{}` will be \
-                 an opaque rectangle rather than a widget",
-                widget.name
-            );
-        }
-
-        // The user's own values, resolved against this manifest before the
-        // widget is asked for a view. `install` starts every widget at its
-        // declared defaults, so without this a configuration would be a file
-        // nothing reads.
-        let (values, complaints) = widget.settings(&manifest);
-        let id = host
-            .install(&wasm, manifest, policy)
-            .map_err(|e| e.to_string())?;
-        if let Err(e) = host.configure(id, &values) {
-            eprintln!("uniwidged: could not configure `{}`: {e}", widget.name);
-        }
-        for complaint in complaints {
-            // A line in somebody's configuration that is being ignored has to
-            // be findable. `uniwidged configure <name>` says the same thing
-            // without starting a desktop.
-            eprintln!("uniwidged: `{}`: {complaint}", widget.name);
-        }
-        let (display, handle) = window.raw_handles();
-        // SAFETY: the window is kept in `windows` for the lifetime of the
-        // host, and was configured and mapped above.
-        let surface = unsafe {
-            host.renderer_mut().add_swapchain_surface(
-                display,
-                handle,
-                geometry.width,
-                geometry.height,
-            )
-        }
-        .map_err(|e| e.to_string())?;
-        host.attach(id, surface).map_err(|e| e.to_string())?;
-
-        if host.renderer_mut().alpha_mode(surface)
-            == Some(uniwidged_render::wgpu::CompositeAlphaMode::Opaque)
-        {
-            eprintln!(
-                "uniwidged: this driver offers no transparent swapchain, so `{}` \
-                 will sit on a solid rectangle — see ARCHITECTURE.md §10.1",
-                widget.name
-            );
-        }
-
-        by_window.insert(window.window_id(), running.len());
-        running.push(Running {
-            id,
-            name: widget.name.clone(),
-            window: windows.len(),
-            surface,
-            locked: placement.locked,
-        });
-        windows.push(window);
     }
 
     // Now that the monitors are known, put every widget where it belongs.
@@ -485,48 +777,16 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // actually here: a widget whose monitor is unplugged appears on the primary
     // and keeps its name, so docking again puts it back.
     for (index, widget) in enabled.iter().enumerate() {
-        let resolved = placement::resolve(&widget.placement, &outputs);
-        if resolved.displaced {
-            eprintln!(
-                "uniwidged: `{}` belongs on {}, which is not connected; it is \
-                 on {} for now and will go back when that monitor returns",
-                widget.name,
-                widget
-                    .placement
-                    .output
-                    .as_deref()
-                    .unwrap_or("another monitor"),
-                resolved.output.as_deref().unwrap_or("this one"),
-            );
-        }
-        if resolved.rect != windows[running[index].window].geometry() {
-            windows[running[index].window]
-                .set_geometry(resolved.rect)
-                .map_err(|e| e.to_string())?;
-        }
-        let at = windows[running[index].window].geometry();
-        println!(
-            "  {} at {},{} {}x{}{}",
-            widget.name,
-            at.x,
-            at.y,
-            at.width,
-            at.height,
-            resolved
-                .output
-                .as_deref()
-                .map(|o| format!(" on {o}"))
-                .unwrap_or_default(),
-        );
+        place_widget(&mut host, &mut desktop, index, widget, &outputs, true)?;
     }
 
-    println!("  {} widget(s) running\n", windows.len());
+    println!("  {} widget(s) running\n", desktop.windows.len());
 
     // Moving and resizing. The rule for what a press means lives in
     // `uniwidged-host`, tested there against every ambiguity; this is only the
     // wiring — X11 events in, window geometry and a saved placement out.
     let mut pointer = Interaction::new(1.0);
-    pointer.set_bounds(Some(windows[0].desktop_bounds()));
+    pointer.set_bounds(desktop.windows.first().map(|w| w.desktop_bounds()));
 
     // A wall-clock limit, so an automated run terminates. A desktop has none.
     let until = std::env::var("UNIWIDGED_RUN_SECS")
@@ -543,7 +803,16 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         // should reach a widget before that widget is asked for its next view,
         // or the frame it is about to draw is the old one.
         if crate::daemon::take_pending() {
-            reload(&mut host, config_path, &mut running, &mut windows, &outputs);
+            if let Some(fresh) = reload(&mut host, config_path, &mut desktop, &outputs) {
+                config = fresh;
+            }
+            // A widget that arrived brought a window with it, and the pointer's
+            // idea of the desktop's extent came from whichever window existed
+            // first. On a desktop that had none, it had nothing to take it
+            // from.
+            if pointer.bounds().is_none() {
+                pointer.set_bounds(desktop.windows.first().map(|w| w.desktop_bounds()));
+            }
         }
 
         let timeout = host.next_timeout(Instant::now());
@@ -553,15 +822,18 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             (None, None) => None,
             (t, _) => Some(t.unwrap_or(Duration::from_millis(250))),
         };
-        windows[0]
-            .wait_with(timeout, Some(&wake))
-            .map_err(|e| e.to_string())?;
+        // Every window's connection, not the first one's. Each window carries
+        // its own — there is no session object above them on either protocol —
+        // so waiting on one is waiting on one widget, and a click on any other
+        // sat unread until something else happened to wake the process. See
+        // `linux::wait_any`.
+        linux::wait_any(&mut desktop.windows, timeout, Some(&wake)).map_err(|e| e.to_string())?;
 
         // Drained first, then acted on. A burst of motion events during a
         // drag is one geometry change rather than forty, and the last one is
         // the only one that describes where the pointer actually is.
         let mut events = Vec::new();
-        for window in &mut windows {
+        for window in &mut desktop.windows {
             events.extend(window.drain_events().map_err(|e| e.to_string())?);
         }
         // A layer surface's size is the compositor's decision, not the
@@ -569,15 +841,17 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         // output. That is not something the *user* did, so it does not arrive
         // as an input — but the swapchain has to follow it or the last frame is
         // stretched until something else redraws.
-        for index in 0..running.len() {
-            if let Some((width, height)) = windows[running[index].window].take_resize() {
+        for index in 0..desktop.running.len() {
+            let window = desktop.running[index].window;
+            if let Some((width, height)) = desktop.windows[window].take_resize() {
                 host.renderer_mut()
-                    .resize(running[index].surface, width, height)
+                    .resize(desktop.running[index].surface, width, height)
                     .map_err(|e| e.to_string())?;
-                host.redraw(running[index].id);
+                host.redraw(desktop.running[index].id);
             }
         }
         let mut latest_motion = None;
+        let mut monitors_changed = false;
         for input in events {
             match input {
                 Input::Pressed {
@@ -585,11 +859,11 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                     local,
                     root,
                 } => {
-                    let Some(&index) = by_window.get(&window) else {
+                    let Some(index) = desktop.index_for_window(window) else {
                         continue;
                     };
-                    let widget = &running[index];
-                    let geometry = windows[widget.window].geometry();
+                    let widget = &desktop.running[index];
+                    let geometry = desktop.windows[widget.window].geometry();
                     // The host answers this, because the host did the layout:
                     // a press on a button belongs to the widget, and a press
                     // anywhere else moves it.
@@ -608,16 +882,16 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                         // does not lose the pointer the moment it leaves the
                         // window.
                         Press::Move | Press::Resize(_) => {
-                            let _ = windows[widget.window].grab_pointer();
+                            let _ = desktop.windows[widget.window].grab_pointer();
                         }
                     }
                 }
                 Input::Motion { root, .. } => latest_motion = Some(root),
                 Input::Released { root, .. } => {
                     if let Some(id) = pointer.widget()
-                        && let Some(index) = running.iter().position(|w| w.id == id)
+                        && let Some(index) = desktop.index_of(id)
                     {
-                        let _ = windows[running[index].window].release_pointer();
+                        let _ = desktop.windows[desktop.running[index].window].release_pointer();
                     }
                     match pointer.release(root) {
                         Release::Click { widget, at } => {
@@ -636,12 +910,12 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                             }
                         }
                         Release::Placed { widget, rect } => {
-                            if let Some(index) = running.iter().position(|w| w.id == widget) {
-                                apply_geometry(&mut host, &mut windows, &running[index], rect)?;
+                            if let Some(index) = desktop.index_of(widget) {
+                                apply_geometry(&mut host, &mut desktop, index, rect)?;
                                 save_placement(
                                     &mut config,
                                     config_path,
-                                    &running[index].name,
+                                    &desktop.running[index].name,
                                     rect,
                                     &outputs,
                                 );
@@ -654,22 +928,31 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                     // An X11 window has no backing store, so the contents are
                     // gone and the damage check would say nothing changed.
                     // Only the host knows how to put it back.
-                    if let Some(&index) = by_window.get(&window) {
-                        host.redraw(running[index].id);
+                    if let Some(index) = desktop.index_for_window(window) {
+                        host.redraw(desktop.running[index].id);
                     }
                 }
+                // A monitor was plugged in, unplugged, moved or resized.
+                // Collected rather than acted on here: every window's
+                // connection reports it, and a desktop of six widgets would
+                // otherwise re-resolve six times over one docking station.
+                Input::OutputsChanged => monitors_changed = true,
                 Input::Closed { .. } => {
                     println!("  closed");
                     return Ok(());
                 }
             }
         }
+        if monitors_changed {
+            relocate(&mut host, &mut desktop, &config, &mut outputs, &mut pointer)?;
+        }
+
         if let Some(root) = latest_motion
             && let Some(rect) = pointer.motion(root)
             && let Some(id) = pointer.widget()
-            && let Some(index) = running.iter().position(|w| w.id == id)
+            && let Some(index) = desktop.index_of(id)
         {
-            apply_geometry(&mut host, &mut windows, &running[index], rect)?;
+            apply_geometry(&mut host, &mut desktop, index, rect)?;
         }
 
         let report = host
@@ -688,6 +971,66 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     }
 }
 
+/// Asks the session what the monitors are now, and puts every widget back where
+/// its placement says.
+///
+/// What a laptop being docked looks like from inside the loop. Until this
+/// existed, a placement was resolved at start-up and on a reload and at no
+/// other time — so a widget stored against a monitor that was unplugged sat at
+/// coordinates that had stopped existing, and one that came home when the
+/// monitor returned did not.
+///
+/// **The list is asked for again rather than patched.** Both window systems
+/// report *that* the layout changed — X11's screen-change notification carries
+/// a screen size and nothing a placement can use, and Wayland announces and
+/// withdraws outputs one at a time — so the only consistent view is the one
+/// taken after the dust settles. It is asked of a window rather than of the
+/// session, because that is the only way to ask on Wayland at all.
+///
+/// A session that answers with nothing is a session that cannot say — an X
+/// server without RandR, a compositor with `wl_output` below version 4 — and
+/// the right response is to leave every widget exactly where it is. Wiping the
+/// list would move all of them to the origin.
+fn relocate(
+    host: &mut Host,
+    desktop: &mut Desktop,
+    config: &Config,
+    outputs: &mut Vec<Output>,
+    pointer: &mut Interaction,
+) -> Result<(), String> {
+    let Some(window) = desktop.windows.first() else {
+        return Ok(());
+    };
+    let fresh = window.outputs();
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    if fresh == *outputs {
+        return Ok(());
+    }
+    println!("  the monitors changed:");
+    for output in &fresh {
+        println!(
+            "    {} {}x{} at {},{}",
+            output.name, output.rect.width, output.rect.height, output.rect.x, output.rect.y
+        );
+    }
+    *outputs = fresh;
+    // The extent a widget may be dragged within, which has just changed by
+    // definition.
+    pointer.set_bounds(desktop.windows.first().map(|w| w.desktop_bounds()));
+
+    for index in 0..desktop.running.len() {
+        let Some(entry) = config.widget(&desktop.running[index].name).cloned() else {
+            continue;
+        };
+        if let Err(e) = place_widget(host, desktop, index, &entry, outputs, false) {
+            eprintln!("uniwidged: could not place `{}`: {e}", entry.name);
+        }
+    }
+    Ok(())
+}
+
 /// Moves the window, and the surface with it.
 ///
 /// The two have to happen together. A window that changed size has a swapchain
@@ -697,12 +1040,13 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 /// in, and the damage check compares views.
 fn apply_geometry(
     host: &mut Host,
-    windows: &mut [DesktopWindow],
-    widget: &Running,
+    desktop: &mut Desktop,
+    index: usize,
     rect: PhysicalRect,
 ) -> Result<(), String> {
-    let before = windows[widget.window].geometry();
-    windows[widget.window]
+    let widget = &desktop.running[index];
+    let before = desktop.windows[widget.window].geometry();
+    desktop.windows[widget.window]
         .set_geometry(rect)
         .map_err(|e| e.to_string())?;
     if (before.width, before.height) != (rect.width, rect.height) {

@@ -446,6 +446,15 @@ To see it on a desktop: `cargo build --release --target wasm32-wasip2`, then
 `uniwidged install` and `uniwidged run`. `uniwidged snapshot <name>` renders it
 headlessly to a PNG, which is what to put in a pull request.
 
+**Leave the desktop running while you work on it.** `install` over a widget
+that is already on the screen replaces it in place — the old instance is
+stopped, its window and swapchain go with it, and the new one opens where the
+old one sat with the settings it had. So the edit loop is `cargo build` and
+`uniwidged install`, with nothing to restart between them. What is *not*
+carried over is your widget's state: the new instance calls `start` and reads
+what it saved, exactly as it would after a reboot, which is the path most worth
+exercising anyway.
+
 `uniwidged check <widget.wasm>` is the one to run before you publish, and in
 CI. It parses your manifest, loads your component, checks the ABI, starts it,
 draws it **with nothing granted**, and prints the consent lines your users will

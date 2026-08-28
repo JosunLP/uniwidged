@@ -217,6 +217,21 @@ pub struct X11Window {
     atoms: Atoms,
     placement: Placement,
     has_compositor: bool,
+    /// Events taken off the connection by [`X11Window::has_queued`] and not yet
+    /// turned into [`Input`]s.
+    ///
+    /// It exists because `poll_for_event` *removes* what it returns, and the
+    /// wait path has to ask whether anything is queued before it decides to
+    /// sleep. Without somewhere to put the answer, asking the question threw
+    /// the event away — a press dropped exactly in the window between the last
+    /// drain and the next block, which is the moment a click most often
+    /// arrives. The release then reached an interaction model that had never
+    /// seen a press, and the click did nothing.
+    ///
+    /// A `RefCell` rather than `&mut self` because [`X11Window::drain_events`]
+    /// is `&self` and the desktop holds several windows at once; the borrow
+    /// never crosses a call, so it cannot panic.
+    queued: std::cell::RefCell<std::collections::VecDeque<x11rb::protocol::Event>>,
 }
 
 impl X11Window {
@@ -309,9 +324,11 @@ impl X11Window {
                 scale: 1.0,
             },
             has_compositor: false,
+            queued: std::cell::RefCell::new(std::collections::VecDeque::new()),
         };
         this.set_properties(title, kind)?;
         this.has_compositor = this.detect_compositor()?;
+        this.watch_monitors();
 
         this.conn.map_window(this.window).map_err(protocol)?;
         // Position again after mapping: a window manager is entitled to place a
@@ -649,8 +666,11 @@ impl X11Window {
         use std::os::fd::AsRawFd;
         // Anything already queued means there is nothing to wait for. Checking
         // first also closes the race where an event arrived between the last
-        // dispatch and this call, which would otherwise be slept through.
-        if self.conn.poll_for_event().map_err(protocol)?.is_some() {
+        // dispatch and this call, which would otherwise be slept through — and
+        // what was found is *kept*, which is the half this did not do until
+        // `a_press_that_arrives_while_the_loop_is_about_to_sleep_is_not_lost`
+        // was written for it.
+        if self.has_queued()? {
             return Ok(());
         }
         self.conn.flush().map_err(protocol)?;
@@ -659,7 +679,7 @@ impl X11Window {
             None => -1,
         };
         let mut fds = vec![libc::pollfd {
-            fd: self.conn.as_raw_fd(),
+            fd: self.poll_fd(),
             events: libc::POLLIN,
             revents: 0,
         }];
@@ -688,13 +708,82 @@ impl X11Window {
         Ok(())
     }
 
+    /// Asks the server to say when the monitors change.
+    ///
+    /// One event mask on the root window, and it is the difference between a
+    /// desktop that notices a laptop being docked and one that leaves every
+    /// widget at coordinates that stopped existing.
+    ///
+    /// Four masks rather than one, and that is a measurement rather than
+    /// caution. What a placement is resolved against is RandR 1.5's *monitor*
+    /// list, and a monitor declared or withdrawn produces a `RRNotify` with a
+    /// resource-change subtype rather than a screen change — the screen's own
+    /// size has not moved. A cable pulled out produces the output and CRTC
+    /// ones. Selecting only the screen change reports some of the ways a
+    /// desktop's layout can change and not the others.
+    ///
+    /// Failure is not fatal and is not reported. A server without RandR — Xvfb
+    /// without the extension, an old server, a remote display — is one where
+    /// `outputs()` already answers "cannot say", and a widget there is placed
+    /// at the coordinates it was saved with. Refusing to open a window over it
+    /// would be refusing to run on a machine that works.
+    fn watch_monitors(&self) {
+        use x11rb::protocol::randr::{ConnectionExt as _, NotifyMask};
+        let root = self.conn.setup().roots[self.screen].root;
+        if self
+            .conn
+            .randr_select_input(
+                root,
+                NotifyMask::SCREEN_CHANGE
+                    | NotifyMask::OUTPUT_CHANGE
+                    | NotifyMask::CRTC_CHANGE
+                    | NotifyMask::RESOURCE_CHANGE,
+            )
+            .is_ok()
+        {
+            let _ = self.conn.flush();
+        }
+    }
+
+    /// The descriptor this connection's events arrive on.
+    ///
+    /// Public because a desktop with several widgets has several connections
+    /// and has to wait on all of them at once — see
+    /// [`crate::platform::linux::wait_any`]. Waiting on one and hoping is how a
+    /// click on the second widget goes unnoticed until the first happens to
+    /// redraw.
+    pub fn poll_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self.conn.as_raw_fd()
+    }
+
+    /// Whether anything is waiting to be turned into an [`Input`].
+    ///
+    /// Takes whatever the connection has and holds it, rather than looking:
+    /// xcb offers no way to peek, so the only honest way to answer is to take
+    /// the event and put it somewhere [`X11Window::drain_events`] will find it.
+    pub fn has_queued(&self) -> Result<bool, X11Error> {
+        while let Some(event) = self.conn.poll_for_event().map_err(protocol)? {
+            self.queued.borrow_mut().push_back(event);
+        }
+        Ok(!self.queued.borrow().is_empty())
+    }
+
+    /// The next event, from the pushback queue first and the connection after.
+    fn next_event(&self) -> Result<Option<x11rb::protocol::Event>, X11Error> {
+        if let Some(event) = self.queued.borrow_mut().pop_front() {
+            return Ok(Some(event));
+        }
+        self.conn.poll_for_event().map_err(protocol)
+    }
+
     /// Every event queued right now.
     ///
     /// Drained rather than handled one at a time, so a burst of motion events
     /// costs one pass through the loop instead of one each.
     pub fn drain_events(&self) -> Result<Vec<Input>, X11Error> {
         let mut out = Vec::new();
-        while let Some(event) = self.conn.poll_for_event().map_err(protocol)? {
+        while let Some(event) = self.next_event()? {
             match event {
                 x11rb::protocol::Event::ButtonPress(press) if press.detail == 1 => {
                     out.push(Input::Pressed {
@@ -725,6 +814,14 @@ impl X11Window {
                     out.push(Input::Exposed {
                         window: expose.window,
                     });
+                }
+                // A monitor was plugged in, unplugged, moved or resized. The
+                // event carries a screen size and nothing a placement can use,
+                // so it is reported as the bare fact and the caller asks the
+                // server again — see `Input::OutputsChanged`.
+                x11rb::protocol::Event::RandrScreenChangeNotify(_)
+                | x11rb::protocol::Event::RandrNotify(_) => {
+                    out.push(Input::OutputsChanged);
                 }
                 // The only client message a widget subscribes to.
                 x11rb::protocol::Event::ClientMessage(message)

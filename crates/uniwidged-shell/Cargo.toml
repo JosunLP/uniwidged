@@ -8,6 +8,15 @@ repository.workspace = true
 authors.workspace = true
 description = "Desktop-layer surfaces: below every window, above the wallpaper, on four platforms."
 
+[features]
+# Test support, and nothing a release build can reach. It exposes
+# `WaylandWindow::present_blank`, which attaches a shared-memory buffer so that
+# a surface is *mapped* — the precondition for a compositor delivering a
+# pointer event to it, and something a widget never needs because its pixels
+# come from wgpu. Turned on by a `[dev-dependencies]` line and by nothing else,
+# exactly as `uniwidged-runtime`'s `test-support` is.
+test-support = []
+
 [dependencies]
 uniwidged-core.workspace = true
 raw-window-handle.workspace = true
@@ -31,10 +40,18 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 libc = "0.2"
 
 [dev-dependencies]
+# What turns the feature above on for tests, and only for tests.
+uniwidged-shell = { path = ".", features = ["test-support"] }
 # The drag test drives the same interaction model the desktop does, rather than
 # a copy of it — a measurement of a reimplementation measures the
 # reimplementation.
 uniwidged-host.workspace = true
+# `tests/wayland_input.rs` creates a `zwlr_virtual_pointer_v1` — a mouse that
+# does not exist — because headless sway has no input device and there is
+# otherwise nothing to move. Test-only: nothing that ships synthesises input,
+# on either platform.
+wayland-client = { version = "0.31", features = ["dlopen"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # `xtest` fakes pointer input, which is the only way to measure a drag rather
 # than assert one. Test-only: nothing that ships synthesises input.
 x11rb = { workspace = true, features = ["xtest"] }

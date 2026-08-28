@@ -39,7 +39,7 @@ fn a_widget_in_the_file_and_not_running_is_named_as_needing_a_restart() {
     let applied = apply(&mut host, &config(vec![entry("clock", true)]));
     assert_eq!(applied.added, vec!["clock"]);
     assert!(applied.removed.is_empty());
-    assert!(applied.needs_restart());
+    assert!(applied.changes_widgets());
     assert!(!applied.is_quiet());
 }
 
@@ -67,12 +67,12 @@ fn an_empty_file_against_an_empty_desktop_changes_nothing() {
     let applied = apply(&mut host, &Config::default());
     assert_eq!(applied, Applied::default());
     assert!(applied.is_quiet());
-    assert!(!applied.needs_restart());
+    assert!(!applied.changes_widgets());
 }
 
 #[test]
 fn a_report_says_which_kind_of_change_it_is() {
-    // `needs_restart` is what the caller prints a sentence about, and it must
+    // `changes_widgets` is what the caller prints a sentence about, and it must
     // not fire for a change that was applied. A user told to restart after a
     // setting already took effect would restart for nothing and learn to
     // ignore the message.
@@ -80,13 +80,13 @@ fn a_report_says_which_kind_of_change_it_is() {
         reconfigured: vec![WidgetId(1)],
         ..Applied::default()
     };
-    assert!(!applied.needs_restart());
+    assert!(!applied.changes_widgets());
     assert!(!applied.is_quiet());
 
     let complained = Applied {
         complaints: vec!["`clock`: `city` is set and this widget does not declare it".into()],
         ..Applied::default()
     };
-    assert!(!complained.needs_restart());
+    assert!(!complained.changes_widgets());
     assert!(!complained.is_quiet(), "a complaint is worth printing");
 }

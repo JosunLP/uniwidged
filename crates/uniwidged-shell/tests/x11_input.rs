@@ -752,3 +752,237 @@ fn dragging_a_widget_onto_the_other_monitor_records_the_other_monitor() {
         dropped
     );
 }
+
+// --- Two bugs in the wait path, pinned -------------------------------------
+//
+// Both were found by reading rather than by a failure, and both are invisible
+// to every test above: those drive a loop that is already awake. What was
+// wrong was what happens on the way *into* a block.
+
+#[test]
+fn a_press_that_arrives_while_the_loop_is_about_to_sleep_is_not_lost() {
+    // `wait_with` asks whether anything is already queued before it decides to
+    // sleep, because an event that arrived between the last drain and this call
+    // is in a queue rather than on a socket, and polling would sleep through
+    // it. The question is asked with `poll_for_event` — which *removes* what it
+    // returns.
+    //
+    // So the check that existed to stop an event being slept through threw it
+    // away instead. The window is narrow and the symptom is not: a press
+    // vanishes, the release that follows reaches an interaction model that
+    // never saw one, and the click does nothing. Once in a while, for no
+    // reason a user could describe.
+    let Some(server) = server() else { return };
+    let window = X11Window::open_on(
+        Some(&server.display),
+        START,
+        "queued press",
+        WindowKind::DesktopWidget,
+    )
+    .expect("a desktop-layer window");
+    // Everything the mapping produced, drained first — otherwise what is
+    // waited for below is an `Expose` from a moment ago and the press has not
+    // been sent yet.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        let _ = window.wait(Some(Duration::from_millis(50)));
+        let _ = window.drain_events();
+    }
+
+    let pointer = Pointer::open(&server.display);
+    pointer.move_to((START.x + 40) as i16, (START.y + 40) as i16);
+    pointer.button(true);
+
+    // Wait for the press to be sitting on the connection, without draining it:
+    // this is exactly the state the loop is in when it comes round and calls
+    // `wait_with`.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !window.has_queued().expect("queued") {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        window.has_queued().expect("queued"),
+        "no press ever arrived"
+    );
+
+    // The call that used to eat it. It returns at once, having found something.
+    window
+        .wait_with(Some(Duration::from_secs(1)), None)
+        .expect("wait");
+
+    let events = window.drain_events().expect("drain");
+    assert!(
+        events
+            .iter()
+            .any(|input| matches!(input, Input::Pressed { .. })),
+        "the press was swallowed by the check that exists to notice it: {events:?}"
+    );
+    pointer.button(false);
+}
+
+#[test]
+fn a_press_on_the_second_widget_wakes_a_desktop_that_is_blocked() {
+    // Every window carries its own connection — `XCBConnection::connect` per
+    // window, because a window is opened by whoever wants one and there is no
+    // session object above them. The desktop's loop waited on the *first*
+    // window's descriptor.
+    //
+    // On an idle desktop `next_timeout` is `None`, which is the property
+    // `ARCHITECTURE.md` §5 is built around: the process blocks with no timer at
+    // all. So a click on the second widget sat unread on the second connection
+    // until something else happened to wake the process — which, on a desktop
+    // of two clocks, is up to a second, and on a desktop of two static widgets
+    // is forever.
+    //
+    // `wait_any` polls every connection at once. This is the test that would
+    // hang without it.
+    let Some(server) = server() else { return };
+    let first = uniwidged_shell::platform::linux::DesktopWindow::X11(Box::new(
+        X11Window::open_on(
+            Some(&server.display),
+            PhysicalRect::new(40, 40, 200, 120),
+            "first",
+            WindowKind::DesktopWidget,
+        )
+        .expect("the first window"),
+    ));
+    let second_rect = PhysicalRect::new(600, 300, 200, 120);
+    let second = uniwidged_shell::platform::linux::DesktopWindow::X11(Box::new(
+        X11Window::open_on(
+            Some(&server.display),
+            second_rect,
+            "second",
+            WindowKind::DesktopWidget,
+        )
+        .expect("the second window"),
+    ));
+    let mut windows = vec![first, second];
+
+    // Everything the mapping produced, so that what is waited for below is the
+    // press and not an `Expose` from a moment ago.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        let _ = uniwidged_shell::platform::linux::wait_any(
+            &mut windows,
+            Some(Duration::from_millis(50)),
+            None,
+        );
+        for window in &mut windows {
+            let _ = window.drain_events();
+        }
+    }
+
+    let pointer = Pointer::open(&server.display);
+    pointer.move_to((second_rect.x + 100) as i16, (second_rect.y + 60) as i16);
+    pointer.button(true);
+
+    // A real block — no timeout at all, exactly as an idle desktop does. If
+    // only the first window's descriptor were polled this would never return.
+    let woke = std::thread::spawn(move || {
+        uniwidged_shell::platform::linux::wait_any(&mut windows, None, None).expect("wait");
+        let mut seen = Vec::new();
+        for window in &mut windows {
+            seen.extend(window.drain_events().expect("drain"));
+        }
+        seen
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !woke.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        woke.is_finished(),
+        "the loop blocked through a press on the second widget"
+    );
+    let seen = woke.join().expect("the waiting thread");
+    assert!(
+        seen.iter()
+            .any(|input| matches!(input, Input::Pressed { .. })),
+        "woke, but not with the press: {seen:?}"
+    );
+    pointer.button(false);
+}
+
+/// Turns the nested server's only output off, or back on.
+///
+/// The nearest thing a nested server has to a cable being pulled out, and the
+/// only RandR change `Xvfb` will actually perform: it advertises one fixed mode
+/// and refuses `--newmode`, `--fb` and — the discovery that cost this test its
+/// first version — `--setmonitor`, which declares a RandR 1.5 monitor and
+/// notifies **nobody**, because the screen's own configuration has not moved.
+///
+/// The exit status is deliberately not asserted. Turning the output off leaves
+/// `xrandr` trying to shrink a framebuffer this server will not shrink, so it
+/// reports a `BadValue` *after* the CRTC has already gone — which is the state
+/// being simulated, arrived at the way a real one would be.
+fn set_output(display: &str, on: bool) {
+    let _ = Command::new("xrandr")
+        .env("DISPLAY", display)
+        .args(["--output", "screen", if on { "--auto" } else { "--off" }])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Waits for the desktop to be told the monitors changed.
+fn saw_outputs_changed(window: &X11Window) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let _ = window.wait(Some(Duration::from_millis(50)));
+        if window
+            .drain_events()
+            .expect("drain")
+            .iter()
+            .any(|input| matches!(input, Input::OutputsChanged))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn a_monitor_going_away_and_coming_back_reaches_the_desktop() {
+    // The event a docking station produces, and the one nothing here listened
+    // for until now. `uniwidged_host::placement` has always been able to put a
+    // widget back on the monitor it was stored against — but only when asked,
+    // and until this the desktop was asked at start-up and on a reload and at
+    // no other time. So a laptop docked while a desktop was running left every
+    // widget at coordinates belonging to a layout that no longer existed, and
+    // one undocked left them off the screen entirely.
+    //
+    // What is measured here is the notification arriving on a widget's own
+    // connection. The placement arithmetic it triggers is measured to death
+    // three tests up, against two monitors.
+    let Some(server) = server() else { return };
+    let window = X11Window::open_on(
+        Some(&server.display),
+        START,
+        "hotplug",
+        WindowKind::DesktopWidget,
+    )
+    .expect("a desktop-layer window");
+
+    // Everything the mapping produced, so what arrives below is the hotplug.
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        let _ = window.wait(Some(Duration::from_millis(50)));
+        let _ = window.drain_events();
+    }
+
+    set_output(&server.display, false);
+    assert!(
+        saw_outputs_changed(&window),
+        "a monitor went away and the desktop was never told"
+    );
+
+    set_output(&server.display, true);
+    assert!(
+        saw_outputs_changed(&window),
+        "a monitor came back and the desktop was never told"
+    );
+    // And the layout it would resolve against is readable again, which is what
+    // makes the notification worth acting on.
+    let outputs = window.outputs().expect("outputs");
+    assert!(!outputs.is_empty(), "{outputs:?}");
+}

@@ -32,7 +32,10 @@ use, the fonts, and the keychain this machine can offer.
 .B reload
 Tell a running desktop to read its configuration again. Every command that
 writes the configuration already does this; \fBreload\fR is for a file you
-edited by hand.
+edited by hand. A widget that has appeared is started, one that has gone or
+been switched off is stopped, one whose version has changed is replaced, and
+the rest are reconfigured and moved where the file says \(em all without
+restarting the desktop.
 .SS Installing
 .TP
 .B check " \fIwidget\fR.wasm"

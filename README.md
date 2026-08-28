@@ -76,11 +76,26 @@ model.
 >
 > **A running desktop is told.** `uniwidged configure`, `move` and `lock` reach
 > a desktop that is already running — one `SIGHUP`, one byte down the wake pipe
-> that already exists, and a widget reconfigured without being restarted.
-> Installing and removing still take a restart, and say so, because doing half
-> of that on a signal is how a desktop ends up with a window nothing draws into.
-> And a link a widget draws now opens: `https` only, to a host the manifest
-> declared, checked at the click rather than when the view was built.
+> that already exists, and a widget reconfigured without being restarted. And a
+> link a widget draws now opens: `https` only, to a host the manifest declared,
+> checked at the click rather than when the view was built.
+>
+> **And widgets arrive and leave while it is running.** `install`, `remove`,
+> `enable`, `disable` and `update` all reach a desktop that is on the screen:
+> a widget appears where its placement says, or goes, taking its window, its
+> swapchain and its outstanding work with it — and leaving what it saved, which
+> only `remove --purge` deletes. An upgrade is applied live too, because a new
+> version under the same name is invisible to a diff of names and is exactly
+> what `update` produces. Measured against the real binary on a real X server
+> with a second process changing the configuration underneath it, because the
+> order a window and a swapchain are destroyed in is not something a type check
+> can be wrong about.
+>
+> **And it notices the monitors changing.** A screen plugged in, unplugged,
+> moved or resized reaches the loop on both window systems, and every widget is
+> put back where its placement says — which is what makes "remembers which
+> monitor it was on" true of a laptop that is docked while it is running, and
+> not only of one that is restarted afterwards.
 >
 > **And now there is somewhere to find widgets.** A registry is one signed TOML
 > file on a static host — no accounts, no API, no server to run — and

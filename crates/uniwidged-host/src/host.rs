@@ -374,6 +374,49 @@ impl Host {
         Ok(id)
     }
 
+    /// Stops a widget and forgets everything this host held for it.
+    ///
+    /// The counterpart of [`Host::install`], and the reason it exists is that a
+    /// desktop is not restarted every time somebody removes a widget. Until
+    /// this method there was no way to take one off a running host at all, and
+    /// `uniwidged remove` said "it stops when the desktop does".
+    ///
+    /// ## The order is the whole of it
+    ///
+    /// 1. **The surface goes first.** While a surface is attached, the next
+    ///    `tick` composes into it. Removing the widget first would leave a
+    ///    surface nothing draws into, and on a real desktop that is a window
+    ///    holding whatever was last presented.
+    /// 2. **Then the schedule**, so nothing wakes for a widget that is gone.
+    /// 3. **Then outstanding work.** A `fetch` in flight belongs to a
+    ///    [`WidgetId`], and ids are handed out by a counter — so a result left
+    ///    behind is a result the *next* widget could collect. `Tasks::forget`
+    ///    is what makes that impossible, and it is the same call a suspension
+    ///    makes for the same reason.
+    /// 4. **Then the instance**, whose drop releases the WASM memory, and the
+    ///    last composition with it.
+    ///
+    /// What is deliberately *not* touched is the widget's data directory or
+    /// its keychain namespace. Removing a widget from a running desktop is not
+    /// a decision to destroy what it saved — `uniwidged remove --purge` is
+    /// where that is asked for, and it asks.
+    ///
+    /// The surface is returned so the caller can destroy whatever it was
+    /// backed by, which only the caller knows about. `None` means the widget
+    /// never had one.
+    pub fn remove(&mut self, id: WidgetId) -> Result<Option<SurfaceId>, HostError> {
+        let index = self.index(id)?;
+        let surface = self.widgets[index].surface;
+        if let Some(surface) = surface {
+            self.renderer.remove_surface(surface);
+        }
+        self.scheduler.remove(id);
+        self.tasks.forget(id);
+        self.composed.remove(&id);
+        self.widgets.remove(index);
+        Ok(surface)
+    }
+
     /// Gives a widget somewhere to draw.
     pub fn attach(&mut self, id: WidgetId, surface: SurfaceId) -> Result<(), HostError> {
         self.widget_mut(id)?.surface = Some(surface);

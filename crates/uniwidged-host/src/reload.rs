@@ -17,13 +17,19 @@
 //! one `ARCHITECTURE.md` §5 makes about surfaces, and for the same reason: a
 //! headless test and a real desktop run the same host.
 //!
-//! **Installing and removing cannot**, and that is named rather than faked. A
-//! widget arriving needs a component compiled, a window created, a swapchain
-//! attached and a placement resolved; a widget leaving needs all of that undone
-//! in the right order. Doing half of it on a signal is how a desktop ends up
-//! with a window nothing draws into. So a widget that appeared or disappeared
-//! is *reported*, the user is told it takes a restart, and the ones that are
-//! running keep working.
+//! **Installing and removing can**, since [`Host::remove`] exists — and this
+//! module still does neither, which is the same split again. A widget arriving
+//! needs a component compiled, a window created, a swapchain attached and a
+//! placement resolved; a widget leaving needs all of that undone in the right
+//! order, and three of those four are windows. So what this reports is *which
+//! widgets appeared and which disappeared*, and the caller — which owns the
+//! windows — starts and stops them. `uniwidged_cli::run` is where that happens,
+//! and the order it does it in is the whole of the feature.
+//!
+//! This was reported and refused until 2026-08-28, with the honest reason that
+//! doing half of it on a signal is how a desktop ends up with a window nothing
+//! draws into. What changed is not the risk but that the two halves are now
+//! each one function that does all of its half or none of it.
 //!
 //! ## Why a diff rather than a rebuild
 //!
@@ -51,10 +57,16 @@ pub struct Applied {
     /// "nothing changed" over a configuration it had just applied. The ones
     /// that do redraw are already scheduled, so a caller needs no second list.
     pub reconfigured: Vec<WidgetId>,
-    /// Named in the file, enabled, and not running. Needs a restart.
+    /// Named in the file, enabled, and not running.
+    ///
+    /// A name rather than an id, because the widget has none yet — it is a
+    /// line in a file and nothing else. The caller looks it up in the same
+    /// config it passed in and starts it.
     pub added: Vec<String>,
-    /// Running, and either gone from the file or disabled in it. Needs a
-    /// restart.
+    /// Running, and either gone from the file or disabled in it.
+    ///
+    /// Still running when this returns. Stopping one means destroying a window,
+    /// and this module cannot see windows.
     pub removed: Vec<String>,
     /// What was wrong with the file — a key a widget does not declare, a value
     /// it would not accept. Reported rather than fatal, for the reason
@@ -63,13 +75,16 @@ pub struct Applied {
 }
 
 impl Applied {
-    /// Whether anything changed that the user should be told takes a restart.
-    pub fn needs_restart(&self) -> bool {
+    /// Whether the set of widgets on the desktop changed, as opposed to what
+    /// the ones already there were told.
+    ///
+    /// The caller acts on this: it is the half that costs a window.
+    pub fn changes_widgets(&self) -> bool {
         !self.added.is_empty() || !self.removed.is_empty()
     }
 
     pub fn is_quiet(&self) -> bool {
-        self.reconfigured.is_empty() && self.complaints.is_empty() && !self.needs_restart()
+        self.reconfigured.is_empty() && self.complaints.is_empty() && !self.changes_widgets()
     }
 }
 

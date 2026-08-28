@@ -951,7 +951,7 @@ fn a_configuration_file_reaches_a_running_widget_without_restarting_it() {
     let applied = uniwidged_host::reload::apply(&mut host, &config);
     assert_eq!(applied.reconfigured, vec![id]);
     assert!(applied.complaints.is_empty(), "{applied:?}");
-    assert!(!applied.needs_restart());
+    assert!(!applied.changes_widgets());
 
     host.tick(now().0, now().1).expect("tick");
     assert_eq!(
@@ -990,19 +990,19 @@ fn a_reload_that_changes_nothing_tells_nobody() {
 }
 
 #[test]
-fn a_widget_removed_from_the_file_keeps_running_and_is_named() {
-    // Removing needs a window and a swapchain undone in the right order, and
-    // doing half of that on a signal is how a desktop ends up with a window
-    // nothing draws into. So the widget keeps working, the fact is reported,
-    // and the user is told it takes a restart — which is a better answer than
-    // a widget that half-disappears.
+fn a_widget_removed_from_the_file_is_named_and_left_to_the_caller() {
+    // `reload::apply` may not stop a widget itself: stopping one means
+    // destroying a window, and this module cannot see windows. So it reports
+    // the name and the widget is *still running* when it returns — which is
+    // the contract `uniwidged_cli::run` relies on when it calls `stop_widget`
+    // afterwards, and the reason the two halves are separable at all.
     let mut host = host();
     let id = install(&mut host, "conformance", Policy::deny_all());
     host.tick(now().0, now().1).expect("tick");
 
     let applied = uniwidged_host::reload::apply(&mut host, &Config::default());
     assert_eq!(applied.removed, vec!["conformance"]);
-    assert!(applied.needs_restart());
+    assert!(applied.changes_widgets());
 
     // Still there, still drawing.
     host.tick(now().0, now().1).expect("tick");
@@ -1203,4 +1203,130 @@ fn a_widget_without_the_command_capability_is_refused_by_the_desktop() {
     let (i, w) = now();
     host.tick(i, w).expect("tick");
     assert_eq!(outcome(&host, id, "command"), "not-granted");
+}
+
+// --- Taking a widget off a running desktop --------------------------------
+//
+// The counterpart of installing one, and the thing M7 named and did not build:
+// until `Host::remove` existed, removing a widget was a sentence saying "it
+// stops when the desktop does". These are about the two ways doing it wrong
+// shows up — a surface nothing draws into, and a schedule for a widget that is
+// not there.
+
+#[test]
+fn a_removed_widget_is_gone_from_everything_the_host_holds() {
+    let mut host = host();
+    let keep = install(&mut host, "clock", Policy::deny_all());
+    let go = install(&mut host, "conformance", Policy::deny_all());
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    assert_eq!(host.widgets().len(), 2);
+    assert_eq!(host.renderer_mut().surface_count(), 2);
+
+    let surface = host.remove(go).expect("the widget was installed");
+
+    assert!(surface.is_some(), "it had somewhere to draw");
+    assert_eq!(host.widgets().len(), 1);
+    assert_eq!(host.widget(keep).map(|widget| widget.id), Some(keep));
+    assert!(host.widget(go).is_none());
+    // The surface goes with it. A surface left behind is one the next frame
+    // composes into and nothing presents — on a real desktop, a window holding
+    // whatever was there when the widget left.
+    assert_eq!(host.renderer_mut().surface_count(), 1);
+    // And its last composition, which is what hit-testing and the
+    // accessibility tree are read from.
+    assert!(host.composed(go).is_none());
+}
+
+#[test]
+fn removing_a_widget_that_was_never_there_is_an_error_rather_than_a_shrug() {
+    // A reload that removed the same widget twice, or a caller holding an id
+    // from before a restart. Answering `Ok` would let both go unnoticed.
+    let mut host = host();
+    let id = install(&mut host, "clock", Policy::deny_all());
+    host.remove(id).expect("the first time");
+    assert!(host.remove(id).is_err(), "and not the second");
+}
+
+#[test]
+fn a_removed_widget_is_never_scheduled_again() {
+    // The clock asks to be woken every second, so it is the one widget in the
+    // repository whose schedule can be seen from outside. With it removed the
+    // desktop has nothing to wake for, and `next_timeout` says so — which is
+    // what makes the loop block rather than turn once a second for a widget
+    // nobody can see.
+    let mut host = host();
+    let id = install(&mut host, "clock", Policy::deny_all());
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    assert!(
+        host.next_timeout(Instant::now()).is_some(),
+        "a running clock schedules itself"
+    );
+
+    host.remove(id).expect("remove");
+    assert_eq!(
+        host.next_timeout(Instant::now()),
+        None,
+        "a desktop with no widgets must block, not poll"
+    );
+    for _ in 0..5 {
+        let (i, w) = now();
+        let report = host.tick(i, w).expect("tick");
+        assert!(report.ran.is_empty(), "a removed widget ran: {report:?}");
+        assert!(report.is_quiet(), "a removed widget drew: {report:?}");
+    }
+}
+
+#[test]
+fn a_widget_installed_after_a_removal_is_a_different_widget() {
+    // Ids come from a counter, and the whole of `Tasks` is keyed by one. If a
+    // removal left the counter alone but its outstanding work behind, the next
+    // widget installed would be handed somebody else's answer.
+    let mut host = host();
+    let first = install(&mut host, "clock", Policy::deny_all());
+    host.remove(first).expect("remove");
+    let second = install(&mut host, "clock", Policy::deny_all());
+    assert_ne!(first, second, "an id is never handed out twice");
+
+    let (i, w) = now();
+    let report = host.tick(i, w).expect("tick");
+    assert_eq!(report.redrawn, vec![second]);
+}
+
+#[test]
+fn what_a_widget_saved_survives_being_removed() {
+    // Removing a widget from a running desktop is not a decision to destroy
+    // what it saved: `uniwidged remove --purge` is where that is asked for,
+    // and it asks. The counter is the widget whose whole state is a file.
+    let scratch = Scratch::new("remove-keeps-data");
+    let mut host = host();
+    host.set_data_root(&scratch.0);
+    let id = install(
+        &mut host,
+        "counter",
+        Policy::from_granted([Capability::Fs("state".into())]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    // One click, so that there is something to have saved — through the host's
+    // own hit-testing, as every other click in this file is.
+    let button = host
+        .composed(id)
+        .expect("a composition")
+        .hit_rects
+        .get(&NodeId::named("increment"))
+        .copied()
+        .expect("the Count button should be on screen");
+    host.click(id, Point::new(button.center().x, button.center().y))
+        .expect("click");
+    tick_until_redraw(&mut host, Duration::from_secs(5));
+    let saved = scratch.0.join("counter/state/count");
+    assert!(saved.exists(), "the widget wrote its state");
+
+    host.remove(id).expect("remove");
+    assert!(
+        saved.exists(),
+        "removing a widget deleted what it had saved"
+    );
 }

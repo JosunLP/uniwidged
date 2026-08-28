@@ -2703,6 +2703,7 @@ dependencies = [
  "raw-window-handle",
  "uniwidged-core",
  "uniwidged-host",
+ "uniwidged-shell",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",

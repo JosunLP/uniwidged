@@ -391,11 +391,12 @@ fn command_enable(args: &[String], enabled: bool) -> Result<(), String> {
         "  `{name}` is {}",
         if enabled { "enabled" } else { "disabled" }
     );
-    // Starting and stopping a widget needs a window created or destroyed in
-    // the right order, which is not something to do on a signal — see
-    // `uniwidged_host::reload`. So this one really does take a restart, and
-    // saying so is better than a user waiting for something to happen.
-    println!("  it takes effect the next time the desktop starts");
+    // A running desktop starts or stops it on the nudge above. It is the one
+    // thing a reload used to refuse — a widget arriving or leaving is a window
+    // created or destroyed, and doing half of that on a signal is how a desktop
+    // ends up with a window nothing draws into. `uniwidged_cli::run` does the
+    // whole of each half or none of it, and this line is no longer a promise
+    // that something happens later.
     Ok(())
 }
 

@@ -179,6 +179,20 @@ The rules that keep this honest:
 under 0.1 % CPU averaged over a minute, zero frames submitted, and the GPU at
 its idle clock. Regressions are caught by a soak test, not by hoping.
 
+**Blocking on nothing means blocking on everything.** The loop's block is a
+single `poll`, and what it has to cover is every descriptor a widget could be
+woken through. On Linux that is more than one: a window carries its own
+connection — `XCBConnection::connect` per X11 window, a `wl_display` per
+Wayland one — because a window is opened by whoever wants one and neither
+protocol has a session object above them. Waiting on the first window's
+descriptor is therefore waiting on the *first widget*, and with `next_timeout`
+answering `None` — the property this whole section is about — a click on the
+second sat unread until something else happened to wake the process. So the
+loop polls every connection and the wake pipe together, and asks each window
+whether it already has something queued *before* it decides to sleep at all:
+an event that arrived between the last drain and this call is in a queue, not
+on a socket, and no amount of polling will report it.
+
 ## 6. The sandbox boundary
 
 ### What crosses it
@@ -404,15 +418,44 @@ is therefore checked twice before anything is sent: that the process exists,
 and that it is *this program*, by name. A pid file whose process is gone or is
 something else is stale, and stale means ignored.
 
-**What can change while a desktop runs, and what cannot**, is decided by
-whether it can be done atomically. Settings can: they are values behind a
-shared handle, which is why `Host::configure` was built to reach a running
-widget rather than to restart one. Placement can, by the layer that owns
-windows. Installing and removing cannot — a widget arriving needs a component
-compiled, a window created, a swapchain attached and a placement resolved, and
-doing half of that on a signal is how a desktop ends up with a window nothing
-draws into. So those are *reported*, the user is told it takes a restart, and
-everything already running keeps working.
+**What can change while a desktop runs is decided by whether it can be done
+atomically.** Settings can: they are values behind a shared handle, which is
+why `Host::configure` was built to reach a running widget rather than to
+restart one. Placement can, by the layer that owns windows.
+
+**Installing and removing can too**, and the shape of that answer is the point.
+A widget arriving needs a component compiled, a window created, a swapchain
+attached and a placement resolved; a widget leaving needs all of that undone in
+the right order. Doing half of either on a signal is how a desktop ends up with
+a window nothing draws into — which is why it was refused for as long as it
+was, and why the thing that changed is not the risk but the shape of the code.
+Each half is now one function that does all of it or none of it, and the two
+live in the layer that owns windows. `reload::apply` still refuses to do either:
+it reports which names appeared and disappeared, and every widget it names is
+still running when it returns.
+
+**The order within a removal is the whole of its correctness.** The renderer's
+surface is detached first, because while a surface is attached the next frame
+composes into it; the window goes second, because dropping it destroys what
+wgpu was presenting to. Reversed, the renderer holds a surface over a window
+the server has already forgotten. A widget's outstanding asynchronous work is
+dropped with it — ids come from a counter, and a result left behind is a result
+the *next* widget would collect.
+
+**A removal is not a deletion.** What a widget saved stays on disk and its
+keychain namespace stays where it is; `uniwidged remove --purge` is where
+destroying either is asked for, and it asks.
+
+**The monitors can change too**, and nothing the user did causes it. Both
+window systems report a layout change — a RandR event mask on the X11 root
+window, `wl_output` globals announced and withdrawn on Wayland — and both
+arrive as one `Input::OutputsChanged` carrying no list. That is deliberate:
+each protocol reports a layout one piece at a time, so a desktop acting on each
+piece would place a widget against a layout the server had already moved on
+from. It means *ask again*, and the loop asks once however many notifications
+arrived, then re-resolves every placement. A session that answers with an empty
+list is one that cannot say, and every widget is left exactly where it is —
+wiping the list would move all of them to the origin.
 
 ### Anything that takes time
 
@@ -617,8 +660,20 @@ back a PNG. It is not a courtesy: it is how every visual test in CI runs.
 * **Scheduler soak** — eight idle widgets for five minutes; assert zero frames
   submitted and the CPU budget of §5 held.
 * **Shell tests** — the Wayland path against a nested headless compositor
-  (`cage` / `weston --backend=headless`) in CI. Windows, macOS and X11 shells
-  are exercised on their own runners.
+  (a headless `sway` the suite starts itself) and the X11 path against an
+  `Xvfb` it starts itself, both in CI. Windows and macOS shells are exercised
+  on their own runners.
+* **Synthesised input, on both window systems.** A drag is not a claim anybody
+  should make from a unit test, so neither is made: X11's is driven through
+  `XTest` and Wayland's through `zwlr_virtual_pointer_v1` — a mouse that does
+  not exist, whose events still go through the compositor's own focus and
+  coordinate handling before they come back out. Nothing that ships synthesises
+  input on either platform; both are test-only dependencies.
+* **A running desktop, changed underneath it.** The real binary on a real X
+  server with a real device, with a second process installing, removing,
+  enabling and disabling widgets while it draws. It is the only place the order
+  a window and a swapchain are destroyed in can be wrong, because getting it
+  wrong does not fail a type check — it fails on a screen.
 
 ## 10. Known risks
 

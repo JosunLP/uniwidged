@@ -87,6 +87,19 @@ pub enum Input {
     Closed {
         window: u32,
     },
+    /// The monitors changed: one was plugged in, unplugged, moved or resized.
+    ///
+    /// Carries no list, on purpose. Both window systems report *that* the
+    /// layout changed rather than what it now is — X11's screen-change
+    /// notification is a bare event, and Wayland announces and withdraws
+    /// `wl_output` globals one at a time — and a desktop that acted on a
+    /// partial view would place a widget against a layout the server had
+    /// already moved on from. So this means *ask again*, and the caller does,
+    /// once, however many notifications arrived.
+    ///
+    /// It is not attributed to a window either. It is a fact about the
+    /// machine, and every widget on it is affected.
+    OutputsChanged,
 }
 
 /// One monitor, as the platform reports it.

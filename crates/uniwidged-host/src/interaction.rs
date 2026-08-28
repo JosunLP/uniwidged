@@ -220,6 +220,16 @@ impl Interaction {
         self.bounds = bounds;
     }
 
+    /// What that area currently is, if the caller has said.
+    ///
+    /// `None` is what a desktop with no windows on it has to answer: the
+    /// extent is read off a window, and a desktop whose last widget was
+    /// removed has none until one is installed again. The caller asks so that
+    /// it knows to look again.
+    pub fn bounds(&self) -> Option<PhysicalRect> {
+        self.bounds
+    }
+
     /// The widget a gesture is currently on, if any.
     ///
     /// The caller routes motion by this rather than by the window the event
