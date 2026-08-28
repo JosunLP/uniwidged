@@ -10,7 +10,7 @@ uniwidged new my-widget
 cd my-widget
 cargo test                                    # your logic, natively
 cargo build --release --target wasm32-wasip2  # the component
-uniwidged install target/wasm32-wasip2/release/my_widget.wasm
+uniwidged install target/wasm32-wasip2/release/my_widget.wasm --allow-unsigned
 uniwidged run
 ```
 
@@ -318,7 +318,43 @@ To see it on a desktop: `cargo build --release --target wasm32-wasip2`, then
 `uniwidged install` and `uniwidged run`. `uniwidged snapshot <name>` renders it
 headlessly to a PNG, which is what to put in a pull request.
 
-## 8. What the host does to you
+`uniwidged check <widget.wasm>` is the one to run before you publish, and in
+CI. It parses your manifest, loads your component, checks the ABI, starts it,
+draws it **with nothing granted**, and prints the consent lines your users will
+see. Everything `install` would find out, without installing anything.
+
+## 8. Publishing it
+
+`install` refuses an unsigned widget. That is not ceremony: a `.wasm` somebody
+sent you is a program, and the sandbox only starts protecting you once it is
+running.
+
+```sh
+uniwidged keygen --out ~/.uniwidged-signing-key   # once, ever
+uniwidged sign target/wasm32-wasip2/release/my_widget.wasm \
+    --key ~/.uniwidged-signing-key                # each release
+```
+
+That writes `my_widget.wasm.sig` beside the component. Ship both, and put your
+public key in your README. People install it with:
+
+```sh
+uniwidged trust <your public key> --name "your name"
+uniwidged install my_widget.wasm
+```
+
+**Your signature covers the manifest as well as the component.** That is
+deliberate and it matters to you: without it, anybody could take your signed
+widget, add `net:*.somewhere.test` to its capabilities, and pass it on with a
+signature that still verifies under your name — and your users would approve it
+because they recognised you. Re-sign whenever either file changes.
+
+Keep the secret key. Anybody who has it can publish widgets as you. `keygen`
+writes it `0600` and refuses to overwrite one.
+
+For your own builds, `--allow-unsigned` says so out loud and installs anyway.
+
+## 9. What the host does to you
 
 Running other people's code on a desktop only works because of two limits, and
 you should know they are there:
@@ -335,7 +371,7 @@ A fresh instance starts from `Default::default()`, which is why the counter in
 §5 keeps its number on disk: **your state should be derived from your data**,
 and then a restart costs nothing.
 
-## 9. Worked examples
+## 10. Worked examples
 
 Three reference widgets in this repository, one per capability, each small
 enough to read in a sitting:
@@ -351,7 +387,7 @@ And [`widgets/conformance`](../widgets/conformance), which tries every
 capability and reports what happened — the fastest way to see what the sandbox
 actually does.
 
-## 10. What you cannot do
+## 11. What you cannot do
 
 Named so nobody has to find out the hard way:
 

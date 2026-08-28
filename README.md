@@ -40,7 +40,13 @@ model.
 > never waits; and HTTPS to a granted host — where a redirect off that host is
 > refused, because otherwise a grant for one name is a grant for wherever that
 > name points. `secrets` is what is left, and the conformance suite asserts
-> that, so implementing it and forgetting to say so fails a test. The
+> that, so implementing it and forgetting to say so fails a test.
+>
+> **And a widget you did not write is checked before it runs.** `install`
+> refuses one that is not signed by a key this machine was told to trust, and
+> the signature covers the *manifest* as well as the component — otherwise
+> somebody could widen what a widget may do and keep a signature its author's
+> users recognise. The
 > workspace builds from crates.io alone: no sibling checkout, no private
 > repository, `git clone && cargo test`. Widgets can be dragged, resized and
 > pinned, and they remember which monitor they were on — measured against a
@@ -193,7 +199,7 @@ crates/
   uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
   uniwidged-guest      the SDK widget authors compile against
   uniwidged-host       the daemon: scheduler, configuration, policy
-  uniwidged-cli        `uniwidged run · new · install · list · lock · move · doctor`
+  uniwidged-cli        `uniwidged run · new · check · install · sign · trust · …`
 wit/uniwidged.wit      the host/guest contract
 widgets/clock          the reference widget for `locale`
 widgets/system-load    the reference widget for `metrics`

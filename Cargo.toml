@@ -79,6 +79,17 @@ wit-bindgen = "0.61.1"
 # all. See NOTICE.md.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+# --- Signing --------------------------------------------------------------
+# Verifying that a widget came from somebody the user decided to trust. Ed25519
+# because the keys and signatures are short enough to paste into a README, and
+# `ed25519-dalek` because it is pure Rust — a signature check is the one thing
+# that runs *before* the sandbox does, so it is the last place to want a C
+# parser. `getrandom` rather than a `rand` version dance: key generation needs
+# thirty-two bytes of entropy and nothing else.
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
+sha2 = "0.10"
+getrandom = "0.3"
+
 # --- Utilities ------------------------------------------------------------
 # `localtime_r`, for the one thing no std API exposes: this machine's offset
 # from UTC, daylight saving included. Unix only, and already in the graph

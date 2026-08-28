@@ -19,8 +19,6 @@ uniwidged-host.workspace = true
 uniwidged-render.workspace = true
 uniwidged-runtime.workspace = true
 uniwidged-shell.workspace = true
-
-[dev-dependencies]
-# The scaffold test instantiates what `uniwidged new` produced, so it needs the
-# view vocabulary to read the widget's answer back.
+# `check` counts the nodes a widget draws, so the CLI needs the view vocabulary
+# rather than only the crates that consume it.
 uniwidged-view.workspace = true

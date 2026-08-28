@@ -184,8 +184,11 @@ pub fn create(args: &[String]) -> Result<(), String> {
         "\n  cd {name}\n  \
          cargo test                                    # its logic, natively\n  \
          cargo build --release --target wasm32-wasip2  # the component\n  \
-         uniwidged install target/wasm32-wasip2/release/{}.wasm\n  \
-         uniwidged run\n",
+         uniwidged install target/wasm32-wasip2/release/{}.wasm --allow-unsigned\n  \
+         uniwidged run\n\n  \
+         `--allow-unsigned` is for your own builds. To publish, \
+         `uniwidged keygen`\n  once and `uniwidged sign` each release; the \
+         people installing it\n  `uniwidged trust` your public key.\n",
         name.replace('-', "_")
     );
     Ok(())
@@ -373,9 +376,13 @@ fn readme(name: &str) -> String {
          ```sh\n\
          cargo test                                    # its logic, natively\n\
          cargo build --release --target wasm32-wasip2  # the component\n\
-         uniwidged install target/wasm32-wasip2/release/{underscored}.wasm\n\
+         uniwidged check target/wasm32-wasip2/release/{underscored}.wasm\n\
+         uniwidged install target/wasm32-wasip2/release/{underscored}.wasm --allow-unsigned\n\
          uniwidged run\n\
          ```\n\n\
+         `--allow-unsigned` is for your own builds. To publish, run\n\
+         `uniwidged keygen` once and `uniwidged sign` each release, and give\n\
+         people your public key so they can `uniwidged trust` it.\n\n\
          `widget.toml` is what your users are asked to approve. Everything in\n\
          it is enforced by the host, so ask for what you need and nothing more.\n"
     )

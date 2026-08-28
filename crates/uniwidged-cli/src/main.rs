@@ -3,7 +3,12 @@
 //! ```text
 //! uniwidged run [--config PATH]     start the desktop in the foreground
 //! uniwidged new <name>              scaffold a widget that already builds
+//! uniwidged check <widget.wasm>     is this a widget, and who signed it?
 //! uniwidged install <widget.wasm>   install a widget, showing what it asks for
+//! uniwidged enable|disable <name>   turn one on or off without forgetting it
+//! uniwidged remove <name>           uninstall, and optionally forget its data
+//! uniwidged keygen | sign           publish widgets under a key of your own
+//! uniwidged trust|untrust|trusted   whose signatures this machine accepts
 //! uniwidged list                    what is installed, and what it was granted
 //! uniwidged lock <name>             pin a widget where it is
 //! uniwidged unlock <name>           let it be dragged again
@@ -22,10 +27,12 @@
 //! one is missing the symptom is visual and the cause is not. So it reports
 //! what the session actually offers, in the same words the start-up log uses.
 
+mod check;
 mod new;
 mod paths;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod run;
+mod trust;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,8 +44,17 @@ fn main() -> ExitCode {
     let result = match command.as_deref() {
         Some("run") => command_run(&rest),
         Some("new") => new::create(&rest),
+        Some("check") => check::check(&rest),
         Some("install") => command_install(&rest),
         Some("list") => command_list(&rest),
+        Some("enable") => command_enable(&rest, true),
+        Some("disable") => command_enable(&rest, false),
+        Some("remove") => command_remove(&rest),
+        Some("keygen") => trust::keygen(&rest),
+        Some("sign") => trust::sign(&rest),
+        Some("trust") => trust::trust(&rest),
+        Some("untrust") => trust::untrust(&rest),
+        Some("trusted") => trust::list(&rest),
         Some("lock") => command_lock(&rest, true),
         Some("unlock") => command_lock(&rest, false),
         Some("move") => command_move(&rest),
@@ -65,7 +81,14 @@ fn print_usage() {
          USAGE:\n  \
            uniwidged run [--config PATH]     start the desktop in the foreground\n  \
            uniwidged new <name> [--dir D] [--sdk P] [--capability C]…\n  \
-           uniwidged install <widget.wasm>   install a widget, showing what it asks for\n  \
+           uniwidged check <widget.wasm>     is this a widget, and who signed it?\n  \
+           uniwidged enable|disable <name>   turn one on or off\n  \
+           uniwidged remove <name> [--purge] uninstall it\n  \
+           uniwidged keygen [--out F]        a signing key of your own\n  \
+           uniwidged sign <w.wasm> --key F   sign a widget you publish\n  \
+           uniwidged trust <key> [--name N]  accept that key's signatures\n  \
+           uniwidged untrust <key> | trusted\n  \
+           uniwidged install <widget.wasm> [--allow-unsigned]\n  \
            uniwidged list                    what is installed, and what it was granted\n  \
            uniwidged lock <name>             pin a widget where it is\n  \
            uniwidged unlock <name>           let it be dragged again\n  \
@@ -108,6 +131,7 @@ fn command_install(args: &[String]) -> Result<(), String> {
 
     let component = args
         .first()
+        .filter(|a| !a.starts_with('-'))
         .ok_or("which widget? `uniwidged install <widget.wasm>`")?;
     let component = PathBuf::from(component)
         .canonicalize()
@@ -117,9 +141,44 @@ fn command_install(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     let manifest = Manifest::parse(&text).map_err(|e| e.to_string())?;
 
+    // Provenance before consent. The list below is only worth reading if it is
+    // the list the author wrote — a signature covering the component alone
+    // would let anybody widen it, which is why `signature::digest` covers both.
+    let allow_unsigned = args.iter().any(|a| a == "--allow-unsigned");
+    let signed_by = match trust::provenance(&component, &manifest_path)? {
+        trust::Provenance::Trusted(who) => Some(who),
+        trust::Provenance::Refused(why) => {
+            // Never installable, `--allow-unsigned` or not: a signature that
+            // does not verify is a positive claim that something is wrong,
+            // where a missing one is only an absence.
+            return Err(format!(
+                "{} has a signature and it does not check out: {why}",
+                component.display()
+            ));
+        }
+        trust::Provenance::Unsigned if allow_unsigned => None,
+        trust::Provenance::Unsigned => {
+            return Err(format!(
+                "{} is not signed.\n  \
+                 If you built it yourself, `uniwidged install --allow-unsigned` \
+                 says so out loud.\n  \
+                 If somebody sent it to you, ask them for the signature and \
+                 their key, then `uniwidged trust <key>`.",
+                component.display()
+            ));
+        }
+    };
+
     // What the user is actually asked. Everything the runtime later enforces
     // is on this list, and nothing that is not.
     println!("\n  {} {}", manifest.name, manifest.version);
+    match &signed_by {
+        Some(who) => println!("  signed by {who}"),
+        None => println!(
+            "  NOT SIGNED — you are trusting this because you chose to, and \
+             nothing here checked anything"
+        ),
+    }
     if !manifest.description.is_empty() {
         println!("  {}", manifest.description);
     }
@@ -294,6 +353,84 @@ fn command_move(args: &[String]) -> Result<(), String> {
             .map(|o| format!(" on {o}"))
             .unwrap_or_default(),
     );
+    Ok(())
+}
+
+/// `uniwidged enable|disable <name>` — on or off, without forgetting it.
+///
+/// A disabled widget keeps its placement, its grants and its data. That is the
+/// difference between this and `remove`, and it is why both exist: turning a
+/// widget off to see whether it was the one making a noise should not cost the
+/// half-hour somebody spent putting it where they wanted it.
+fn command_enable(args: &[String], enabled: bool) -> Result<(), String> {
+    use uniwidged_host::config::Config;
+
+    let name = args
+        .first()
+        .filter(|a| !a.starts_with('-'))
+        .ok_or("which widget? `uniwidged enable <name>`")?;
+    let path = config_path(args);
+    let mut config = Config::read(&path).map_err(|e| e.to_string())?;
+    let widget = config
+        .widget_mut(name)
+        .ok_or_else(|| format!("`{name}` is not installed; try `uniwidged list`"))?;
+
+    if widget.enabled == enabled {
+        println!(
+            "  `{name}` is already {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        return Ok(());
+    }
+    widget.enabled = enabled;
+    config.write(&path).map_err(|e| e.to_string())?;
+    println!(
+        "  `{name}` is {}; it takes effect the next time the desktop starts",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    Ok(())
+}
+
+/// `uniwidged remove <name> [--purge]` — uninstall.
+///
+/// The widget's **data is kept** unless `--purge` says otherwise. Removing a
+/// widget is something people do to try one out and change their minds, and a
+/// note-taking widget that silently took the notes with it would be a bug
+/// nobody could undo. `--purge` says what it does before doing it.
+fn command_remove(args: &[String]) -> Result<(), String> {
+    use uniwidged_host::config::Config;
+
+    let name = args
+        .first()
+        .filter(|a| !a.starts_with('-'))
+        .ok_or("which widget? `uniwidged remove <name> [--purge]`")?;
+    let path = config_path(args);
+    let mut config = Config::read(&path).map_err(|e| e.to_string())?;
+    if config.widget(name).is_none() {
+        return Err(format!("`{name}` is not installed; try `uniwidged list`"));
+    }
+    config.widgets.retain(|widget| widget.name != *name);
+    config.write(&path).map_err(|e| e.to_string())?;
+    println!("  removed `{name}` from {}", path.display());
+
+    let data = paths::widget_data_dir(name);
+    if args.iter().any(|a| a == "--purge") {
+        match std::fs::remove_dir_all(&data) {
+            Ok(()) => println!("  and deleted {}", data.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("  it had stored nothing")
+            }
+            Err(e) => eprintln!("uniwidged: could not delete {}: {e}", data.display()),
+        }
+    } else if data.exists() {
+        // Said rather than left to be discovered. Somebody removing a widget to
+        // reinstall it wants this; somebody removing it for good wants to know
+        // it is still there.
+        println!(
+            "  its data is still in {} — `--purge` deletes it",
+            data.display()
+        );
+    }
     Ok(())
 }
 

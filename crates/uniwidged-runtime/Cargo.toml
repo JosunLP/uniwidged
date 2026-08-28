@@ -15,6 +15,10 @@ serde = { workspace = true }
 toml.workspace = true
 # The `net` capability's transport. See the workspace manifest on why rustls.
 ureq.workspace = true
+# Checking who signed a widget, before it is ever instantiated.
+ed25519-dalek.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
 # Optional so that the capability, manifest and lifecycle logic — which is most
 # of this crate and all of its security boundary — stays testable without a
 # multi-minute Wasmtime compile. On by default since M3.

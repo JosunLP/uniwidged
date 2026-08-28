@@ -286,6 +286,14 @@ The budget is the desktop's: eight tasks at once, sixteen outstanding per
 widget. A widget that starts a request on every view is refused rather than
 queued, because a queue hides the bug.
 
+The eight workers are **created with the host, not with the work**. Starting a
+request happens inside a widget's `view`, on its call deadline, and spawning a
+thread is not bounded work — on a loaded machine it exceeds a frame, and the
+widget is then interrupted for something the host chose to do. `start` is a
+lock, a send and a wake. The workers park on a channel, so an idle desktop pays
+nothing for them, and dropping the registry closes the channel, which is the
+whole of the shutdown.
+
 **The wake pipe.** §5's loop blocks with no timer at all when nothing is
 scheduled, so a task finishing on another thread would otherwise sit in memory
 until the user moved the mouse. The loop therefore waits on two descriptors:
@@ -347,6 +355,22 @@ is an anchor and margins), is never told where the pointer is on the desktop
 for), and is grabbed implicitly for the duration of a press. Above that file
 the host's interaction model is identical, which is what stops a widget
 behaving differently depending on the session it was started in.
+
+### Before the sandbox: who wrote this?
+
+The sandbox makes running somebody else's code reasonable *once it is running*.
+`uniwidged install` asks the question before that, and refuses a widget not
+signed by a key the user added to `trusted-keys` — one line per key, in the
+configuration directory, meant to be read by the person it protects. There is no
+certificate hierarchy and no revocation protocol: everything larger than a file
+of keys needs infrastructure this project could not honestly run, and a security
+mechanism nobody can inspect is one nobody should rely on.
+
+**The signature covers the component and its manifest together.** The manifest
+is what the user is shown and what the runtime enforces, so a signature over the
+component alone would let anybody widen a signed widget's capabilities and pass
+it on under its author's name. The two are length-prefixed into the digest, and
+the digest is domain-separated.
 
 ### Containment
 

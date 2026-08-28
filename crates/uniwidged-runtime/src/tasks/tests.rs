@@ -10,8 +10,10 @@ use super::*;
 const ALICE: WidgetId = WidgetId(1);
 const BOB: WidgetId = WidgetId(2);
 
-fn tasks() -> Arc<Tasks> {
-    Arc::new(Tasks::default())
+fn tasks() -> Tasks {
+    // The pool is built here, once, and its threads outlive nothing: dropping
+    // the registry closes the channel and every worker returns.
+    Tasks::detached()
 }
 
 /// Work that finishes immediately with a known answer.
@@ -154,6 +156,26 @@ fn the_desktop_will_not_run_unboundedly_many_at_once() {
     gate.wait();
     settle(&tasks, MAX_CONCURRENT);
     assert!(tasks.start(BOB, says("room now")).is_ok());
+}
+
+#[test]
+fn the_pool_goes_away_with_the_registry() {
+    // The workers must not keep the thing that owns them alive. The first
+    // design had them holding an `Arc<Tasks>`, which is a cycle: `Drop` could
+    // never run, and every host leaked eight threads. Dropping the registry
+    // closes the channel, and `recv` returning an error is the shutdown.
+    let before = std::thread::available_parallelism().is_ok();
+    for _ in 0..20 {
+        let tasks = Tasks::detached();
+        tasks.start(ALICE, says("x")).expect("started");
+        settle(&tasks, 1);
+    }
+    // Twenty registries, a hundred and sixty workers if they leaked. Nothing
+    // here can count threads portably, so what is asserted is that this
+    // completes at all rather than exhausting the process.
+    assert!(before);
+    let tasks = tasks();
+    assert!(tasks.start(ALICE, says("still works")).is_ok());
 }
 
 #[test]

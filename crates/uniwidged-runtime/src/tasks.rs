@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use uniwidged_core::WidgetId;
@@ -59,7 +59,8 @@ pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// refused, not queued: a queue would hide the bug.
 pub const MAX_IN_FLIGHT: usize = 16;
 
-/// The most tasks running at once, across the whole desktop.
+/// The most tasks running at once, across the whole desktop, and therefore the
+/// size of the worker pool.
 ///
 /// A widget cannot spawn a thread, and this is why: eight widgets each allowed
 /// sixteen in flight is a hundred and twenty-eight processes, and a desktop
@@ -193,49 +194,126 @@ pub type Work = Box<dyn FnOnce() -> TaskResult + Send + 'static>;
 /// Shared by the whole desktop — one counter, one concurrency budget — and safe
 /// to hand into the sandbox because every entry names its owner.
 pub struct Tasks {
-    tasks: Mutex<HashMap<u32, Task>>,
-    /// Tokens that finished and have not been reported to the host yet.
-    finished: Mutex<Vec<(WidgetId, u32)>>,
+    /// Everything a worker needs in order to record what it did. Separate from
+    /// the pool on purpose — see the note on the pool below.
+    shared: Arc<Shared>,
     /// Never zero: a token of zero is too easy to produce by accident, and a
     /// widget that sent one would be handed whatever happened to be first.
     next: AtomicU32,
+    /// The only sender. Dropping this closes the channel, every worker's
+    /// `recv` returns an error, and the pool goes away — which is the whole
+    /// shutdown mechanism, and why nothing here polls.
+    hand_out: mpsc::Sender<Queued>,
+}
+
+/// What a worker touches. Deliberately *not* `Tasks` itself.
+///
+/// The first version had the workers hold an `Arc<Tasks>`, which is a cycle: a
+/// `Tasks` whose own threads keep it alive is never dropped, so its `Drop` — the
+/// one that was supposed to stop them — could not run. Eight leaked threads per
+/// host, and a shutdown path that read correctly and was unreachable.
+///
+/// Splitting it is what fixes it. The workers keep this; `Tasks` keeps the only
+/// `Sender`; and dropping `Tasks` closes the channel.
+struct Shared {
+    tasks: Mutex<HashMap<u32, Task>>,
+    /// Tokens that finished and have not been reported to the host yet.
+    finished: Mutex<Vec<(WidgetId, u32)>>,
     running: AtomicUsize,
     waker: Waker,
 }
 
-impl Default for Tasks {
-    fn default() -> Self {
-        Self::new(Waker::flag_only())
-    }
+struct Queued {
+    token: u32,
+    owner: WidgetId,
+    work: Work,
 }
 
 impl Tasks {
+    /// Builds the registry and its worker pool.
+    ///
+    /// **The threads are created here**, not when work arrives. `start` is
+    /// called from inside a widget's `view`, on its call deadline — sixteen
+    /// milliseconds — and spawning a thread is not bounded work: it reserves a
+    /// stack and makes a `clone` syscall, and on a loaded machine that has been
+    /// measured at more than a frame. A widget interrupted mid-call while the
+    /// host was creating a thread on its behalf would be the sandbox punishing
+    /// a widget for the host's decision.
+    ///
+    /// This was not the first design. Spawning per task passed every test in
+    /// this file and failed once, in a full-workspace run, as "the widget
+    /// should have produced a view" — a trap with no obvious cause, of the kind
+    /// that gets dismissed as flakiness.
     pub fn new(waker: Waker) -> Self {
-        Self {
+        let shared = Arc::new(Shared {
             tasks: Mutex::new(HashMap::new()),
             finished: Mutex::new(Vec::new()),
-            next: AtomicU32::new(1),
             running: AtomicUsize::new(0),
             waker,
+        });
+        let (hand_out, take) = mpsc::channel::<Queued>();
+        // One receiver, shared. `mpsc` has no multi-consumer receiver, and a
+        // mutex around it is exactly what a work queue is: whoever holds it
+        // takes the next job.
+        let take = Arc::new(Mutex::new(take));
+
+        for worker in 0..MAX_CONCURRENT {
+            let shared = Arc::clone(&shared);
+            let take = Arc::clone(&take);
+            let _ = std::thread::Builder::new()
+                .name(format!("uniwidged-task-{worker}"))
+                .spawn(move || {
+                    loop {
+                        // Blocks with no timeout, so an idle desktop's eight
+                        // workers cost exactly nothing. `Err` means the sender
+                        // is gone, which is the shutdown.
+                        let queued = {
+                            let take = take.lock().expect("the queue outlives no panic");
+                            match take.recv() {
+                                Ok(queued) => queued,
+                                Err(_) => return,
+                            }
+                        };
+                        let result = (queued.work)();
+                        shared.complete(queued.token, queued.owner, result);
+                    }
+                });
+        }
+
+        Self {
+            shared,
+            next: AtomicU32::new(1),
+            hand_out,
         }
     }
 
+    /// A registry with a pool and no way to interrupt a loop. What a test and a
+    /// headless host use.
+    pub fn detached() -> Self {
+        Self::new(Waker::flag_only())
+    }
+
     pub fn waker(&self) -> &Waker {
-        &self.waker
+        &self.shared.waker
     }
 
     /// Starts one piece of work and returns its token immediately.
     ///
     /// `Err` is a reason the widget can act on: it has too many requests
     /// outstanding, or the desktop is already doing as much as it will.
-    pub fn start(self: &Arc<Self>, owner: WidgetId, work: Work) -> Result<u32, StartError> {
-        let mut tasks = self.tasks.lock().expect("the task lock outlives no panic");
+    pub fn start(&self, owner: WidgetId, work: Work) -> Result<u32, StartError> {
+        let mut tasks = self
+            .shared
+            .tasks
+            .lock()
+            .expect("the task lock outlives no panic");
         if tasks.values().filter(|t| t.owner == owner).count() >= MAX_IN_FLIGHT {
             return Err(StartError::TooManyForWidget);
         }
-        // Claimed before the thread is spawned, so that two widgets asking at
+        // Claimed before the work is handed over, so that two widgets asking at
         // once cannot both see the last slot.
         if self
+            .shared
             .running
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
                 (running < MAX_CONCURRENT).then_some(running + 1)
@@ -255,18 +333,16 @@ impl Tasks {
         );
         drop(tasks);
 
-        let shared = Arc::clone(self);
-        let spawned = std::thread::Builder::new()
-            .name("uniwidged-task".into())
-            .spawn(move || {
-                let result = work();
-                shared.complete(token, owner, result);
-            });
-        if spawned.is_err() {
-            // The machine would not give us a thread. Undo everything rather
-            // than leaving a token that can never finish.
-            self.running.fetch_sub(1, Ordering::AcqRel);
-            self.tasks
+        // Everything from here is bounded: a send onto a channel a worker is
+        // already waiting on. No allocation the caller can influence, no
+        // syscall that can take a frame. That is what makes this callable from
+        // inside a widget's deadline at all.
+        if self.hand_out.send(Queued { token, owner, work }).is_err() {
+            // Every worker is gone, which only happens if the pool could not be
+            // created. Undo rather than leaving a token that never finishes.
+            self.shared.running.fetch_sub(1, Ordering::AcqRel);
+            self.shared
+                .tasks
                 .lock()
                 .expect("the task lock outlives no panic")
                 .remove(&token);
@@ -275,6 +351,75 @@ impl Tasks {
         Ok(token)
     }
 
+    /// Collects a finished result.
+    ///
+    /// Checks the owner, which is the whole reason tokens are safe to hand to a
+    /// sandbox: they are drawn from one counter, so nothing stops a widget
+    /// guessing its neighbour's.
+    pub fn take(&self, owner: WidgetId, token: u32) -> Result<TaskResult, TakeError> {
+        self.shared.take(owner, token)
+    }
+
+    /// Every token that has finished since this was last called, and who owns
+    /// it.
+    ///
+    /// Drained, so a token is reported once. The host turns each into a
+    /// `delivered` event and schedules the widget.
+    pub fn finished(&self) -> Vec<(WidgetId, u32)> {
+        self.shared.waker.take();
+        std::mem::take(
+            &mut *self
+                .shared
+                .finished
+                .lock()
+                .expect("the finished lock outlives no panic"),
+        )
+    }
+
+    /// Whether anything is waiting to be delivered.
+    ///
+    /// The scheduler asks: a desktop with a finished task is not idle, however
+    /// little else is scheduled.
+    pub fn has_finished(&self) -> bool {
+        !self
+            .shared
+            .finished
+            .lock()
+            .expect("the finished lock outlives no panic")
+            .is_empty()
+    }
+
+    /// Forgets everything a widget owns.
+    ///
+    /// Called when a widget is removed or suspended. A task already running
+    /// still runs — there is no way to un-spawn a process — but its result is
+    /// dropped rather than delivered to whatever takes that widget's id next.
+    pub fn forget(&self, owner: WidgetId) {
+        self.shared
+            .tasks
+            .lock()
+            .expect("the task lock outlives no panic")
+            .retain(|_, task| task.owner != owner);
+        self.shared
+            .finished
+            .lock()
+            .expect("the finished lock outlives no panic")
+            .retain(|(that, _)| *that != owner);
+    }
+
+    /// How many tasks this widget has outstanding, for diagnostics and tests.
+    pub fn in_flight(&self, owner: WidgetId) -> usize {
+        self.shared
+            .tasks
+            .lock()
+            .expect("the task lock outlives no panic")
+            .values()
+            .filter(|task| task.owner == owner)
+            .count()
+    }
+}
+
+impl Shared {
     fn complete(&self, token: u32, owner: WidgetId, result: TaskResult) {
         self.running.fetch_sub(1, Ordering::AcqRel);
         {
@@ -295,12 +440,7 @@ impl Tasks {
         self.waker.signal();
     }
 
-    /// Collects a finished result.
-    ///
-    /// Checks the owner, which is the whole reason tokens are safe to hand to a
-    /// sandbox: they are drawn from one counter, so nothing stops a widget
-    /// guessing its neighbour's.
-    pub fn take(&self, owner: WidgetId, token: u32) -> Result<TaskResult, TakeError> {
+    fn take(&self, owner: WidgetId, token: u32) -> Result<TaskResult, TakeError> {
         let mut tasks = self.tasks.lock().expect("the task lock outlives no panic");
         let Some(task) = tasks.get(&token) else {
             return Err(TakeError::Gone);
@@ -313,59 +453,6 @@ impl Tasks {
         }
         let task = tasks.remove(&token).expect("just found");
         Ok(task.result.expect("just checked"))
-    }
-
-    /// Every token that has finished since this was last called, and who owns
-    /// it.
-    ///
-    /// Drained, so a token is reported once. The host turns each into a
-    /// `delivered` event and schedules the widget.
-    pub fn finished(&self) -> Vec<(WidgetId, u32)> {
-        self.waker.take();
-        std::mem::take(
-            &mut *self
-                .finished
-                .lock()
-                .expect("the finished lock outlives no panic"),
-        )
-    }
-
-    /// Whether anything is waiting to be delivered.
-    ///
-    /// The scheduler asks: a desktop with a finished task is not idle, however
-    /// little else is scheduled.
-    pub fn has_finished(&self) -> bool {
-        !self
-            .finished
-            .lock()
-            .expect("the finished lock outlives no panic")
-            .is_empty()
-    }
-
-    /// Forgets everything a widget owns.
-    ///
-    /// Called when a widget is removed or suspended. A task already running
-    /// still runs — there is no way to un-spawn a process — but its result is
-    /// dropped rather than delivered to whatever takes that widget's id next.
-    pub fn forget(&self, owner: WidgetId) {
-        self.tasks
-            .lock()
-            .expect("the task lock outlives no panic")
-            .retain(|_, task| task.owner != owner);
-        self.finished
-            .lock()
-            .expect("the finished lock outlives no panic")
-            .retain(|(that, _)| *that != owner);
-    }
-
-    /// How many tasks this widget has outstanding, for diagnostics and tests.
-    pub fn in_flight(&self, owner: WidgetId) -> usize {
-        self.tasks
-            .lock()
-            .expect("the task lock outlives no panic")
-            .values()
-            .filter(|task| task.owner == owner)
-            .count()
     }
 }
 

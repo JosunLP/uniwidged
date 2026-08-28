@@ -1,0 +1,376 @@
+//! Installing a widget you did not write.
+//!
+//! The sandbox is what makes running somebody else's code reasonable once it is
+//! running. These are the questions before that — is this the thing its author
+//! published, is its author somebody this machine trusts, and can I look before
+//! I agree? — driven through the actual binary, because the answer a user gets
+//! is the one the command line prints.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+/// A configuration directory that removes itself, standing in for a user's.
+struct Machine(PathBuf);
+
+impl Machine {
+    fn new(what: &str) -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "uniwidged-lifecycle-{what}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("a scratch directory");
+        Self(path)
+    }
+
+    fn config(&self) -> PathBuf {
+        self.0.join("config.toml")
+    }
+
+    /// Runs the CLI as this machine's user would.
+    fn run(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_uniwidged"))
+            .args(args)
+            // The whole of this machine's state — configuration, trusted keys
+            // and widget data — hangs off one variable, which is what makes a
+            // test like this possible at all.
+            .env("UNIWIDGED_CONFIG", self.config())
+            .output()
+            .expect("the CLI should be runnable")
+    }
+
+    fn ok(&self, args: &[&str]) -> String {
+        let output = self.run(args);
+        assert!(
+            output.status.success(),
+            "`uniwidged {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    fn fails(&self, args: &[&str]) -> String {
+        let output = self.run(args);
+        assert!(
+            !output.status.success(),
+            "`uniwidged {}` should have failed, and said: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        String::from_utf8_lossy(&output.stderr).to_string()
+    }
+}
+
+impl Drop for Machine {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The clock, built once and copied where each test wants it.
+fn reference_widget(into: &Path) -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../widgets/clock");
+    let built = Command::new(env!("CARGO"))
+        .current_dir(&source)
+        .args(["build", "--release", "--target", "wasm32-wasip2"])
+        .status()
+        .expect("cargo");
+    assert!(built.success(), "the clock widget should build");
+
+    let component = into.join("clock.wasm");
+    std::fs::copy(
+        source.join("target/wasm32-wasip2/release/clock_widget.wasm"),
+        &component,
+    )
+    .expect("copy the component");
+    std::fs::copy(source.join("widget.toml"), into.join("clock.toml")).expect("copy the manifest");
+    component
+}
+
+#[test]
+fn an_unsigned_widget_is_refused_and_the_message_says_both_ways_out() {
+    // The default. A user who was sent a `.wasm` should be told what to ask for
+    // rather than have it quietly installed — and a developer building their
+    // own should not be stuck.
+    let machine = Machine::new("unsigned");
+    let component = reference_widget(&machine.0);
+
+    let said = machine.fails(&["install", component.to_str().unwrap()]);
+    assert!(said.contains("not signed"), "{said}");
+    assert!(said.contains("--allow-unsigned"), "it should say: {said}");
+    assert!(said.contains("uniwidged trust"), "and: {said}");
+    assert!(!machine.config().exists(), "and nothing was installed");
+}
+
+#[test]
+fn a_developer_can_install_their_own_build_by_saying_so() {
+    let machine = Machine::new("allow-unsigned");
+    let component = reference_widget(&machine.0);
+
+    let said = machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+    assert!(
+        said.contains("NOT SIGNED"),
+        "it should say so loudly rather than in passing: {said}"
+    );
+    assert!(machine.ok(&["list"]).contains("clock"));
+}
+
+#[test]
+fn an_author_signs_a_user_trusts_and_the_widget_installs() {
+    // The whole path, through the binary: keygen, sign, trust, install.
+    let machine = Machine::new("signed");
+    let component = reference_widget(&machine.0);
+    let key = machine.0.join("signing-key");
+
+    let generated = machine.ok(&["keygen", "--out", key.to_str().unwrap()]);
+    let public = generated
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("keygen prints the public key")
+        .to_string();
+    assert_eq!(public.len(), 64);
+
+    machine.ok(&[
+        "sign",
+        component.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert!(
+        machine.0.join("clock.wasm.sig").is_file(),
+        "the signature goes beside the widget"
+    );
+
+    // Still refused: the signature is fine and nobody said the key was.
+    let said = machine.fails(&["install", component.to_str().unwrap()]);
+    assert!(said.contains("does not trust"), "{said}");
+    assert!(said.contains("uniwidged trust"), "{said}");
+
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    let installed = machine.ok(&["install", component.to_str().unwrap()]);
+    assert!(installed.contains("signed by jane"), "{installed}");
+}
+
+#[test]
+fn changing_the_manifest_after_signing_is_caught() {
+    // **The reason a signature covers the manifest too.** Without it, this
+    // widens what the widget may do while keeping a signature the user trusts —
+    // and the consent screen they read would be one the author never wrote.
+    let machine = Machine::new("tampered");
+    let component = reference_widget(&machine.0);
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    machine.ok(&[
+        "sign",
+        component.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    assert!(
+        machine
+            .run(&["install", component.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    // Now widen it, exactly as somebody passing the widget on would.
+    let manifest = machine.0.join("clock.toml");
+    let widened = std::fs::read_to_string(&manifest).unwrap().replace(
+        "capabilities = [\"timer\", \"locale\"]",
+        "capabilities = [\"timer\", \"locale\", \"net:*.evil.test\"]",
+    );
+    assert!(widened.contains("evil.test"), "the test's own edit landed");
+    std::fs::write(&manifest, widened).unwrap();
+
+    let said = machine.fails(&["install", component.to_str().unwrap()]);
+    assert!(said.contains("does not check out"), "{said}");
+    assert!(
+        said.contains("manifest"),
+        "it should name what changed: {said}"
+    );
+}
+
+#[test]
+fn a_signature_that_does_not_verify_cannot_be_waved_through() {
+    // `--allow-unsigned` is for the absence of a claim. A signature that fails
+    // is a positive claim that something is wrong, and no flag should get past
+    // it.
+    let machine = Machine::new("no-override");
+    let component = reference_widget(&machine.0);
+    std::fs::write(
+        machine.0.join("clock.wasm.sig"),
+        format!("uniwidged-sig-v1 {} {}\n", "ab".repeat(64), "cd".repeat(32)),
+    )
+    .unwrap();
+
+    let said = machine.fails(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+    assert!(said.contains("does not check out"), "{said}");
+}
+
+#[test]
+fn withdrawing_trust_stops_the_next_install() {
+    let machine = Machine::new("untrust");
+    let component = reference_widget(&machine.0);
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    machine.ok(&[
+        "sign",
+        component.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    machine.ok(&["trust", &public]);
+    assert!(machine.ok(&["trusted"]).contains(&public));
+    assert!(
+        machine
+            .run(&["install", component.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    machine.ok(&["untrust", &public]);
+    assert!(!machine.ok(&["trusted"]).contains(&public));
+    let said = machine.fails(&["install", component.to_str().unwrap()]);
+    assert!(said.contains("does not trust"), "{said}");
+}
+
+#[test]
+fn check_reports_what_a_widget_asks_for_without_installing_it() {
+    let machine = Machine::new("check");
+    let component = reference_widget(&machine.0);
+
+    let said = machine.ok(&["check", component.to_str().unwrap()]);
+    assert!(said.contains("clock"), "{said}");
+    assert!(said.contains("signature: none"), "{said}");
+    assert!(
+        said.contains("format dates and times"),
+        "it should read as sentences: {said}"
+    );
+    assert!(
+        said.contains("It starts, and draws"),
+        "it should actually run it: {said}"
+    );
+    assert!(
+        !machine.config().exists(),
+        "and installing is a different verb"
+    );
+}
+
+#[test]
+fn check_refuses_something_that_is_not_a_widget() {
+    let machine = Machine::new("not-a-widget");
+    std::fs::write(machine.0.join("junk.wasm"), b"this is not a component").unwrap();
+    std::fs::write(machine.0.join("junk.toml"), "name = \"junk\"\n").unwrap();
+
+    let said = machine.fails(&["check", machine.0.join("junk.wasm").to_str().unwrap()]);
+    assert!(said.contains("not a widget this host can load"), "{said}");
+}
+
+#[test]
+fn a_widget_can_be_turned_off_without_losing_where_it_was_put() {
+    // The difference between `disable` and `remove`, and the reason both exist:
+    // turning a widget off to see whether it was the one making a noise should
+    // not cost the half-hour somebody spent placing it.
+    let machine = Machine::new("disable");
+    let component = reference_widget(&machine.0);
+    machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+    machine.ok(&["move", "clock", "--x", "900", "--y", "40"]);
+
+    machine.ok(&["disable", "clock"]);
+    let listed = machine.ok(&["list"]);
+    assert!(listed.contains("(disabled)"), "{listed}");
+    assert!(
+        listed.contains("900,40"),
+        "its placement is untouched: {listed}"
+    );
+
+    assert!(machine.ok(&["disable", "clock"]).contains("already"));
+    machine.ok(&["enable", "clock"]);
+    let listed = machine.ok(&["list"]);
+    assert!(!listed.contains("(disabled)"), "{listed}");
+    assert!(listed.contains("900,40"));
+}
+
+#[test]
+fn removing_a_widget_keeps_its_data_unless_told_otherwise() {
+    // Removing a widget is something people do to try one out and change their
+    // minds. A note-taking widget that silently took the notes with it would be
+    // a bug nobody could undo.
+    let machine = Machine::new("remove");
+    let component = reference_widget(&machine.0);
+    machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+
+    // Stand in for what the widget would have written.
+    let data = machine.0.join("widgets/clock");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("state"), b"remember me").unwrap();
+
+    let said = machine.ok(&["remove", "clock"]);
+    assert!(said.contains("removed"), "{said}");
+    assert!(
+        said.contains("--purge"),
+        "it should say the data is there: {said}"
+    );
+    assert!(data.join("state").exists(), "and it really is");
+    assert!(machine.ok(&["list"]).contains("nothing installed"));
+
+    // And `--purge` does what it says.
+    machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+    machine.ok(&["remove", "clock", "--purge"]);
+    assert!(!data.exists(), "purge deletes the widget's directory");
+}
+
+#[test]
+fn removing_something_that_is_not_installed_says_so() {
+    let machine = Machine::new("missing");
+    assert!(
+        machine
+            .fails(&["remove", "nothing"])
+            .contains("not installed")
+    );
+    assert!(
+        machine
+            .fails(&["enable", "nothing"])
+            .contains("not installed")
+    );
+}
+
+#[test]
+fn a_signing_key_is_not_left_where_anybody_can_read_it() {
+    let machine = Machine::new("permissions");
+    let key = machine.0.join("signing-key");
+    machine.ok(&["keygen", "--out", key.to_str().unwrap()]);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "a signing key must not be readable by anybody else, got {mode:o}"
+        );
+    }
+
+    // And it will not be overwritten by a second run.
+    assert!(
+        machine
+            .fails(&["keygen", "--out", key.to_str().unwrap()])
+            .contains("already exists")
+    );
+}

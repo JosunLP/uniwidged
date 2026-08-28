@@ -42,6 +42,7 @@ pub mod limits;
 pub mod manifest;
 pub mod net;
 pub mod services;
+pub mod signature;
 pub mod tasks;
 
 #[cfg(feature = "wasmtime")]
@@ -52,4 +53,5 @@ pub use limits::Limits;
 pub use manifest::{ABI_VERSION, Manifest, ManifestError};
 pub use net::Http;
 pub use services::{DataDir, Locale, Services};
+pub use signature::{PublicKey, SecretKey, SignatureFile, TrustedKeys};
 pub use tasks::{TaskResult, Tasks, Waker};

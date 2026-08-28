@@ -104,7 +104,7 @@ impl Drop for Scratch {
 ///
 /// UTC, so the strings a test expects are the same on every machine it runs on.
 fn served(scratch: &Scratch) -> Services {
-    served_with_tasks(scratch, Arc::new(Tasks::default()))
+    served_with_tasks(scratch, Arc::new(Tasks::detached()))
 }
 
 /// The same, sharing a task registry the test can look into.
@@ -651,7 +651,7 @@ fn an_asynchronous_request_finishes_and_comes_back_by_its_token() {
     // Nothing in the project exercised this before — `Event::Delivered` was a
     // variant nothing produced.
     let scratch = Scratch::new("command");
-    let tasks = Arc::new(Tasks::default());
+    let tasks = Arc::new(Tasks::detached());
     let (_runtime, mut instance) = start_with(
         everything(),
         None,
@@ -720,7 +720,7 @@ fn a_widget_ignores_an_answer_it_was_not_waiting_for() {
     // because a widget with several requests in flight would otherwise show
     // one answer in another's place.
     let scratch = Scratch::new("stranger");
-    let tasks = Arc::new(Tasks::default());
+    let tasks = Arc::new(Tasks::detached());
     let (_runtime, mut instance) = start_with(
         everything(),
         None,

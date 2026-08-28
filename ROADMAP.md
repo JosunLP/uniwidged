@@ -247,6 +247,87 @@ what a widget writes is on disk in its own directory, that a fresh instance
 finds it there, and that the same host which serves `cache/…` still refuses
 `../../.ssh`.
 
+### The worker pool, and a flake that was a bug — **done, 2026-08-28**
+
+`Tasks::start` spawned a thread per request. It is called from inside a widget's
+`view`, on its sixteen-millisecond call deadline, and spawning a thread is not
+bounded work: it reserves a stack and makes a `clone` syscall, and on a loaded
+machine that takes longer than a frame. A widget interrupted mid-call while the
+host was creating a thread on its behalf is the sandbox punishing a widget for
+the host's decision.
+
+It passed every test in `tasks` and failed once — in a full-workspace run, as
+"the widget should have produced a view". A trap with no obvious cause, of
+exactly the kind that gets re-run, seen to pass, and dismissed as flakiness. It
+reproduced only under the whole suite at once, which is the load that made
+thread creation slow enough to matter.
+
+The pool is built in `Tasks::new` now, and `start` is a lock, a send, and a
+wake — all bounded. Eight workers park on a channel and cost nothing.
+
+The first attempt at that was itself wrong, and worth recording: the workers
+held an `Arc<Tasks>`, which is a cycle. A registry its own threads keep alive is
+never dropped, so the `Drop` that was meant to stop them could not run — eight
+leaked threads per host, and a shutdown path that read correctly and was
+unreachable. Splitting the state a worker needs from the registry that owns the
+channel is what fixes it: dropping the registry closes the channel, `recv`
+returns an error, and the pool goes away. No polling, so an idle desktop still
+costs nothing.
+
+### Installing a widget you did not write — **done, 2026-08-28**
+
+M8's second bullet — *a widget registry format, and signature verification on
+install* — half of it, and the half that matters. There is no registry, and
+this is deliberately not one: a file of keys a user added by hand, one line
+each, small enough to be read and audited by the person it protects. Everything
+larger needs infrastructure this project does not have and could not honestly
+run.
+
+**A signature covers the component and its manifest together.** That is the
+whole design, and getting it wrong is the interesting failure. The manifest is
+what the user is shown and what the runtime enforces, so a signature over the
+`.wasm` alone lets anybody take a signed widget, change `capabilities = []` to
+`capabilities = ["net:*.evil.test"]`, and pass it on with a signature that still
+verifies — and the user approves a consent screen the author never wrote, on the
+strength of a name they recognised. `lifecycle.rs` does exactly that and asserts
+it is caught.
+
+The two are length-prefixed into the digest rather than concatenated, or bytes
+could be moved from the end of one field to the start of the next without
+changing the hash. And the digest is domain-separated, so a signature over a
+widget can never be replayed over anything else this project comes to sign.
+
+`install` refuses an unsigned widget by default. `--allow-unsigned` says so out
+loud and installs anyway, for the person building their own; it does **not**
+override a signature that fails, because a broken signature is a positive claim
+that something is wrong where a missing one is only an absence.
+
+Also landed, and all of it named in M7 and never built:
+
+* **`uniwidged check`** — everything `install` would find out, without
+  installing: the manifest parses, the component loads, the ABI matches, it
+  starts, and it draws *with nothing granted*. Plus the consent lines its users
+  will see. What an author runs before publishing and what CI runs on every
+  commit.
+* **`enable` / `disable`** — a disabled widget keeps its placement, its grants
+  and its data. Turning one off to find out whether it was the one making a
+  noise should not cost the half-hour somebody spent placing it.
+* **`remove`** — and it **keeps the widget's data** unless `--purge` says
+  otherwise, because removing a widget is something people do to try one out
+  and change their minds. A note-taking widget that silently took the notes
+  with it would be a bug nobody could undo.
+* **`keygen` / `sign` / `trust` / `untrust` / `trusted`** — the publishing side.
+  A secret key is written `0600` and `keygen` refuses to overwrite one.
+
+Thirty tests: eighteen on the signature format and what it must stop, twelve
+driving the whole path through the actual binary — because the answer a user
+gets is the one the command line prints.
+
+Two crates: `ed25519-dalek` (BSD-3-Clause) and `sha2` (MIT/Apache-2.0), both
+already inside the licence policy. Ed25519 because the keys and signatures are
+short enough to paste into a README, and pure Rust because a signature check is
+the one thing that runs *before* the sandbox does.
+
 ### `net` — **done, 2026-08-28**
 
 The capability every document in this repository has been using as its example
@@ -547,7 +628,9 @@ depends on, and what once rendered "live" as "li…".
 
 * Packaging: MSI/MSIX, a signed and notarised `.app`, Flatpak, an AUR package,
   a `.deb`.
-* A widget registry format, and signature verification on install.
+* A widget registry format. Signature verification on install is **done** —
+  see below; what is missing is somewhere to find widgets, not a way to check
+  them.
 * The authoring guide, an API reference, and four reference widgets, each
   exercising a different capability.
 
@@ -593,8 +676,7 @@ whose whole purpose is loading what it saved. Every widget with anything to
 restore was going to end up doing it lazily in `view` behind a `loaded` flag.
 It takes one now. That is what reference widgets are for.
 
-**Still to do:** packaging, the registry format and signature verification, an
-API reference, and the weather widget.
+**Still to do:** packaging, the registry format, and an API reference.
 
 ---
 

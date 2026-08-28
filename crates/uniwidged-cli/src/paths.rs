@@ -43,6 +43,31 @@ pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// One widget's own data directory.
+///
+/// Named by the widget, which is why the manifest is strict about what a name
+/// may contain: the name is a directory on disk, and two widgets sharing one
+/// would share their data. The host joins this itself; the CLI needs it to say
+/// where a removed widget's data went.
+pub fn widget_data_dir(name: &str) -> PathBuf {
+    data_root().join(name)
+}
+
+/// The keys this machine trusts to sign widgets.
+///
+/// Beside the configuration, and meant to be read: it is the whole of the
+/// project's trust model, and a security mechanism nobody can inspect is one
+/// nobody should rely on.
+pub fn trusted_keys_file() -> PathBuf {
+    match std::env::var_os("UNIWIDGED_CONFIG") {
+        Some(explicit) => PathBuf::from(explicit)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("trusted-keys"),
+        None => config_dir().join("trusted-keys"),
+    }
+}
+
 /// Where every widget's own directory lives.
 ///
 /// Beside the configuration rather than under `XDG_DATA_HOME`, for the reason
