@@ -14,12 +14,14 @@ pub mod config;
 pub mod host;
 pub mod interaction;
 pub mod placement;
+pub mod reload;
 pub mod scheduler;
 pub mod supervisor;
 
 pub use config::{Config, Placement, WidgetConfig};
-pub use host::{Configured, Host, HostError, TickReport};
+pub use host::{Activated, Host, HostError, TickReport};
 pub use interaction::{Edge, Interaction, Press, Release};
 pub use placement::{Output, Resolved};
+pub use reload::{Applied, apply};
 pub use scheduler::{Scheduler, Tick};
-pub use supervisor::{State, Supervised};
+pub use supervisor::{Reconfigured, State, Supervised};

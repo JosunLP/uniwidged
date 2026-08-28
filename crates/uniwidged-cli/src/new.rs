@@ -227,6 +227,8 @@ fn widget_toml(name: &str, capabilities: &[String]) -> String {
          #   net:<host>       HTTPS to exactly that host\n\
          #   secrets          the keychain, namespaced to you\n\
          #   command:<name>   run one declared external command\n\
+         #   link:<host>      open that host in the browser, when a user\n\
+         #                    clicks a link you drew\n\
          capabilities = []\n"
             .to_string()
     } else {

@@ -595,12 +595,12 @@ there.
 * **Pointer input on Wayland**, which is wired but unmeasured — headless sway
   has no input device. The shared interaction model above it is covered by the
   X11 pointer tests; what is unverified is the Wayland plumbing into it.
-* **Applying a configuration without a restart.** `Host::configure` reaches a
-  running widget and is what a settings UI will call; `uniwidged configure`
-  writes the file, and a desktop already running picks it up when it next
-  starts. What is missing between them is a way for one process to tell the
-  other, and the honest options are a signal and a pid file or a socket. Named
-  rather than half-built.
+* ~~**Applying a configuration without a restart.**~~ Done — see below.
+* **Installing and removing without a restart.** A reload applies settings,
+  placement and the lock switch to a running desktop, and *reports* a widget
+  that appeared or disappeared rather than acting on it — see
+  `uniwidged_host::reload` for why doing half of that on a signal is worse than
+  not doing it.
 
 The milestone's original exit criterion — eight widgets across two monitors
 surviving a restart — is met except for the two monitors, which this machine
@@ -885,6 +885,104 @@ events. The end of a gesture is a fact, not a duration, so it is waited for now
 release that produced neither a click nor a placement is a real answer and this
 file has three tests about it. The suite got faster, which is the usual sign
 that a sleep was in the wrong place.
+
+### Telling a running desktop, and links that open — **done, 2026-08-28**
+
+The previous section shipped configuration and ended with a bullet naming what
+was missing: *a way for one process to tell the other, and the honest options
+are a signal and a pid file or a socket. Named rather than half-built.* This is
+that, plus the other thing the API reference had to admit was a no-op.
+
+#### `SIGHUP` means read your configuration again
+
+A socket would be a wire format, a version, a permission model and a second
+thing to keep working. What is actually being sent is one bit, and `SIGHUP` has
+meant exactly it to a daemon for forty years.
+
+It costs the loop nothing. The handler does two things, both async-signal-safe:
+a relaxed store, and one non-blocking write to the wake pipe that has existed
+since the asynchronous work for finished tasks. An idle desktop still blocks on
+its window system's socket with no timer at all.
+
+**The dangerous part is the pid, not the signal**, and it is worth being plain
+about. `SIGHUP`'s default action is *terminate*. A pid file left behind by a
+crash names a number the kernel will happily reuse, so signalling it on the
+strength of the file is a way to kill somebody's editor. The pid is checked
+twice: that the process exists, and that it is this program, by reading
+`/proc/<pid>/comm`. A pid that is gone or is something else is stale, and stale
+means ignored. There is a test whose comment says what would happen if the
+check were wrong — the suite would send `SIGHUP` to its own harness, which
+would not fail, it would take the run with it.
+
+**What can change while a desktop runs is decided by what can be done
+atomically.** Settings can, because they are values behind a shared handle —
+which is why `Host::configure` was built to reach a running widget rather than
+to restart one. Placement and the lock switch can, by the layer that owns
+windows. Installing and removing cannot: a widget arriving needs a component
+compiled, a window created, a swapchain attached and a placement resolved, and
+doing half of that on a signal is how a desktop ends up with a window nothing
+draws into. Those are reported, the user is told it takes a restart, and
+everything already running keeps working.
+
+Every command that writes the configuration now nudges a running desktop, and
+says so in one line when there was one to nudge. `uniwidged reload` is the same
+thing for a file edited by hand.
+
+**And running it for real found the bug the unit tests could not.** The first
+version reported "nothing changed" over a setting it had just applied. The
+cause was one field doing two jobs: `configure` returned whether *the widget
+said its view would differ*, and the caller read that as whether *anything was
+applied*. They are different facts, and `system-load` is the widget that shows
+it — moving a warning threshold past nothing changes no colour, so it correctly
+answers that its view is unchanged while its configuration has very much
+changed. Two fields now, `applied` and `redraws`, and a reference-widget test
+that pins the distinction.
+
+The whole path was driven end to end against a real desktop on a nested X
+server: `configure`, `move`, `lock` and a bare `reload` each producing exactly
+the line they should, and the pid file removed on a clean exit.
+
+#### Links, which turned out to be a different question from `net`
+
+`.link(url)` has been in the view vocabulary since M2. An assistive technology
+was told a node was a link, and **nothing opened it** — a fact discovered while
+writing the API reference and written down there rather than implied away,
+because handing a widget a way to make the host launch an arbitrary URL is a
+capability and had not been designed.
+
+It is `link:<host>`, and the interesting decision is that it is *not* `net:`.
+They read alike and are different sentences: `net:api.example.com` is "this
+widget talks to a server", `link:example.com` is "this widget can put something
+on your screen that takes you to a web page". A widget may want either without
+the other — one that reads a local sensor and links to a forecast has no
+network grant at all — and a user may reasonably say yes to one and no to the
+other. Neither implies the other, and the two matchers are separate functions
+so a wildcard cannot come to mean one thing across both.
+
+**`https` only, checked before the grant is.** `file://` opens a file manager,
+and a registered `x-scheme-handler` opens whatever somebody installed, so a
+system opener handed an arbitrary URL is a widget running arbitrary programs by
+another name. The URL is read by the *same* function `net` reads one with —
+see below, because that function had quietly become two.
+
+The host decides whether; the caller opens. Launching a browser is launching a
+process, and the host does not launch processes any more than it owns windows —
+which is also what makes the whole thing testable with no browser. A widget may
+draw a link it was not granted; it does not open, the desktop says why, and the
+widget is told about the click either way. Withholding the *news* would leave
+it unable to explain itself.
+
+#### And the parser that had quietly become two
+
+`net::host_of` carries a comment saying it lives there so that the two readings
+cannot drift: *a redirect judged against one parse and fetched against another
+is exactly the hole this file exists to close.* There was a second, identical
+copy in `instance.rs` — the file that performs the **first** check. That is the
+hole with the warning written above it.
+
+They happened to agree, which is not a property anybody was maintaining. There
+is one now, and the link check uses it too, so a third reading cannot appear
+without deleting the same comment twice.
 
 ## Independent of its parents — **done, 2026-08-28**
 

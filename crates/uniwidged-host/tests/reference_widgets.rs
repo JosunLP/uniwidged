@@ -127,7 +127,7 @@ fn click(host: &mut Host, id: WidgetId, node: &str) {
     let hit = host
         .click(id, Point::new(button.center().x, button.center().y))
         .expect("click");
-    assert_eq!(hit, Some(NodeId::named(node)));
+    assert_eq!(hit.node(), Some(NodeId::named(node)));
 }
 
 /// The text of a named node in a widget's current view.
@@ -233,7 +233,7 @@ fn the_counter_remembers_across_a_restart() {
             let hit = host
                 .click(id, Point::new(button.center().x, button.center().y))
                 .expect("click");
-            assert_eq!(hit, Some(NodeId::named("increment")));
+            assert_eq!(hit.node(), Some(NodeId::named("increment")));
             tick(&mut host);
         }
         assert_eq!(text_of(&host, id, "count"), "3");
@@ -416,4 +416,48 @@ fn the_vault_keeps_the_credential_out_of_the_view_and_off_the_disk_in_the_clear(
         !store.windows(5).any(|w| w == b"token"),
         "the credential is on disk in the clear"
     );
+}
+
+#[test]
+fn a_setting_a_widget_does_not_redraw_for_is_still_applied() {
+    // The distinction a live desktop found and no unit test had. `system-load`
+    // colours its meter by comparing a reading against two thresholds, so
+    // moving a threshold past nothing changes its accent and it correctly
+    // answers that its view is unchanged — while its configuration has very
+    // much changed.
+    //
+    // A caller that read "the view is unchanged" as "nothing was applied"
+    // printed `nothing changed` over a setting it had just applied, which is
+    // the message that makes somebody change the value again.
+    let scratch = Scratch::new("applied");
+    let mut host = desktop(&scratch.0.join("widgets"));
+    let id = install(&mut host, "system-load");
+    tick(&mut host);
+
+    let report = host
+        .configure(
+            id,
+            &std::collections::BTreeMap::from([(
+                "warn-at".to_string(),
+                uniwidged_runtime::settings::SettingValue::Number(0.9),
+            )]),
+        )
+        .expect("configure");
+    assert!(report.applied, "0.9 is not the declared default of 0.6");
+    assert!(report.complaints.is_empty(), "{report:?}");
+
+    // Asking again with the same value is the case that really is nothing:
+    // saving a form usually changes nothing, and every widget on the desktop
+    // must not pay a call and a tree comparison for it.
+    let again = host
+        .configure(
+            id,
+            &std::collections::BTreeMap::from([(
+                "warn-at".to_string(),
+                uniwidged_runtime::settings::SettingValue::Number(0.9),
+            )]),
+        )
+        .expect("configure");
+    assert!(!again.applied);
+    assert!(!again.redraws);
 }

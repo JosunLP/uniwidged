@@ -40,6 +40,19 @@ pub enum Capability {
     NetWildcard(String),
     /// A path inside the widget's own data directory.
     Fs(String),
+    /// Opening `https://<host>` in the user's browser, when the *user* clicks
+    /// a link the widget drew.
+    ///
+    /// Separate from [`Capability::Net`] because they are different sentences.
+    /// `net:api.example.com` is "this widget talks to a server"; `link:
+    /// example.com` is "this widget can put something on your screen that
+    /// takes you to a web page when you click it". A widget may want either
+    /// without the other — a weather widget that reads a local sensor and
+    /// links to a forecast has no network grant at all — and a user may
+    /// reasonably say yes to one and no to the other.
+    Link(String),
+    /// Subdomains of this domain, as [`Capability::NetWildcard`].
+    LinkWildcard(String),
     Secrets,
     Locale,
     Measure,
@@ -51,12 +64,24 @@ pub enum Capability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Timer,
-    Net { host: String },
-    Fs { path: String },
+    Net {
+        host: String,
+    },
+    Fs {
+        path: String,
+    },
+    /// A link the user activated. Checked at the moment of the click rather
+    /// than when the view was built: a widget may draw a link it is not
+    /// allowed to open, and what must not happen is the *opening*.
+    Link {
+        host: String,
+    },
     Secrets,
     Locale,
     Measure,
-    Command { name: String },
+    Command {
+        name: String,
+    },
     Metrics,
 }
 
@@ -116,6 +141,15 @@ impl Policy {
                     .then_some(())
                     .ok_or(Denied::NotGranted)
             }
+            Request::Link { host } => {
+                let host =
+                    normalise_host(host).ok_or(Denied::Malformed("empty or invalid host"))?;
+                self.granted
+                    .iter()
+                    .any(|c| link_matches(c, &host))
+                    .then_some(())
+                    .ok_or(Denied::NotGranted)
+            }
             Request::Fs { path } => {
                 if !is_contained(path) {
                     return Err(Denied::Malformed("path leaves the widget's directory"));
@@ -169,14 +203,36 @@ fn normalise_host(host: &str) -> Option<String> {
 fn net_matches(capability: &Capability, host: &str) -> bool {
     match capability {
         Capability::Net(allowed) => allowed.to_ascii_lowercase() == host,
-        Capability::NetWildcard(domain) => {
-            let domain = domain.to_ascii_lowercase();
-            // The dot is part of the check, not decoration. Without it,
-            // `*.example.com` would match `notexample.com`.
-            host.len() > domain.len() + 1
-                && host.ends_with(&domain)
-                && host.as_bytes()[host.len() - domain.len() - 1] == b'.'
-        }
+        Capability::NetWildcard(domain) => wildcard_matches(domain, host),
+        _ => false,
+    }
+}
+
+/// Is `host` a subdomain of `domain`?
+///
+/// Shared by the two wildcard grants so that the rule cannot come to mean two
+/// things. The dot is part of the check, not decoration: without it,
+/// `*.example.com` would match `notexample.com`. And the bare domain is
+/// excluded — a widget granted `*.tiles.example.com` has not been granted
+/// `tiles.example.com`.
+fn wildcard_matches(domain: &str, host: &str) -> bool {
+    let domain = domain.to_ascii_lowercase();
+    host.len() > domain.len() + 1
+        && host.ends_with(&domain)
+        && host.as_bytes()[host.len() - domain.len() - 1] == b'.'
+}
+
+/// The same rule as [`net_matches`], against the link grants.
+///
+/// Deliberately a second function rather than a parameter, because the two
+/// grants must not be interchangeable: a widget granted `net:example.com` has
+/// not been granted permission to open a browser at `example.com`, and a
+/// wildcard read across both would be one sentence quietly doing the work of
+/// two.
+fn link_matches(capability: &Capability, host: &str) -> bool {
+    match capability {
+        Capability::Link(allowed) => allowed.to_ascii_lowercase() == host,
+        Capability::LinkWildcard(domain) => wildcard_matches(domain, host),
         _ => false,
     }
 }
@@ -363,5 +419,85 @@ mod tests {
         assert!(timer_only.allows(&Request::Timer));
         assert!(!timer_only.allows(&net("example.com")));
         assert!(!timer_only.allows(&Request::Secrets));
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn granted(caps: &[Capability]) -> Policy {
+        Policy::from_granted(caps.iter().cloned())
+    }
+
+    fn link(policy: &Policy, host: &str) -> bool {
+        policy.allows(&Request::Link {
+            host: host.to_string(),
+        })
+    }
+
+    #[test]
+    fn a_link_grant_is_for_exactly_that_host() {
+        let policy = granted(&[Capability::Link("example.com".into())]);
+        assert!(link(&policy, "example.com"));
+        assert!(link(&policy, "EXAMPLE.COM"), "DNS is case-insensitive");
+        assert!(!link(&policy, "www.example.com"));
+        // The suffix attack, which is the one everybody writes by accident.
+        assert!(!link(&policy, "notexample.com"));
+        assert!(!link(&policy, "example.com.evil.test"));
+    }
+
+    #[test]
+    fn a_link_wildcard_does_not_include_the_bare_domain() {
+        // The same reading as `net:*.example.com`, and the same reason: a
+        // widget granted the subdomains of a tile server has not been granted
+        // the account pages at the apex.
+        let policy = granted(&[Capability::LinkWildcard("example.com".into())]);
+        assert!(link(&policy, "docs.example.com"));
+        assert!(link(&policy, "a.b.example.com"));
+        assert!(!link(&policy, "example.com"));
+        assert!(!link(&policy, "notexample.com"));
+    }
+
+    #[test]
+    fn net_and_link_are_two_grants_and_neither_implies_the_other() {
+        // The whole reason they are separate capabilities. "This widget talks
+        // to a server" and "this widget can send you to a web page" are
+        // different sentences, and a user may reasonably answer them
+        // differently.
+        let networked = granted(&[Capability::Net("example.com".into())]);
+        assert!(networked.allows(&Request::Net {
+            host: "example.com".into()
+        }));
+        assert!(!link(&networked, "example.com"), "net is not link");
+
+        let linking = granted(&[Capability::Link("example.com".into())]);
+        assert!(link(&linking, "example.com"));
+        assert!(
+            !linking.allows(&Request::Net {
+                host: "example.com".into()
+            }),
+            "link is not net"
+        );
+    }
+
+    #[test]
+    fn a_host_that_is_not_one_is_malformed_rather_than_ungranted() {
+        // The same distinction the rest of this file makes: an empty host is
+        // a fact about the request, which its author can fix, and not a
+        // decision the user made.
+        let policy = granted(&[Capability::Link("example.com".into())]);
+        assert_eq!(
+            policy.check(&Request::Link {
+                host: String::new()
+            }),
+            Err(Denied::Malformed("empty or invalid host"))
+        );
+    }
+
+    #[test]
+    fn a_widget_granted_nothing_may_open_nothing() {
+        let policy = Policy::deny_all();
+        assert!(!link(&policy, "example.com"));
     }
 }

@@ -106,6 +106,16 @@ impl Supervised {
         &self.manifest
     }
 
+    /// What the user granted this widget.
+    ///
+    /// A subset of what its manifest declares — see `config`, where granting
+    /// *less* is how a user says no to part of a widget without saying no to
+    /// all of it. Every fresh instance is handed this same policy, so what a
+    /// widget may do does not change when it restarts.
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
     pub fn state(&self) -> &State {
         &self.state
     }
@@ -264,23 +274,38 @@ impl Supervised {
     /// widget that is already started. Restarting one to change a number would
     /// throw away everything it had loaded.
     ///
-    /// Returns whether the widget says its view would now differ, and anything
-    /// wrong with what it was given.
+    /// Returns whether anything was applied, whether the widget says its view
+    /// would now differ, and anything wrong with what it was given.
+    ///
+    /// The first two are **different facts**, and running this against a real
+    /// desktop is what showed why. A widget can be given a genuinely new value
+    /// and answer that its view is unchanged — `system-load` moving a warning
+    /// threshold past nothing does exactly that — and a caller that read the
+    /// second as the first reported "nothing changed" over a configuration it
+    /// had just applied.
     pub fn configure(
         &mut self,
         runtime: &Runtime,
         values: &std::collections::BTreeMap<String, uniwidged_runtime::settings::SettingValue>,
-    ) -> (bool, Vec<String>) {
+    ) -> Reconfigured {
         let (resolved, complaints) =
             uniwidged_runtime::settings::Settings::resolve(self.declared_settings(), values);
         // Unchanged is not an event. A configuration written back with nothing
         // altered — which is what saving a form usually is — should not cost
         // every widget a call and a tree comparison.
         if resolved == self.services.settings.snapshot() {
-            return (false, complaints);
+            return Reconfigured {
+                applied: false,
+                redraws: false,
+                complaints,
+            };
         }
         self.services.settings.replace(resolved);
-        (self.deliver(runtime, Event::Configured), complaints)
+        Reconfigured {
+            applied: true,
+            redraws: self.deliver(runtime, Event::Configured),
+            complaints,
+        }
     }
 
     /// Anything the widget logged, prefixed with its name.
@@ -294,3 +319,17 @@ impl Supervised {
 
 #[cfg(test)]
 mod tests;
+
+/// What configuring one widget did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reconfigured {
+    /// The values differed from what this widget was running with, and it has
+    /// been told.
+    pub applied: bool,
+    /// It said its view would now differ. Distinct from `applied`: a widget
+    /// can be given a new number and correctly answer that nothing it draws
+    /// depends on it.
+    pub redraws: bool,
+    /// A key it does not declare, a value it would not accept.
+    pub complaints: Vec<String>,
+}

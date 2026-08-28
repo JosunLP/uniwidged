@@ -318,6 +318,8 @@ pub fn capability_text(capability: &Capability) -> String {
         Capability::Net(host) => format!("net:{host}"),
         Capability::NetWildcard(domain) => format!("net:*.{domain}"),
         Capability::Fs(path) => format!("fs:{path}"),
+        Capability::Link(host) => format!("link:{host}"),
+        Capability::LinkWildcard(domain) => format!("link:*.{domain}"),
         Capability::Secrets => "secrets".into(),
         Capability::Locale => "locale".into(),
         Capability::Measure => "measure".into(),

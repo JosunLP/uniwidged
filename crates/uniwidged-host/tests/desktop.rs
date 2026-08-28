@@ -294,9 +294,14 @@ fn a_click_reaches_the_widget_as_a_node_not_a_coordinate() {
         .composed(id)
         .and_then(|c| c.hit_rects.get(&target).copied())
         .expect("the row should have a rectangle");
-    assert_eq!(host.click(id, rect.center()).expect("click"), Some(target));
     assert_eq!(
-        host.click(id, Point::new(-10.0, -10.0)).expect("click"),
+        host.click(id, rect.center()).expect("click").node(),
+        Some(target)
+    );
+    assert_eq!(
+        host.click(id, Point::new(-10.0, -10.0))
+            .expect("click")
+            .node(),
         None,
         "a click outside the widget hits nothing"
     );
@@ -712,7 +717,8 @@ fn a_widget_starts_at_its_declared_defaults_and_can_be_reconfigured_while_runnin
             )]),
         )
         .expect("configure");
-    assert!(report.changed, "the widget said its view would differ");
+    assert!(report.applied, "the values differed and were applied");
+    assert!(report.redraws, "and the widget said its view would differ");
     assert!(report.complaints.is_empty(), "{:?}", report.complaints);
 
     // Scheduled by the change rather than redrawn inside it: one place decides
@@ -755,8 +761,8 @@ fn a_key_a_widget_does_not_declare_is_reported_rather_than_handed_over() {
         .expect("configure");
     assert_eq!(report.complaints.len(), 2, "{:?}", report.complaints);
     assert!(
-        !report.changed,
-        "nothing usable changed, so nothing changed"
+        !report.applied,
+        "nothing usable changed, so nothing was applied"
     );
 
     host.tick(now().0, now().1).expect("tick");
@@ -782,12 +788,269 @@ fn configuring_a_widget_with_what_it_already_has_is_not_an_event() {
         uniwidged_runtime::settings::SettingValue::Number(7.0),
     )]);
     let report = host.configure(id, &same).expect("configure");
-    assert!(!report.changed);
+    assert!(
+        !report.applied,
+        "the values are what the widget already had"
+    );
+    assert!(!report.redraws);
     host.tick(now().0, now().1).expect("tick");
     assert_eq!(
         label(&host, id, "configured"),
         "configured: 0",
         "the widget should not have been told about a change that was not one"
+    );
+}
+
+/// Clicks a named node and says what the host decided.
+fn activate(host: &mut Host, id: WidgetId, node: &str) -> uniwidged_host::Activated {
+    let rect = host
+        .composed(id)
+        .expect("a composition")
+        .hit_rects
+        .get(&NodeId::named(node))
+        .copied()
+        .unwrap_or_else(|| panic!("`{node}` should be on screen"));
+    host.click(id, rect.center()).expect("click")
+}
+
+#[test]
+fn a_link_a_widget_was_granted_comes_back_for_the_caller_to_open() {
+    // The host decides *whether*; the caller opens. Launching a browser is
+    // launching a process, and the host does not launch processes any more
+    // than it owns windows — which is also what keeps this testable without
+    // one.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Link("conformance.invalid".into())]),
+    );
+    host.tick(now().0, now().1).expect("tick");
+
+    let activated = activate(&mut host, id, "link-granted");
+    match activated {
+        uniwidged_host::Activated::Link { node, url } => {
+            assert_eq!(node, NodeId::named("link-granted"));
+            assert_eq!(url, "https://conformance.invalid/docs");
+        }
+        other => panic!("expected a link, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_link_to_a_host_the_widget_was_not_granted_is_refused_and_says_which() {
+    // The suffix of the same argument `net` makes: a grant for one host is a
+    // grant for that host. A widget may draw a link anywhere — it owns its own
+    // surface — and what is gated is the opening.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Link("conformance.invalid".into())]),
+    );
+    host.tick(now().0, now().1).expect("tick");
+
+    match activate(&mut host, id, "link-elsewhere") {
+        uniwidged_host::Activated::LinkRefused { node, why } => {
+            assert_eq!(node, NodeId::named("link-elsewhere"));
+            assert!(why.contains("link:elsewhere.invalid"), "{why}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_link_that_is_not_a_web_page_is_refused_whatever_was_granted() {
+    // `file://`, `javascript:`, a scheme somebody registered a handler for.
+    // None of them is a web page, and handing one to the system opener is
+    // letting a widget run whatever that scheme is wired to. Refused before
+    // the grant is even consulted, so no grant can reach it.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        // Everything a link grant can be, including a wildcard.
+        Policy::from_granted([
+            Capability::LinkWildcard("invalid".into()),
+            Capability::Link("conformance.invalid".into()),
+        ]),
+    );
+    host.tick(now().0, now().1).expect("tick");
+
+    match activate(&mut host, id, "link-scheme") {
+        uniwidged_host::Activated::LinkRefused { why, .. } => {
+            assert!(why.contains("https"), "{why}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_widget_is_told_its_link_was_clicked_even_when_it_may_not_be_opened() {
+    // A widget is entitled to know its own node was pressed. What is withheld
+    // is the opening, not the news — a widget that never heard about the click
+    // could not show "you are not signed in" or anything else useful.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(label(&host, id, "events"), "events: 0");
+
+    let activated = activate(&mut host, id, "link-granted");
+    assert!(matches!(
+        activated,
+        uniwidged_host::Activated::LinkRefused { .. }
+    ));
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(label(&host, id, "events"), "events: 1");
+}
+
+#[test]
+fn a_click_on_something_that_is_not_a_link_is_an_ordinary_activation() {
+    // The common case, and the one that must not have become a link by
+    // accident: every interactive node records a rectangle, and only some of
+    // them record a URL.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+    assert!(matches!(
+        activate(&mut host, id, "started"),
+        uniwidged_host::Activated::Node(_)
+    ));
+}
+
+#[test]
+fn a_configuration_file_reaches_a_running_widget_without_restarting_it() {
+    // `uniwidged configure` writes a file and a desktop is already running.
+    // Until this existed the answer was "it takes effect the next time the
+    // desktop starts", which is a sentence people read once and then stop
+    // changing settings.
+    //
+    // The widget is not restarted, and the test checks that directly: the
+    // event count survives, which it would not across a fresh instance.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+    host.deliver(id, Event::Clicked(NodeId::named("anything")))
+        .expect("deliver");
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(label(&host, id, "events"), "events: 1");
+
+    let mut widget = WidgetConfig::granting_all(
+        "conformance",
+        "conformance.wasm".into(),
+        &manifest("conformance"),
+    );
+    widget.settings = std::collections::BTreeMap::from([(
+        "some-number".to_string(),
+        uniwidged_runtime::settings::SettingValue::Number(42.0),
+    )]);
+    let config = Config {
+        widgets: vec![widget],
+    };
+
+    let applied = uniwidged_host::reload::apply(&mut host, &config);
+    assert_eq!(applied.reconfigured, vec![id]);
+    assert!(applied.complaints.is_empty(), "{applied:?}");
+    assert!(!applied.needs_restart());
+
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(
+        outcome(&host, id, "settings-values"),
+        "default-text 42 false one"
+    );
+    assert_eq!(
+        label(&host, id, "events"),
+        "events: 2",
+        "the same instance should have been told, not a fresh one"
+    );
+}
+
+#[test]
+fn a_reload_that_changes_nothing_tells_nobody() {
+    // A reload fires whenever anything in the configuration is touched, and
+    // most of those touches are about one widget. Delivering `Configured` to
+    // every widget each time would make one that redraws on the event flicker
+    // whenever somebody changed a different widget's setting.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    let config = Config {
+        widgets: vec![WidgetConfig::granting_all(
+            "conformance",
+            "conformance.wasm".into(),
+            &manifest("conformance"),
+        )],
+    };
+    let applied = uniwidged_host::reload::apply(&mut host, &config);
+    assert!(applied.is_quiet(), "{applied:?}");
+
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(label(&host, id, "configured"), "configured: 0");
+}
+
+#[test]
+fn a_widget_removed_from_the_file_keeps_running_and_is_named() {
+    // Removing needs a window and a swapchain undone in the right order, and
+    // doing half of that on a signal is how a desktop ends up with a window
+    // nothing draws into. So the widget keeps working, the fact is reported,
+    // and the user is told it takes a restart — which is a better answer than
+    // a widget that half-disappears.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    let applied = uniwidged_host::reload::apply(&mut host, &Config::default());
+    assert_eq!(applied.removed, vec!["conformance"]);
+    assert!(applied.needs_restart());
+
+    // Still there, still drawing.
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(outcome(&host, id, "settings"), "typed");
+}
+
+#[test]
+fn a_hand_edited_value_a_widget_would_refuse_is_reported_and_the_default_used() {
+    // What a reload of a file somebody typed into looks like. The widget gets
+    // something usable and the complaint names the widget as well as the key,
+    // because a desktop full of widgets logs one stream.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    let mut widget = WidgetConfig::granting_all(
+        "conformance",
+        "conformance.wasm".into(),
+        &manifest("conformance"),
+    );
+    widget.settings = std::collections::BTreeMap::from([
+        (
+            "some-number".to_string(),
+            // Declared with `max = 100`.
+            uniwidged_runtime::settings::SettingValue::Number(9000.0),
+        ),
+        (
+            "no-such-key".to_string(),
+            uniwidged_runtime::settings::SettingValue::Toggle(true),
+        ),
+    ]);
+    let applied = uniwidged_host::reload::apply(
+        &mut host,
+        &Config {
+            widgets: vec![widget],
+        },
+    );
+    assert_eq!(applied.complaints.len(), 2, "{applied:?}");
+    assert!(
+        applied.complaints.iter().all(|c| c.contains("conformance")),
+        "a complaint should name its widget: {applied:?}"
+    );
+
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(
+        outcome(&host, id, "settings-values"),
+        "default-text 7 false one",
+        "a value the widget would refuse leaves it at its default"
     );
 }
 

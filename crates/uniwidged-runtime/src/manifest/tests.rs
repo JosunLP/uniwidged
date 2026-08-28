@@ -436,3 +436,71 @@ fn a_manifest_with_no_settings_has_none_and_is_still_a_manifest() {
     let manifest = Manifest::parse("name = \"example\"\nversion = \"1.0.0\"").expect("parse");
     assert!(manifest.settings.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// `link:<host>`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_link_grant_reads_like_a_net_grant_and_is_not_one() {
+    let manifest = Manifest::parse(
+        r#"
+name = "weather"
+version = "1.0.0"
+capabilities = ["link:example.com", "link:*.docs.example.com"]
+"#,
+    )
+    .expect("a link grant should parse");
+    assert_eq!(
+        manifest.capabilities,
+        vec![
+            Capability::Link("example.com".into()),
+            Capability::LinkWildcard("docs.example.com".into()),
+        ]
+    );
+}
+
+#[test]
+fn a_link_grant_is_refused_in_the_shapes_a_net_grant_is() {
+    // The same parser, the same refusals — because they are the same reading
+    // of the same thing, and a link grant that accepted a host a net grant
+    // would not would be a second, looser door.
+    for bad in [
+        "link:",
+        "link:*",
+        "link:*.",
+        "link:https://example.com",
+        "link:example.com/path",
+        "link:exa mple.com",
+    ] {
+        assert!(
+            Manifest::parse(&format!(
+                "name = \"x\"\nversion = \"1.0.0\"\ncapabilities = [\"{bad}\"]"
+            ))
+            .is_err(),
+            "`{bad}` should not be a capability"
+        );
+    }
+}
+
+#[test]
+fn the_consent_line_for_a_link_says_what_it_actually_does() {
+    // "talk to example.com over HTTPS" and "open example.com in your browser"
+    // are different things happening to a user, and a consent screen that said
+    // the same words for both would be asking one question and getting
+    // permission for two.
+    let manifest = Manifest::parse(
+        "name = \"x\"\nversion = \"1.0.0\"\ncapabilities = [\"link:example.com\", \"net:example.com\"]",
+    )
+    .expect("parse");
+    let lines = manifest.consent_summary();
+    assert!(
+        lines.iter().any(|l| l.contains("open example.com")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("talk to example.com")),
+        "{lines:?}"
+    );
+    assert_ne!(lines[0], lines[1]);
+}

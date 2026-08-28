@@ -28,10 +28,10 @@ use std::time::{Duration, Instant, SystemTime};
 use uniwidged_compose::Theme;
 use uniwidged_core::geom::PhysicalRect;
 use uniwidged_core::{Point, WidgetId};
-use uniwidged_host::Host;
 use uniwidged_host::config::Config;
 use uniwidged_host::interaction::{Interaction, Press, Release};
 use uniwidged_host::placement;
+use uniwidged_host::{Activated, Host};
 use uniwidged_render::SurfaceId;
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_shell::platform::linux::{self, DesktopWindow, Session};
@@ -48,6 +48,135 @@ struct Running {
     window: usize,
     surface: SurfaceId,
     locked: bool,
+}
+
+/// Hands a URL to whatever this desktop opens web pages with.
+///
+/// `xdg-open`, spawned and **not waited for**: it may start a browser that
+/// takes seconds, and the desktop's loop is what draws every widget on the
+/// screen. Its output goes nowhere for the same reason — a browser's warnings
+/// on somebody's terminal are not this program's news to deliver.
+///
+/// The URL has already been checked twice by the host: that it is an `https`
+/// URL at all, and that the widget was granted `link:` for its host. Nothing
+/// here re-reads it, because a third reading is a third chance to disagree —
+/// see `uniwidged_runtime::net::host_of`, which is one function for exactly
+/// that reason.
+fn open_link(url: &str) {
+    // No shell. `xdg-open` is executed directly with the URL as one argument,
+    // so nothing in it can become a second command — the same rule the
+    // `command` capability follows, and the reason both are worth stating.
+    match std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_child) => println!("  opening {url}"),
+        Err(e) => eprintln!("uniwidged: could not open {url}: {e}"),
+    }
+}
+
+/// Reads the configuration again and applies what can be applied.
+///
+/// What a `SIGHUP` does. The split is the one `ARCHITECTURE.md` §5 makes about
+/// surfaces: [`uniwidged_host::reload::apply`] settles what the *widgets* do —
+/// which is settings, because a setting is a value behind a shared handle —
+/// and this settles what the *windows* do, because only this layer owns them.
+///
+/// Everything is best effort and nothing here can stop the desktop. A
+/// configuration that has become unreadable is a reason to keep running with
+/// the one already loaded, not a reason to take somebody's widgets off their
+/// screen.
+fn reload(
+    host: &mut Host,
+    config_path: &Path,
+    running: &mut [Running],
+    windows: &mut [DesktopWindow],
+    outputs: &[Output],
+) {
+    let config = match Config::read(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!(
+                "uniwidged: {} is not readable, so nothing changed: {e}",
+                config_path.display()
+            );
+            return;
+        }
+    };
+
+    let applied = uniwidged_host::reload::apply(host, &config);
+    for complaint in &applied.complaints {
+        eprintln!("uniwidged: {complaint}");
+    }
+    for id in &applied.reconfigured {
+        // Named, because "the setting took effect" is the fact somebody
+        // changing one is waiting for — and because a widget that answered
+        // that its view is unchanged still had its configuration applied.
+        if let Some(widget) = host.widget(*id) {
+            println!("  `{}` reconfigured", widget.name);
+        }
+    }
+    for name in &applied.added {
+        println!("  `{name}` is new; it starts when the desktop does");
+    }
+    for name in &applied.removed {
+        println!("  `{name}` is gone from the configuration; it stops when the desktop does");
+    }
+
+    // Placement, which the host cannot do: it does not own windows. Counted,
+    // because "nothing changed" is a line about the *whole* reload and the
+    // host's half cannot see this one — a live run printed it over a window it
+    // had just moved.
+    let mut moved = 0;
+    for entry in &running[..] {
+        let Some(widget) = config.widget(&entry.name) else {
+            continue;
+        };
+        let resolved = placement::resolve(&widget.placement, outputs);
+        let window = &mut windows[entry.window];
+        if resolved.rect != window.geometry() {
+            if let Err(e) = window.set_geometry(resolved.rect) {
+                eprintln!("uniwidged: could not move `{}`: {e}", entry.name);
+                continue;
+            }
+            println!(
+                "  `{}` moved to {},{} {}x{}",
+                entry.name,
+                resolved.rect.x,
+                resolved.rect.y,
+                resolved.rect.width,
+                resolved.rect.height
+            );
+            moved += 1;
+        }
+    }
+    // The lock switch is this layer's too: it decides what a press means, and
+    // the host never sees a pointer.
+    let mut relocked = 0;
+    for entry in running.iter_mut() {
+        if let Some(widget) = config.widget(&entry.name)
+            && entry.locked != widget.placement.locked
+        {
+            entry.locked = widget.placement.locked;
+            println!(
+                "  `{}` is {}",
+                entry.name,
+                if entry.locked {
+                    "locked where it is"
+                } else {
+                    "free to move again"
+                }
+            );
+            relocked += 1;
+        }
+    }
+
+    if applied.is_quiet() && moved == 0 && relocked == 0 {
+        println!("  configuration read again; nothing changed");
+    }
 }
 
 /// What `uniwidged doctor` can say about this session without starting one.
@@ -223,6 +352,25 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // thread, and this is what lets it end that block — see
     // `uniwidged_shell::wake`.
     let wake = WakePipe::new().map_err(|e| format!("could not make a wake pipe: {e}"))?;
+    // `SIGHUP` means *read your configuration again*, and the handler writes to
+    // the pipe above rather than doing any work of its own — so an idle desktop
+    // still blocks on its window system's socket with no timer at all. The
+    // guard removes the pid file when this function returns.
+    //
+    // A desktop that cannot claim a pid file still runs. It just cannot be
+    // told, which is a smaller loss than refusing to start.
+    let _pid_file = match crate::daemon::listen(std::os::fd::AsRawFd::as_raw_fd(&wake.as_fd())) {
+        Ok(guard) => {
+            println!("  pid file: {}", guard.path().display());
+            Some(guard)
+        }
+        Err(e) => {
+            eprintln!(
+                "uniwidged: no pid file, so `uniwidged reload` will not find this desktop: {e}"
+            );
+            None
+        }
+    };
     let mut host = Host::with_waker(
         Theme::default(),
         Duration::from_millis(16),
@@ -391,6 +539,13 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             println!("  exiting cleanly");
             return Ok(());
         }
+        // Before anything else in the turn: a configuration that changed
+        // should reach a widget before that widget is asked for its next view,
+        // or the frame it is about to draw is the old one.
+        if crate::daemon::take_pending() {
+            reload(&mut host, config_path, &mut running, &mut windows, &outputs);
+        }
+
         let timeout = host.next_timeout(Instant::now());
         // Bounded only so that `UNIWIDGED_RUN_SECS` can end an idle desktop;
         // without that this would block indefinitely, which is the whole point.
@@ -466,7 +621,19 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                     }
                     match pointer.release(root) {
                         Release::Click { widget, at } => {
-                            let _ = host.click(widget, Point::new(at.0 as f64, at.1 as f64));
+                            match host.click(widget, Point::new(at.0 as f64, at.1 as f64)) {
+                                Ok(Activated::Link { url, .. }) => open_link(&url),
+                                Ok(Activated::LinkRefused { why, .. }) => {
+                                    // Said rather than swallowed. A link that
+                                    // does nothing when clicked is the worst
+                                    // available outcome: its author cannot see
+                                    // the grant is missing and its user cannot
+                                    // see anything at all.
+                                    eprintln!("uniwidged: that link was not opened — {why}");
+                                }
+                                Ok(_) => {}
+                                Err(e) => eprintln!("uniwidged: {e}"),
+                            }
                         }
                         Release::Placed { widget, rect } => {
                             if let Some(index) = running.iter().position(|w| w.id == widget) {

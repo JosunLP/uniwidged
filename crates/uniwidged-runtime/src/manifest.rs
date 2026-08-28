@@ -375,6 +375,17 @@ fn parse_capability(text: &str) -> Result<Capability, ManifestError> {
                     None if is_host(value) => Ok(Capability::Net(value.to_ascii_lowercase())),
                     None => Err(malformed()),
                 },
+                // The same reading as `net`, deliberately spelled out again
+                // rather than shared: they are two grants, and a reader has to
+                // be able to see that neither implies the other.
+                "link" => match value.strip_prefix("*.") {
+                    Some(domain) if is_host(domain) => {
+                        Ok(Capability::LinkWildcard(domain.to_ascii_lowercase()))
+                    }
+                    Some(_) => Err(malformed()),
+                    None if is_host(value) => Ok(Capability::Link(value.to_ascii_lowercase())),
+                    None => Err(malformed()),
+                },
                 "fs" => {
                     // Control characters are checked because TOML's basic
                     // strings escape them: `"a\b"` in a manifest is a
@@ -424,6 +435,10 @@ fn describe(capability: &Capability) -> String {
             format!("talk to any subdomain of {domain} over HTTPS")
         }
         Capability::Fs(path) => format!("read and write `{path}` in its own folder"),
+        Capability::Link(host) => format!("open {host} in your browser when you click a link"),
+        Capability::LinkWildcard(domain) => {
+            format!("open any subdomain of {domain} in your browser when you click a link")
+        }
         Capability::Secrets => "store passwords in your keychain".to_string(),
         Capability::Locale => "format dates and times for your locale".to_string(),
         Capability::Measure => "measure text".to_string(),

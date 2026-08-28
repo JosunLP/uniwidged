@@ -162,3 +162,51 @@ fn the_topmost_node_takes_the_click() {
         "every named node should be in paint order"
     );
 }
+
+#[test]
+fn a_link_records_where_it_points_in_the_same_pass_as_its_rectangle() {
+    // `ARCHITECTURE.md` §4, applied again: a second walk is a second answer.
+    // Here the two answers would be the rectangle a click lands in and the URL
+    // that click opens, and a disagreement between them is a click opening
+    // something other than what was announced — the worst shape this
+    // particular drift could take.
+    let view = panel(NodeId::named("root"))
+        .child(
+            text("Forecast")
+                .id(NodeId::named("forecast"))
+                .link("https://example.com/forecast"),
+        )
+        .child(text("plain").id(NodeId::named("plain")))
+        .view();
+    let composed = compose(&view, |c| c);
+
+    assert_eq!(
+        composed.link(NodeId::named("forecast")),
+        Some("https://example.com/forecast")
+    );
+    // A link is interactive and has a rectangle, like every other activation.
+    assert!(composed.is_interactive(NodeId::named("forecast")));
+    assert!(composed.hit_rects.contains_key(&NodeId::named("forecast")));
+
+    // And a node that is not a link records no URL. Every interactive node has
+    // a rectangle; only some of them have somewhere to go.
+    assert_eq!(composed.link(NodeId::named("plain")), None);
+    assert_eq!(composed.link(NodeId::named("root")), None);
+}
+
+#[test]
+fn a_link_is_announced_as_one_to_a_screen_reader() {
+    // The accessibility tree and the click path come out of the same walk, so
+    // a link that is clickable must also be a link to somebody who cannot see
+    // that it is blue.
+    let view = panel(NodeId::named("root"))
+        .child(
+            text("Forecast")
+                .id(NodeId::named("forecast"))
+                .link("https://example.com/forecast"),
+        )
+        .view();
+    let composed = compose(&view, |c| c);
+    let announced = format!("{:?}", composed.a11y);
+    assert!(announced.contains("Link"), "{announced}");
+}

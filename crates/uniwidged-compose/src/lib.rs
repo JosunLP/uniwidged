@@ -72,6 +72,19 @@ pub struct Composed {
     /// needs it to tell a *click* from the start of a *drag* — a press on a
     /// button belongs to the widget, and a press anywhere else moves it.
     pub interactive: HashSet<NodeId>,
+    /// Where each link node points, by id.
+    ///
+    /// Recorded in the same pass as the hit rectangles and for the same reason
+    /// `ARCHITECTURE.md` §4 gives: a second walk is a second answer, and the
+    /// two would eventually disagree. Here that would mean a click opening a
+    /// URL other than the one the accessibility tree announced, which is the
+    /// worst shape this particular disagreement could take.
+    ///
+    /// A URL being *here* grants nothing. Whether it may be opened is decided
+    /// at the moment of the click, against the widget's `link:<host>` grant —
+    /// a widget may draw a link it is not allowed to follow, and what must not
+    /// happen is the following.
+    pub links: HashMap<NodeId, String>,
     /// The flat node list for AccessKit, root first. See [`a11y`].
     pub a11y: Vec<(accesskit::NodeId, accesskit::Node)>,
     /// The size the tree wanted, before the surface's own constraints.
@@ -86,6 +99,11 @@ impl Composed {
     /// the widget.
     pub fn is_interactive(&self, id: NodeId) -> bool {
         self.interactive.contains(&id)
+    }
+
+    /// Where this node points, if it is a link.
+    pub fn link(&self, id: NodeId) -> Option<&str> {
+        self.links.get(&id).map(String::as_str)
     }
 
     /// What a click at `point` (logical pixels) landed on.
@@ -219,6 +237,7 @@ impl Compositor {
         let mut hit_rects = HashMap::new();
         let mut order = Vec::new();
         let mut interactive = HashSet::new();
+        let mut links = HashMap::new();
         placed.walk(&mut |node| {
             if !node.node.id.is_anonymous() {
                 order.push(node.node.id);
@@ -227,6 +246,9 @@ impl Compositor {
                     uniwidged_view::Interaction::None
                 ) {
                     interactive.insert(node.node.id);
+                }
+                if let uniwidged_view::Interaction::Link(url) = &node.node.semantics.interaction {
+                    links.insert(node.node.id, url.clone());
                 }
                 // Mirrored, because a click arrives in the coordinates the user
                 // sees. Recording the unmirrored rectangle would make every
@@ -243,6 +265,7 @@ impl Compositor {
             hit_rects,
             order,
             interactive,
+            links,
             a11y,
             intrinsic: Size::new(placed.rect.width(), placed.rect.height()),
         }

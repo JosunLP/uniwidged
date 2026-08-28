@@ -14,10 +14,18 @@
 //! uniwidged unlock <name>           let it be dragged again
 //! uniwidged move <name> [--x N …]   place a widget without a pointer
 //! uniwidged configure <name>         the knobs a widget declared
+//! uniwidged reload                  tell a running desktop to read it again
 //! uniwidged autostart enable        start with the session
 //! uniwidged doctor                  what this session can and cannot do
 //! uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG
 //! ```
+//!
+//! `reload` is worth a sentence too. A desktop reads its configuration at
+//! start-up, and every command here that writes one tells a running desktop
+//! about it — so `reload` is only needed after editing the file by hand. What
+//! it sends is `SIGHUP`, which has meant *look at your configuration again* to
+//! a daemon for forty years; see `daemon`, where the dangerous part turns out
+//! to be the pid rather than the signal.
 //!
 //! `configure` is the other one worth explaining. A widget declares what it can
 //! be configured with — a key, a type, a range, a default — and this is where a
@@ -38,6 +46,8 @@
 mod autostart;
 mod check;
 mod configure;
+#[cfg(unix)]
+mod daemon;
 mod new;
 mod paths;
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -69,6 +79,7 @@ fn main() -> ExitCode {
         Some("unlock") => command_lock(&rest, false),
         Some("move") => command_move(&rest),
         Some("configure") => configure::command(&rest),
+        Some("reload") => command_reload(&rest),
         Some("autostart") => autostart::command(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
@@ -106,6 +117,7 @@ fn print_usage() {
            uniwidged unlock <name>           let it be dragged again\n  \
            uniwidged move <name> [--x N] [--y N] [--width N] [--height N] [--output NAME]\n  \
            uniwidged configure <name> [--set k=v] [--reset k] [--reset-all]\n  \
+           uniwidged reload                  tell a running desktop to read it again\n  \
            uniwidged autostart [enable|disable|status]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n"
@@ -137,6 +149,31 @@ fn command_run(args: &[String]) -> Result<(), String> {
              Windows is milestone M5 and macOS is M6, see ROADMAP.md"
             .into())
     }
+}
+
+fn command_reload(args: &[String]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        daemon::command(args)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = args;
+        Err(
+            "telling a running desktop to reload is a Unix signal, and this \
+             build has no equivalent yet — see ROADMAP.md"
+                .into(),
+        )
+    }
+}
+
+/// Tells a running desktop that the configuration it read has changed.
+///
+/// Called by every command that writes one. Quiet when there is no desktop:
+/// most of the time there is not, and a line every time would be noise.
+fn nudge_desktop() {
+    #[cfg(unix)]
+    daemon::nudge_quietly();
 }
 
 fn command_install(args: &[String]) -> Result<(), String> {
@@ -245,6 +282,7 @@ fn command_install(args: &[String]) -> Result<(), String> {
         .widgets
         .push(WidgetConfig::granting_all(&name, component, &manifest));
     config.write(&path).map_err(|e| e.to_string())?;
+    nudge_desktop();
     println!("  installed; recorded in {}", path.display());
     println!("  to decline one of those, remove it from `granted` there.\n");
     Ok(())
@@ -305,6 +343,7 @@ fn command_lock(args: &[String], locked: bool) -> Result<(), String> {
         .ok_or_else(|| format!("`{name}` is not installed; try `uniwidged list`"))?;
     widget.placement.locked = locked;
     config.write(&path).map_err(|e| e.to_string())?;
+    nudge_desktop();
     println!(
         "  `{name}` is {}",
         if locked {
@@ -387,6 +426,7 @@ fn command_move(args: &[String]) -> Result<(), String> {
 
     let placement = widget.placement.clone();
     config.write(&path).map_err(|e| e.to_string())?;
+    nudge_desktop();
     println!(
         "  `{name}` is now {}x{} at {},{}{}",
         placement.width,
@@ -430,10 +470,16 @@ fn command_enable(args: &[String], enabled: bool) -> Result<(), String> {
     }
     widget.enabled = enabled;
     config.write(&path).map_err(|e| e.to_string())?;
+    nudge_desktop();
     println!(
-        "  `{name}` is {}; it takes effect the next time the desktop starts",
+        "  `{name}` is {}",
         if enabled { "enabled" } else { "disabled" }
     );
+    // Starting and stopping a widget needs a window created or destroyed in
+    // the right order, which is not something to do on a signal — see
+    // `uniwidged_host::reload`. So this one really does take a restart, and
+    // saying so is better than a user waiting for something to happen.
+    println!("  it takes effect the next time the desktop starts");
     Ok(())
 }
 
@@ -457,6 +503,7 @@ fn command_remove(args: &[String]) -> Result<(), String> {
     }
     config.widgets.retain(|widget| widget.name != *name);
     config.write(&path).map_err(|e| e.to_string())?;
+    nudge_desktop();
     println!("  removed `{name}` from {}", path.display());
 
     let data = paths::widget_data_dir(name);

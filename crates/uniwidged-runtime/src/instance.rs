@@ -661,23 +661,17 @@ fn no_locale() -> Denied {
     Denied::Unavailable("granted, but this host has no locale configured".into())
 }
 
-/// The host part of an `https://` URL, lower-cased.
-///
-/// Anything else — a scheme that is not HTTPS, a URL with no host — returns
-/// `None` and is refused. Plain HTTP is not an oversight: a widget's traffic
-/// crosses the same networks as everything else, and there is no reason for a
-/// new framework to make unencrypted requests possible.
-fn host_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://")?;
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()?
-        .split('@')
-        .next_back()?
-        .split(':')
-        .next()?;
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
-}
+// The host part of an `https://` URL is `net::host_of` **itself**, not a copy
+// of it.
+//
+// There were two identical copies of that function, one here and one in `net`,
+// and the one in `net` carries a comment saying it lives there so that the two
+// cannot drift: *a redirect judged against one parse and fetched against
+// another is exactly the hole this file exists to close.* A second copy in the
+// file that performs the **first** check is that hole with the warning written
+// above it. They happened to agree, which is not a property anybody was
+// maintaining.
+use crate::net::host_of;
 
 fn from_wire(tree: wit::Tree) -> Result<uniwidged_view::View, uniwidged_view::wire::TreeError> {
     use uniwidged_view::wire::Tree;

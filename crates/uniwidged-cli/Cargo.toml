@@ -22,3 +22,9 @@ uniwidged-shell.workspace = true
 # `check` counts the nodes a widget draws, so the CLI needs the view vocabulary
 # rather than only the crates that consume it.
 uniwidged-view.workspace = true
+
+# `sigaction`, `kill` and one `write` from a signal handler — see `daemon`.
+# Unix only, and already in the graph through Wasmtime, so it costs nothing to
+# compile.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

@@ -26,6 +26,7 @@ and nothing else does.
 * [Scheduling](#scheduling)
 * [Events](#events)
 * [Host functions](#host-functions) — one section per capability
+* [Links](#links--linkhost)
 * [Settings](#settings-no-capability)
 * [Refusals](#refusals)
 * [The manifest](#the-manifest)
@@ -119,7 +120,7 @@ Chained onto any node.
 | `.role(Role)` / `.accent(Accent)` / `.muted()` | [Style](#style). |
 | `.row()` / `.column()` / `.gap(n)` / `.padding(n)` / `.align(_)` / `.justify(_)` / `.grow(n)` / `.wrap()` | [Layout](#layout-modifiers). |
 | `.on_click(NodeId)` | Makes the node a button, and names what a click reports. |
-| `.link(url)` | Marks it a link, which is what an assistive technology is told. **Nothing opens it yet** — see `ROADMAP.md`; handing a widget a way to make the host launch an arbitrary URL is a capability, not a modifier, and it has not been designed. |
+| `.link(url)` | Makes it a link. The host opens it when the user clicks, if the widget declared `link:<host>` and the URL is `https`. See [links](#links). |
 | `.label(s)` | The accessible name, when the visible text is not one. |
 | `.tooltip(s)` | Hover text. |
 | `.disabled(bool)` / `.selected(bool)` / `.checked(bool)` | State, for both the appearance and the accessibility tree. |
@@ -342,6 +343,38 @@ At most 64 arguments totalling 16 KiB.
 A command can do whatever that command can do. `command:sh` is arbitrary code
 execution wearing a small word.
 
+### Links — `link:<host>`
+
+Not a function. `.link(url)` on a node makes it a link, and the **host** opens
+it when the user clicks — a widget never launches anything.
+
+```rust
+text("Forecast")
+    .id(NodeId::named("forecast"))
+    .link("https://example.com/forecast")
+```
+
+```toml
+capabilities = ["link:example.com"]
+```
+
+Two rules, both checked at the click rather than when the view was built:
+
+* **`https` only.** `file://`, `javascript:` and any scheme somebody has
+  registered a handler for are refused whatever was granted. None of them is a
+  web page, and a desktop that handed one to the system opener would be letting
+  a widget run whatever that scheme is wired to.
+* **Exactly the granted host**, with `link:*.example.com` for its subdomains
+  and not for the apex — the same reading as `net:`.
+
+`link:` is **not** `net:` and neither implies the other. "This widget talks to a
+server" and "this widget can send you to a web page" are different sentences,
+and a user may reasonably answer them differently.
+
+You may draw a link you were not granted; it simply will not open, and the
+desktop says why. You are told about the click either way — what is withheld is
+the opening, not the news.
+
 ### Settings (no capability)
 
 ```rust
@@ -444,6 +477,7 @@ ending with `-`.
 | `timer` · `locale` · `measure` · `metrics` · `secrets` | bare |
 | `fs:<subpath>` | a relative path with no `..` |
 | `net:<host>` | one host, or `*.example.com` for its subdomains |
+| `link:<host>` | the same, for opening a link the user clicks |
 | `command:<name>` | a program name with no path separator |
 
 ### Declaring settings

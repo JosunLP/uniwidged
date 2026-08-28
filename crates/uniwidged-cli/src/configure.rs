@@ -90,9 +90,11 @@ pub fn command(args: &[String]) -> Result<(), String> {
     for setting in &manifest.settings {
         print_one(setting, &values);
     }
-    // Said, because it is not obvious and the alternative is somebody changing
-    // a value, seeing nothing happen, and changing it again.
-    println!("\n  a running desktop picks this up the next time it starts");
+    // A desktop that is running is told, and one line says so. Without that,
+    // somebody changes a value, sees nothing happen, and changes it again.
+    println!();
+    #[cfg(unix)]
+    crate::daemon::nudge_quietly();
     Ok(())
 }
 

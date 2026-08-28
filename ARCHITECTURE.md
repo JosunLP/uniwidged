@@ -232,6 +232,7 @@ simply absent rather than denied.
 | `timer` | returning a `Wake` other than `Never` |
 | `net:<host>` | HTTPS to exactly those hosts, through the host's client |
 | `fs:<subpath>` | read/write inside the widget's own data directory |
+| `link:<host>` | opening `https://<host>` in the browser, when the *user* clicks |
 | `secrets` | the keychain, namespaced to this widget |
 | `locale` | the user's locale-formatted dates, times and numbers |
 | `measure` | measuring a string in a named style, for its own truncation calls |
@@ -260,6 +261,35 @@ manifest that is already right. Every capability in the table is served on
 Linux as of 2026-08-28; the conformance suite asserts the unserved list from
 the widget's side, so a capability that stops being served — or a new one that
 is added and forgotten — fails a test rather than a sentence in a document.
+
+### Links, which are a different question from `net`
+
+`.link(url)` on a node makes it a link, and the host opens it when the user
+clicks. A widget never launches anything — the host decides *whether*, and the
+caller that owns windows does the launching, which is the same split
+`ARCHITECTURE.md` §5 makes about surfaces.
+
+It is a separate capability from `net` because they are separate sentences.
+`net:api.example.com` is "this widget talks to a server"; `link:example.com` is
+"this widget can put something on your screen that takes you to a web page".
+A widget may want either without the other — one that reads a local sensor and
+links to a forecast has no network grant at all — and a user may reasonably say
+yes to one and no to the other. Neither implies the other, and the two matchers
+are separate functions so that a wildcard cannot come to mean one thing across
+both.
+
+Two checks, at the moment of the click rather than when the view was composed:
+the URL is read by **the same function `net` reads one with**, so anything that
+is not `https` is refused before a host comparison happens at all; and then the
+widget's own grant. A widget can draw whatever link it likes — it owns its
+surface — and what is gated is the moment the browser would be launched, which
+is the only moment that does anything. It is told about the click either way:
+withholding the *news* would leave a widget unable to explain itself.
+
+Refusing every scheme but `https` is the load-bearing half. `file://` opens a
+file manager or an editor, and a registered `x-scheme-handler` opens whatever
+somebody installed — so a system opener handed an arbitrary URL is a widget
+running arbitrary programs by another name.
 
 ### The keychain
 
@@ -352,6 +382,37 @@ a change reaches a widget that is already started. Reconfiguring by restarting
 would throw away everything the widget had loaded in order to alter a number —
 and `Event::Configured`, which has been in `wit/uniwidged.wit` since the first
 version with nothing to produce it, is what tells it.
+
+### Reading the configuration again
+
+A desktop that had to be restarted to change a setting is a desktop where
+nobody changes settings twice. `SIGHUP` means *look at your configuration
+again*, and it has meant that to a daemon for forty years — there is nothing to
+encode, which is why this is a signal rather than a socket. A socket would be a
+wire format, a version, a permission model and a second thing to keep working,
+for one bit.
+
+It costs the loop nothing. The handler does two things, both async-signal-safe:
+a relaxed store, and one non-blocking write to the wake pipe that already
+exists for finished tasks. So an idle desktop still blocks on its window
+system's socket with no timer at all.
+
+**The dangerous part is the pid, not the signal.** `SIGHUP`'s default action is
+to terminate, and a pid file left by a crash names a number the kernel will
+reuse — so signalling it blindly is a way to kill a stranger's editor. The pid
+is therefore checked twice before anything is sent: that the process exists,
+and that it is *this program*, by name. A pid file whose process is gone or is
+something else is stale, and stale means ignored.
+
+**What can change while a desktop runs, and what cannot**, is decided by
+whether it can be done atomically. Settings can: they are values behind a
+shared handle, which is why `Host::configure` was built to reach a running
+widget rather than to restart one. Placement can, by the layer that owns
+windows. Installing and removing cannot — a widget arriving needs a component
+compiled, a window created, a swapchain attached and a placement resolved, and
+doing half of that on a signal is how a desktop ends up with a window nothing
+draws into. So those are *reported*, the user is told it takes a restart, and
+everything already running keeps working.
 
 ### Anything that takes time
 

@@ -178,6 +178,7 @@ memory-mb = 16
 | `metrics` | CPU counters |
 | `fs:<subpath>` | reading and writing one folder inside your own directory |
 | `net:<host>` | HTTPS to exactly that host — and *only* that host, redirects included |
+| `link:<host>` | opening that host in the user's browser, when they click a link you drew |
 | `secrets` | the OS keychain, namespaced to you |
 | `command:<name>` | running one declared external command |
 
@@ -270,6 +271,35 @@ What is behind the capability depends on the host, and `uniwidged doctor` says
 which — a session keychain that a login unlocked, or an encrypted file that
 protects a backup but not a program already running as the user. `install`
 prints the same sentence at the moment somebody is asked to approve it.
+
+### Links
+
+`.link(url)` makes a node a link. The **host** opens it when the user clicks —
+you never launch anything, and there is no function to call.
+
+```rust
+text("Forecast")
+    .id(NodeId::named("forecast"))
+    .link("https://example.com/forecast")
+```
+
+```toml
+capabilities = ["link:example.com"]
+```
+
+`https` only. `file://`, `javascript:` and anything with a registered scheme
+handler are refused whatever you were granted — none of them is a web page, and
+a desktop that opened one would be running whatever that scheme is wired to.
+
+`link:` is not `net:`, and asking for one does not get you the other. They are
+different sentences to your user: "this widget talks to a server" and "this
+widget can send you to a web page". Ask for whichever you actually need — a
+widget that reads a local sensor and links to a forecast needs `link:` and no
+network at all.
+
+You may draw a link you were not granted. It will not open, and the desktop
+will say why — you are told about the click either way, so you can show
+something useful.
 
 ## 6. Settings
 

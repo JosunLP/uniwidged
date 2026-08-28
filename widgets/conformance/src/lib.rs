@@ -194,6 +194,32 @@ impl Widget for Conformance {
                 .role(Role::Caption)
                 .id(NodeId::named("configured")),
         );
+        // Two links, which are the one interaction the *host* acts on rather
+        // than the widget. Neither needs a capability to be drawn — a widget
+        // may put whatever it likes on its own surface — and what is gated is
+        // the moment the browser would be launched. So these exist to be
+        // clicked by a host test, not to report anything themselves.
+        root = root.child(
+            text("granted link")
+                .role(Role::Caption)
+                .id(NodeId::named("link-granted"))
+                .link("https://conformance.invalid/docs"),
+        );
+        root = root.child(
+            text("other host")
+                .role(Role::Caption)
+                .id(NodeId::named("link-elsewhere"))
+                .link("https://elsewhere.invalid/docs"),
+        );
+        root = root.child(
+            // Not a web page. A desktop that handed this to the system opener
+            // would be letting a widget run whatever the scheme is wired to.
+            text("not a web page")
+                .role(Role::Caption)
+                .id(NodeId::named("link-scheme"))
+                .link("file:///etc/passwd"),
+        );
+
         for attempt in attempts {
             root = root.child(
                 row()

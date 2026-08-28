@@ -2606,6 +2606,7 @@ dependencies = [
 name = "uniwidged-cli"
 version = "0.0.1"
 dependencies = [
+ "libc",
  "uniwidged-compose",
  "uniwidged-core",
  "uniwidged-host",

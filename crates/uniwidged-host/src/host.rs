@@ -49,18 +49,41 @@ use crate::scheduler::Scheduler;
 /// enough that a dying widget is a background annoyance rather than a load,
 /// short enough that a widget which failed once is back before anyone looks.
 const RESTART_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
-use crate::supervisor::{State, Supervised};
+use crate::supervisor::{Reconfigured, State, Supervised};
 
-/// What configuring a widget did.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Configured {
-    /// The widget was told, and says its view would now differ.
-    pub changed: bool,
-    /// What was wrong with the values — a key the widget does not declare, a
-    /// value it would not accept. Reported rather than fatal, and rather than
-    /// silently dropped: a hand-edited line that is being ignored is something
-    /// somebody has to be able to find out about.
-    pub complaints: Vec<String>,
+/// What a click landed on.
+///
+/// Richer than a node id because a link is the one thing a click can be that
+/// the *host* cannot finish: opening a browser is launching a process, and the
+/// host does not launch processes any more than it owns windows. It decides
+/// whether, and the caller — which knows what a browser is on this platform —
+/// does it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activated {
+    /// Nothing addressable was under the pointer.
+    Nothing,
+    /// A node was activated, and the widget has been told.
+    Node(NodeId),
+    /// The same, and the node is a link this widget may open.
+    Link { node: NodeId, url: String },
+    /// The same, and the node is a link this widget may **not** open — an
+    /// ungranted host, or something that is not an https URL at all. The
+    /// caller says so; it is a fact its author needs and its user is entitled
+    /// to see rather than a click that silently does nothing.
+    LinkRefused { node: NodeId, why: String },
+}
+
+impl Activated {
+    /// The node, whatever kind of activation it was. What a test or a log line
+    /// wants.
+    pub fn node(&self) -> Option<NodeId> {
+        match self {
+            Activated::Nothing => None,
+            Activated::Node(node)
+            | Activated::Link { node, .. }
+            | Activated::LinkRefused { node, .. } => Some(*node),
+        }
+    }
 }
 
 /// What one turn of the loop did.
@@ -595,10 +618,14 @@ impl Host {
     ///
     /// Hit-testing happens here, against the rectangles the compose pass
     /// recorded — the widget is told *which node*, never where the pointer
-    /// was. Returns the node, if any, so a caller can log or test it.
-    pub fn click(&mut self, id: WidgetId, point: Point) -> Result<Option<NodeId>, HostError> {
+    /// was.
+    ///
+    /// The widget is told either way, including when the node is a link it may
+    /// not open: a widget is entitled to know its own button was pressed, and
+    /// what is being withheld is the *opening*, not the news.
+    pub fn click(&mut self, id: WidgetId, point: Point) -> Result<Activated, HostError> {
         let Some(node) = self.composed.get(&id).and_then(|c| c.hit(point)) else {
-            return Ok(None);
+            return Ok(Activated::Nothing);
         };
         let index = self.index(id)?;
         // A widget that says its view would differ is scheduled immediately
@@ -611,7 +638,49 @@ impl Host {
                 SystemTime::now(),
             );
         }
-        Ok(Some(node))
+
+        let Some(url) = self
+            .composed
+            .get(&id)
+            .and_then(|composed| composed.link(node))
+            .map(str::to_owned)
+        else {
+            return Ok(Activated::Node(node));
+        };
+        Ok(match self.may_open(index, &url) {
+            Ok(()) => Activated::Link { node, url },
+            Err(why) => Activated::LinkRefused { node, why },
+        })
+    }
+
+    /// May this widget's link be opened?
+    ///
+    /// Two checks, and the order matters. The URL is read **first**, by the
+    /// same function `net` reads one with, so a link that is not an `https`
+    /// URL is refused as malformed rather than reaching a host comparison that
+    /// would have nothing sensible to compare. Then the widget's own
+    /// `link:<host>` grant.
+    ///
+    /// The check happens at the click and not when the view was composed. A
+    /// widget can draw whatever it likes; what is gated is the moment the
+    /// browser would be launched, which is the only moment that does anything.
+    fn may_open(&self, index: usize, url: &str) -> Result<(), String> {
+        let Some(host) = uniwidged_runtime::net::host_of(url) else {
+            // `file://`, `javascript:`, a custom scheme handler somebody
+            // registered. None of them is a web page, and a desktop that
+            // handed any of them to the system opener would be letting a
+            // widget run whatever that scheme is wired to.
+            return Err(format!(
+                "`{url}` is not an https URL, and only an https URL is opened"
+            ));
+        };
+        match self.widgets[index]
+            .policy()
+            .check(&uniwidged_runtime::capability::Request::Link { host: host.clone() })
+        {
+            Ok(()) => Ok(()),
+            Err(_) => Err(format!("this widget was not granted `link:{host}`")),
+        }
     }
 
     /// Applies a widget's configuration and tells it.
@@ -634,10 +703,10 @@ impl Host {
         &mut self,
         id: WidgetId,
         values: &std::collections::BTreeMap<String, SettingValue>,
-    ) -> Result<Configured, HostError> {
+    ) -> Result<Reconfigured, HostError> {
         let index = self.index(id)?;
-        let (changed, complaints) = self.widgets[index].configure(&self.runtime, values);
-        if changed {
+        let report = self.widgets[index].configure(&self.runtime, values);
+        if report.redraws {
             self.scheduler.schedule(
                 id,
                 uniwidged_core::Wake::After(std::time::Duration::ZERO),
@@ -645,10 +714,7 @@ impl Host {
                 SystemTime::now(),
             );
         }
-        Ok(Configured {
-            changed,
-            complaints,
-        })
+        Ok(report)
     }
 
     /// Forces one widget to be drawn again, whatever its view says.

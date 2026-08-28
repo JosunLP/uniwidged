@@ -71,7 +71,15 @@ model.
 > started, and `uniwidged configure` is where a wrong value is refused. So a
 > widget reading a number never has a branch for somebody typing `banana`, and
 > `Event::Configured`, which had been in the interface file since the first
-> commit with nothing to produce it, now fires. What is
+> commit with nothing to produce it, now fires.
+>
+> **A running desktop is told.** `uniwidged configure`, `move` and `lock` reach
+> a desktop that is already running — one `SIGHUP`, one byte down the wake pipe
+> that already exists, and a widget reconfigured without being restarted.
+> Installing and removing still take a restart, and say so, because doing half
+> of that on a signal is how a desktop ends up with a window nothing draws into.
+> And a link a widget draws now opens: `https` only, to a host the manifest
+> declared, checked at the click rather than when the view was built. What is
 > still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over
 > — the Windows and macOS platforms, packaging, and somewhere to find widgets.
 >
@@ -206,7 +214,9 @@ memory-mb = 32
 
 `net:api.open-meteo.com`, not `network` — because "this widget talks to
 api.open-meteo.com" is something a user can agree to, and "this widget uses the
-network" is not.
+network" is not. `link:open-meteo.com` is a *different* line, because "talks to
+a server" and "can send you to a web page" are different things happening to a
+user.
 
 ## Layout
 
