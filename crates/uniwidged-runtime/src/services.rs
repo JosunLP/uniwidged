@@ -49,6 +49,17 @@ pub struct Services {
     /// same reason `tasks` carries its id: there is then no argument through
     /// which a host function could reach somebody else's.
     pub secrets: Option<crate::keyring::Keyring>,
+    /// What this widget was configured with.
+    ///
+    /// Not an `Option`, alone among these, because it is not a capability and
+    /// there is nothing for a host to fail to provide: a widget that declared
+    /// no settings has an empty one, and every lookup answers `None` — which
+    /// is exactly what it means. See `crate::settings`.
+    ///
+    /// Shared with the running instance rather than copied into it, so a
+    /// change reaches a widget that is already started instead of needing it
+    /// restarted to alter a number.
+    pub settings: crate::settings::Settings,
 }
 
 impl std::fmt::Debug for Services {
@@ -63,6 +74,7 @@ impl std::fmt::Debug for Services {
             .field("metrics", &self.metrics.is_some())
             .field("tasks", &self.tasks)
             .field("secrets", &self.secrets)
+            .field("settings", &self.settings)
             .finish()
     }
 }
@@ -101,6 +113,11 @@ impl Services {
 
     pub fn with_secrets(mut self, keyring: crate::keyring::Keyring) -> Self {
         self.secrets = Some(keyring);
+        self
+    }
+
+    pub fn with_settings(mut self, settings: crate::settings::Settings) -> Self {
+        self.settings = settings;
         self
     }
 }
@@ -160,6 +177,20 @@ pub struct DataDir {
     root: PathBuf,
     max_file_bytes: usize,
     max_total_bytes: u64,
+    /// What the directory was last known to hold, shared by every clone of
+    /// this handle so that a widget's restart does not start counting again.
+    ///
+    /// Because **a write happens inside a widget's `view`, on its
+    /// sixteen-millisecond deadline**, and walking a directory to answer "is
+    /// there room?" is work proportional to what is already there — charged to
+    /// the widget, on every write, for an answer that is almost always yes.
+    /// The first version did exactly that, and it is the same mistake the
+    /// keychain made with `fsync` and `Tasks::start` made with a thread per
+    /// request.
+    ///
+    /// See [`DataDir::write`] for why a cache is sound here when
+    /// [`DataDir::used_bytes`] says a cached total would not be.
+    used: Arc<Mutex<Option<u64>>>,
 }
 
 /// Why a read or a write did not happen.
@@ -207,6 +238,7 @@ impl DataDir {
             root: root.into(),
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+            used: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -226,12 +258,12 @@ impl DataDir {
 
     /// What this widget is using, in bytes, counting only regular files.
     ///
-    /// Walked rather than remembered. A cached total would be wrong after
-    /// anything outside this process touched the directory — a `--purge` that
-    /// did not finish, a user deleting a cache by hand, a restore from a
-    /// backup — and a quota that is wrong in the permissive direction is not a
-    /// quota. The directory holds a widget's cache, so the walk is over tens
-    /// of files and happens on writes rather than on every frame.
+    /// Always walked: this is the authority, and a cached total would be wrong
+    /// after anything outside this process touched the directory — a `--purge`
+    /// that did not finish, a user deleting a cache by hand, a restore from a
+    /// backup. [`DataDir::write`] caches what this returns and comes back here
+    /// whenever the cached answer would be a refusal, so the walk happens when
+    /// it decides something rather than on every write.
     ///
     /// Symlinks are **not** followed and their targets are not counted: a
     /// widget cannot make its own quota look smaller by pointing at somebody
@@ -344,17 +376,33 @@ impl DataDir {
         // there. That is the ordinary case for the widget this exists to
         // bound, so getting it wrong would break the honest widgets and leave
         // the loop working.
-        let used = self.used_bytes()?;
+        //
+        // The count comes from the cache, and the directory is walked only
+        // when the cache says the answer might be *no*. That is what keeps a
+        // widget under its quota from paying for a directory walk on every
+        // write, and it is correct in both directions of drift: a cache that
+        // is too high refuses a write that should have been allowed, and the
+        // recount below is what then allows it; a cache that is too low —
+        // which only something outside this process can cause — lets the quota
+        // be exceeded by exactly what that something added, and the next
+        // recount takes it back. Neither leaves a widget able to grow without
+        // bound, which is the whole job.
         let replacing = self.existing_size(relative);
-        let after = used
-            .saturating_sub(replacing)
-            .saturating_add(bytes.len() as u64);
-        if after > self.max_total_bytes {
-            return Err(StoreError::Full {
-                limit: self.max_total_bytes,
-                used,
-            });
+        let projected = |used: u64| {
+            used.saturating_sub(replacing)
+                .saturating_add(bytes.len() as u64)
+        };
+        let mut used = self.known_usage()?;
+        if projected(used) > self.max_total_bytes {
+            used = self.recount()?;
+            if projected(used) > self.max_total_bytes {
+                return Err(StoreError::Full {
+                    limit: self.max_total_bytes,
+                    used,
+                });
+            }
         }
+        let after = projected(used);
         std::fs::create_dir_all(&self.root).map_err(|e| StoreError::Io(e.to_string()))?;
         let root = self
             .root
@@ -385,7 +433,26 @@ impl DataDir {
         std::fs::rename(&temporary, parent.join(&name)).map_err(|e| {
             let _ = std::fs::remove_file(&temporary);
             StoreError::Io(e.to_string())
-        })
+        })?;
+        // Only after the write landed. A failed write that had already been
+        // counted would shrink the widget's apparent room for good.
+        *self.used.lock().unwrap_or_else(|e| e.into_inner()) = Some(after);
+        Ok(())
+    }
+
+    /// The cached usage, walking the directory once if there is none yet.
+    fn known_usage(&self) -> Result<u64, StoreError> {
+        if let Some(used) = *self.used.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Ok(used);
+        }
+        self.recount()
+    }
+
+    /// Walks the directory and remembers the answer.
+    fn recount(&self) -> Result<u64, StoreError> {
+        let used = self.used_bytes()?;
+        *self.used.lock().unwrap_or_else(|e| e.into_inner()) = Some(used);
+        Ok(used)
     }
 }
 

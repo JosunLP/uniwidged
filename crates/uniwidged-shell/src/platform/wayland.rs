@@ -447,6 +447,19 @@ pub struct WaylandWindow {
     _xdg: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
     shape: Shape,
     placement: Placement,
+    /// The last size the *compositor* announced and this window handed to its
+    /// caller.
+    ///
+    /// Separate from `placement.rect` on purpose, and the separation is a bug
+    /// this file had. Between `set_geometry` asking for a size and the
+    /// compositor's answering configure arriving, the two differ — and a
+    /// `take_resize` that compared against `placement.rect` read that gap as
+    /// "the compositor resized me", reverting the client's own request to the
+    /// old size and never asking again. On a quiet machine the configure
+    /// arrives inside the same drain and the gap is invisible; under load it
+    /// is not, and it showed up as a placement round trip that came back with
+    /// the size it started with.
+    reported: (u32, u32),
 }
 
 impl WaylandWindow {
@@ -558,6 +571,10 @@ impl WaylandWindow {
                 output: None,
                 scale: 1.0,
             },
+            // Overwritten below with whatever the compositor answers; zero
+            // until then, which is the one value `take_resize` treats as
+            // "nothing has been said yet".
+            reported: (0, 0),
         };
         window.place(rect);
 
@@ -574,6 +591,9 @@ impl WaylandWindow {
             window.placement.rect.width = window.state.size.0;
             window.placement.rect.height = window.state.size.1;
         }
+        // The size the compositor has just announced is, by definition, one
+        // the caller already knows about: it is what `geometry()` returns.
+        window.reported = window.state.size;
         window.state.origin = (window.placement.rect.x, window.placement.rect.y);
         Ok(window)
     }
@@ -823,11 +843,16 @@ impl WaylandWindow {
     /// it may be smaller than requested on a small output. The caller has to
     /// resize its swapchain to match, which is why this is separate from
     /// [`WaylandWindow::drain_events`]: it is not something the *user* did.
+    /// Compared against what was last *reported*, never against what was last
+    /// requested. See the `reported` field: comparing against the
+    /// request makes the window revert its own `set_geometry` whenever the
+    /// compositor has not answered yet.
     pub fn take_resize(&mut self) -> Option<(u32, u32)> {
         let size = self.state.size;
-        if size == (0, 0) || size == (self.placement.rect.width, self.placement.rect.height) {
+        if size == (0, 0) || size == self.reported {
             return None;
         }
+        self.reported = size;
         self.placement.rect.width = size.0;
         self.placement.rect.height = size.1;
         Some(size)

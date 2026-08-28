@@ -225,7 +225,8 @@ fn widget_toml(name: &str, capabilities: &[String]) -> String {
          #   metrics          CPU counters\n\
          #   fs:<subpath>     read and write one folder of your own\n\
          #   net:<host>       HTTPS to exactly that host\n\
-         #   secrets          the OS keychain, namespaced to you\n\
+         #   secrets          the keychain, namespaced to you\n\
+         #   command:<name>   run one declared external command\n\
          capabilities = []\n"
             .to_string()
     } else {
@@ -245,7 +246,22 @@ fn widget_toml(name: &str, capabilities: &[String]) -> String {
          {list}\
          # The most memory this widget may use. Shown to your users before they\n\
          # install it, so ask for what you need and not what you might.\n\
-         memory-mb = 16\n"
+         memory-mb = 16\n\
+         \n\
+         # What your users can change. Declared here rather than parsed by your\n\
+         # widget, so the host checks the type and the range before you are\n\
+         # started — which is why the code reading this has no branch for\n\
+         # somebody typing nonsense, and needs none.\n\
+         #\n\
+         # `type` is text, number, toggle or choice. Every setting needs a\n\
+         # `default`: an unset setting is its default, which is what lets you\n\
+         # read one without a fallback. A number takes `min` and `max`; a\n\
+         # choice takes `options`.\n\
+         [[setting]]\n\
+         key = \"greeting\"\n\
+         label = \"What to say\"\n\
+         type = \"text\"\n\
+         default = \"Hello\"\n"
     )
 }
 
@@ -284,14 +300,35 @@ fn lib_rs(name: &str) -> String {
 
 use uniwidged_guest::prelude::*;
 
-#[derive(Default)]
+/// What `widget.toml` declares as this setting's default.
+///
+/// Only reachable on a host older than your manifest, since a declared key
+/// always has a value — but a fallback that matches the manifest costs a line
+/// and makes that impossible to get wrong.
+const GREETING: &str = "Hello";
+
 pub struct Widget_ {{
     clicks: u32,
+    /// Read in `start` and again on `Configured`, never in `view`: `view` runs
+    /// on a deadline and may run sixty times a second, and this changes when
+    /// somebody changes it and at no other time.
+    greeting: String,
+}}
+
+impl Default for Widget_ {{
+    fn default() -> Self {{
+        Self {{
+            clicks: 0,
+            greeting: GREETING.to_string(),
+        }}
+    }}
 }}
 
 impl Widget for Widget_ {{
-    /// Called once, before the first view. Load anything you remembered here.
-    fn start(&mut self, _cx: &Cx) -> Result<(), String> {{
+    /// Called once, before the first view. Load anything you remembered here,
+    /// and read your settings.
+    fn start(&mut self, cx: &Cx) -> Result<(), String> {{
+        self.read_settings(cx);
         Ok(())
     }}
 
@@ -303,7 +340,7 @@ impl Widget for Widget_ {{
     fn view(&mut self, _cx: &Cx) -> View {{
         panel(NodeId::named("root"))
             .gap(2)
-            .child(text("{name}").role(Role::Title))
+            .child(text(self.greeting.clone()).role(Role::Title))
             .child(
                 text(self.clicks.to_string())
                     .role(Role::Display)
@@ -322,11 +359,17 @@ impl Widget for Widget_ {{
     ///
     /// You are told *which node* was activated, never where the pointer was:
     /// the host did the layout, so the host does the hit-testing.
-    fn on_event(&mut self, event: &Event, _cx: &Cx) -> bool {{
+    fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {{
         match event {{
             Event::Clicked(id) if *id == NodeId::named("button") => {{
                 self.clicks += 1;
                 true
+            }}
+            // The user changed one of your settings. Read them again.
+            Event::Configured => {{
+                let was = std::mem::take(&mut self.greeting);
+                self.read_settings(cx);
+                was != self.greeting
             }}
             _ => false,
         }}
@@ -340,6 +383,20 @@ impl Widget for Widget_ {{
     /// them cost something.
     fn wake(&self) -> Wake {{
         Wake::Never
+    }}
+}}
+
+impl Widget_ {{
+    /// Reads what `widget.toml` declared.
+    ///
+    /// The `_ =>` arm is only reachable on a host that does not know your
+    /// manifest: the host checks the declared type before you see a value, so
+    /// a key you declared as text cannot arrive as anything else.
+    fn read_settings(&mut self, cx: &Cx) {{
+        self.greeting = match cx.setting("greeting") {{
+            Some(SettingValue::Text(text)) => text,
+            _ => GREETING.to_string(),
+        }};
     }}
 }}
 
@@ -363,6 +420,18 @@ mod tests {{
         let mut widget = Widget_::default();
         assert!(!widget.on_event(&Event::Clicked(NodeId::named("elsewhere")), &Cx::new()));
     }}
+
+    #[test]
+    fn a_host_that_knows_no_settings_gets_the_declared_default() {{
+        // Off-target `Cx::setting` answers `None`, which is what a host older
+        // than your manifest looks like.
+        let mut widget = Widget_ {{
+            clicks: 0,
+            greeting: String::new(),
+        }};
+        widget.read_settings(&Cx::new());
+        assert_eq!(widget.greeting, GREETING);
+    }}
 }}
 "##
     )
@@ -378,6 +447,7 @@ fn readme(name: &str) -> String {
          cargo build --release --target wasm32-wasip2  # the component\n\
          uniwidged check target/wasm32-wasip2/release/{underscored}.wasm\n\
          uniwidged install target/wasm32-wasip2/release/{underscored}.wasm --allow-unsigned\n\
+         uniwidged configure {name}                     # the knobs it declares\n\
          uniwidged run\n\
          ```\n\n\
          `--allow-unsigned` is for your own builds. To publish, run\n\

@@ -202,6 +202,11 @@ struct Desktop {
     /// Set when the release was a click rather than a placement.
     clicked: Option<(i32, i32)>,
     placed: Option<PhysicalRect>,
+    /// How many button releases have been *processed*, whatever they turned
+    /// out to mean. What a gesture's end waits on: a release that produced
+    /// neither a click nor a placement is a real answer, and one this file has
+    /// three tests about.
+    releases: u32,
 }
 
 impl Desktop {
@@ -217,10 +222,22 @@ impl Desktop {
             locked,
             clicked: None,
             placed: None,
+            releases: 0,
         }
     }
 
     /// Pumps events for a while, doing what the desktop's own loop does.
+    /// Pumps until `done` or until `limit` has passed.
+    ///
+    /// For the end of a gesture, where what the test is waiting for is a fact
+    /// rather than a duration — see the note in `drag`.
+    fn pump_until(&mut self, limit: Duration, done: impl Fn(&Self) -> bool) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline && !done(self) {
+            self.pump(Duration::from_millis(20));
+        }
+    }
+
     fn pump(&mut self, how_long: Duration) {
         let deadline = Instant::now() + how_long;
         while Instant::now() < deadline {
@@ -243,6 +260,7 @@ impl Desktop {
                     }
                     Input::Motion { root, .. } => latest_motion = Some(root),
                     Input::Released { root, .. } => {
+                        self.releases += 1;
                         let _ = self.window.release_pointer();
                         match self.pointer.release(root) {
                             Release::Click { at, .. } => self.clicked = Some(at),
@@ -303,7 +321,14 @@ fn drag(pointer: &Pointer, desktop: &mut Desktop, from: (i16, i16), to: (i16, i1
         desktop.pump(Duration::from_millis(30));
     }
     pointer.button(false);
-    desktop.pump(Duration::from_millis(120));
+    // Waited for rather than slept through. A fixed window is a bet on how
+    // busy the machine is, and it is a bet this file lost once: the release
+    // arrived after the pump had ended, the drag looked like it had never
+    // happened, and the failure said `placed: None` with nothing to suggest
+    // why. The generous ceiling is only reached when something is genuinely
+    // wrong, and then the assertion that follows says what.
+    let before = desktop.releases;
+    desktop.pump_until(Duration::from_secs(5), |desktop| desktop.releases > before);
 }
 
 #[test]
@@ -464,4 +489,266 @@ fn a_widget_dragged_across_the_desktop_is_recorded_against_the_monitor_it_lands_
         "what was saved should put the widget back where it is"
     );
     assert_eq!(desktop.geometry_from_server(&pointer), placed);
+}
+
+// ---------------------------------------------------------------------------
+// Two monitors
+// ---------------------------------------------------------------------------
+
+/// Defines a virtual RandR monitor on a running server.
+///
+/// `xrandr --setmonitor` is the whole reason this is testable at all. A nested
+/// `Xvfb` has one screen and no real outputs, but RandR 1.5 lets a *client*
+/// declare monitors over a screen's geometry — which is exactly what
+/// `randr_get_monitors` then reports, and exactly what `uniwidged-shell`
+/// reads. So the thing under test sees two named monitors side by side,
+/// through the same protocol path a docked laptop uses.
+///
+/// This is the gap `ROADMAP.md` named for two milestones: the placement logic
+/// was tested against a docked-laptop layout in memory, and the enumeration
+/// against a server with one screen. Nobody had watched the two meet.
+fn set_monitor(display: &str, name: &str, geometry: &str) -> bool {
+    Command::new("xrandr")
+        .env("DISPLAY", display)
+        .args(["--setmonitor", name, geometry, "none"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn delete_monitor(display: &str, name: &str) -> bool {
+    Command::new("xrandr")
+        .env("DISPLAY", display)
+        .args(["--delmonitor", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// Two monitors, or a skip saying why.
+///
+/// `xrandr` is a separate binary and a separate package from `Xvfb`, so its
+/// absence is treated the way `Xvfb`'s is: a skip, unless the run has said it
+/// requires X11, in which case it is a failure. A green run that silently
+/// checked nothing is the thing this repository keeps refusing.
+fn two_monitors(display: &str) -> bool {
+    // The left one is deliberately *not* at the origin in one of the two
+    // layouts below, because an output whose corner is (0, 0) makes an
+    // arithmetic error in either direction invisible.
+    let ok = set_monitor(display, "LEFT-1", "640/170x720/240+0+0")
+        && set_monitor(display, "RIGHT-1", "640/170x720/240+640+0");
+    if !ok {
+        assert!(
+            std::env::var("UNIWIDGED_REQUIRE_X11").is_err(),
+            "UNIWIDGED_REQUIRE_X11 is set and `xrandr --setmonitor` did not work"
+        );
+        eprintln!(
+            "skipping: no usable xrandr. Set UNIWIDGED_REQUIRE_X11=1 to make this a failure."
+        );
+    }
+    ok
+}
+
+#[test]
+fn two_monitors_are_enumerated_by_name_and_by_where_they_are() {
+    // The property every placement depends on: a monitor is reported by a name
+    // that does not renumber, with the rectangle it occupies in the desktop's
+    // coordinate space. An index would be enough for one screen and wrong for
+    // two.
+    let Some(server) = server() else { return };
+    if !two_monitors(&server.display) {
+        return;
+    }
+
+    let outputs = uniwidged_shell::platform::x11::outputs(Some(&server.display))
+        .expect("a server with monitors should enumerate them");
+    let by_name = |name: &str| {
+        outputs
+            .iter()
+            .find(|output| output.name == name)
+            .unwrap_or_else(|| panic!("no output named {name} in {outputs:?}"))
+    };
+    assert_eq!(by_name("LEFT-1").rect.x, 0);
+    assert_eq!(by_name("LEFT-1").rect.width, 640);
+    assert_eq!(by_name("RIGHT-1").rect.x, 640);
+    assert_eq!(by_name("RIGHT-1").rect.width, 640);
+
+    // A finding worth keeping, because it is not what the code was written
+    // against: **no monitor here is flagged primary**. X reports one only when
+    // something has set it, and a nested server with no real outputs never
+    // does — as, in the field, do a fresh RandR configuration and more than
+    // one Wayland compositor. `placement::primary` already falls back to the
+    // first output rather than indexing into nothing, and this is the run that
+    // exercises that path rather than the one everybody assumes.
+    assert!(
+        outputs.iter().filter(|output| output.primary).count() <= 1,
+        "two primaries would make the fallback depend on iteration order: {outputs:?}"
+    );
+
+    // And the automatic whole-screen monitor X keeps alongside the declared
+    // ones. Not tidied away, because a real desktop can show one too — a
+    // laptop whose outputs are all disconnected — and a placement has to
+    // survive being resolved against a list that holds it.
+    assert!(
+        outputs.iter().any(|output| output.rect.width == 1280),
+        "the automatic monitor should still be listed: {outputs:?}"
+    );
+}
+
+#[test]
+fn a_widget_on_the_second_monitor_opens_where_the_second_monitor_is() {
+    // The end-to-end claim: a placement stored *relative to a named output*
+    // becomes a window at the right desktop coordinates, and the server agrees.
+    // The arithmetic is `output.x + stored.x`, and a sign error in it is
+    // invisible on a single screen whose origin is zero.
+    let Some(server) = server() else { return };
+    if !two_monitors(&server.display) {
+        return;
+    }
+    let outputs = uniwidged_shell::platform::x11::outputs(Some(&server.display)).expect("outputs");
+
+    let stored = uniwidged_host::config::Placement {
+        output: Some("RIGHT-1".into()),
+        x: 32,
+        y: 24,
+        width: 320,
+        height: 200,
+        locked: false,
+    };
+    let resolved = uniwidged_host::placement::resolve(&stored, &outputs);
+    assert!(!resolved.displaced);
+    assert_eq!(resolved.output.as_deref(), Some("RIGHT-1"));
+    assert_eq!(resolved.rect.x, 640 + 32);
+    assert_eq!(resolved.rect.y, 24);
+
+    // And a real window really opens there. Read back from the server, because
+    // what a client asked for and what a window manager did are different
+    // facts — and on this path there is no window manager, which is itself
+    // worth pinning.
+    let window = X11Window::open_on(
+        Some(&server.display),
+        resolved.rect,
+        "right-hand",
+        WindowKind::DesktopWidget,
+    )
+    .expect("a desktop-layer window");
+
+    // Read from the server on a second connection, not from the window's own
+    // record: what a client asked for and what is actually on screen are
+    // different facts, and only one of them is what a user sees.
+    let pointer = Pointer::open(&server.display);
+    let reply = pointer
+        .conn
+        .get_geometry(window.window_id())
+        .expect("geometry request")
+        .reply()
+        .expect("geometry");
+    assert_eq!((reply.x, reply.y), (672, 24));
+    assert_eq!((reply.width, reply.height), (320, 200));
+}
+
+#[test]
+fn unplugging_a_monitor_moves_a_widget_and_keeps_its_name() {
+    // The half that makes docking work, and the half that is easy to get
+    // backwards. A widget whose monitor is gone has to appear somewhere
+    // reachable — but its stored name must **not** be rewritten, or plugging
+    // the monitor back in would leave it on the laptop screen for good.
+    let Some(server) = server() else { return };
+    if !two_monitors(&server.display) {
+        return;
+    }
+    let stored = uniwidged_host::config::Placement {
+        output: Some("RIGHT-1".into()),
+        x: 32,
+        y: 24,
+        width: 320,
+        height: 200,
+        locked: false,
+    };
+
+    let docked = uniwidged_shell::platform::x11::outputs(Some(&server.display)).expect("outputs");
+    let there = uniwidged_host::placement::resolve(&stored, &docked);
+    assert_eq!(there.rect.x, 672);
+
+    assert!(delete_monitor(&server.display, "RIGHT-1"), "unplug it");
+    let undocked = uniwidged_shell::platform::x11::outputs(Some(&server.display)).expect("outputs");
+    assert!(
+        !undocked.iter().any(|output| output.name == "RIGHT-1"),
+        "the monitor should be gone: {undocked:?}"
+    );
+
+    let displaced = uniwidged_host::placement::resolve(&stored, &undocked);
+    assert!(displaced.displaced, "it should say the monitor is missing");
+    // Somewhere on a screen that exists, and *within* it — a widget pushed off
+    // the edge by an undock is a widget its user cannot get back.
+    let landed_on = displaced
+        .output
+        .as_deref()
+        .expect("it should say where it went");
+    let fallback = undocked
+        .iter()
+        .find(|output| output.name == landed_on)
+        .expect("and that output should exist");
+    assert!(displaced.rect.x >= fallback.rect.x);
+    assert!(displaced.rect.y >= fallback.rect.y);
+    assert!(
+        displaced.rect.x + displaced.rect.width as i32
+            <= fallback.rect.x + fallback.rect.width as i32
+    );
+    assert!(
+        displaced.rect.y + displaced.rect.height as i32
+            <= fallback.rect.y + fallback.rect.height as i32
+    );
+    // And the configuration is untouched: the name is still the one the user
+    // put it on.
+    assert_eq!(stored.output.as_deref(), Some("RIGHT-1"));
+
+    // Docking again puts it back, which is the whole point of not rewriting.
+    assert!(
+        set_monitor(&server.display, "RIGHT-1", "640/170x720/240+640+0"),
+        "plug it back in"
+    );
+    let redocked = uniwidged_shell::platform::x11::outputs(Some(&server.display)).expect("outputs");
+    let back = uniwidged_host::placement::resolve(&stored, &redocked);
+    assert!(!back.displaced);
+    assert_eq!(back.rect, there.rect, "it should be exactly where it was");
+}
+
+#[test]
+fn dragging_a_widget_onto_the_other_monitor_records_the_other_monitor() {
+    // The inverse of `resolve`, against real monitors: a widget moved across
+    // the seam has to be recorded against the output it landed on and at
+    // coordinates relative to *that* output. Getting this wrong is invisible
+    // until the machine is undocked, and then everything is in the wrong place
+    // at once.
+    let Some(server) = server() else { return };
+    if !two_monitors(&server.display) {
+        return;
+    }
+    let outputs = uniwidged_shell::platform::x11::outputs(Some(&server.display)).expect("outputs");
+
+    // Dropped well inside the right-hand monitor.
+    let dropped = PhysicalRect::new(700, 100, 320, 200);
+    let (output, relative) = uniwidged_host::placement::locate(dropped, &outputs);
+    assert_eq!(output.as_deref(), Some("RIGHT-1"));
+    assert_eq!((relative.x, relative.y), (60, 100));
+
+    // And recording then resolving is the identity, which is the property a
+    // sign error in either direction survives everything else.
+    let stored = uniwidged_host::config::Placement {
+        output,
+        x: relative.x,
+        y: relative.y,
+        width: relative.width,
+        height: relative.height,
+        locked: false,
+    };
+    assert_eq!(
+        uniwidged_host::placement::resolve(&stored, &outputs).rect,
+        dropped
+    );
 }

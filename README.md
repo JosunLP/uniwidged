@@ -58,9 +58,20 @@ model.
 > workspace builds from crates.io alone: no sibling checkout, no private
 > repository, `git clone && cargo test`. Widgets can be dragged, resized and
 > pinned, and they remember which monitor they were on — measured against a
-> real X server with synthetic pointer input, not asserted. It starts with the
-> session, it will not overwrite an autostart entry somebody wrote by hand, and
-> a widget granted `fs` can no longer fill a disk one file at a time. What is
+> real X server with synthetic pointer input, not asserted — including across
+> two monitors, where a widget stored against the right-hand one opens where
+> the right-hand one is, survives being unplugged without forgetting which
+> screen it belongs to, and comes back exactly where it was when it is plugged
+> in again. It starts with the session, it will not overwrite an autostart
+> entry somebody wrote by hand, and a widget granted `fs` can no longer fill a
+> disk one file at a time.
+>
+> **And widgets have settings.** A widget declares what it can be configured
+> with — a type, a range, a default — the host validates before the widget is
+> started, and `uniwidged configure` is where a wrong value is refused. So a
+> widget reading a number never has a branch for somebody typing `banana`, and
+> `Event::Configured`, which had been in the interface file since the first
+> commit with nothing to produce it, now fires. What is
 > still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over
 > — the Windows and macOS platforms, packaging, and somewhere to find widgets.
 >
@@ -213,7 +224,7 @@ crates/
   uniwidged-cli        `uniwidged run · new · check · install · sign · trust · …`
 wit/uniwidged.wit      the host/guest contract
 widgets/clock          the reference widget for `locale`
-widgets/system-load    the reference widget for `metrics`
+widgets/system-load    the reference widget for `metrics`, and for settings
 widgets/counter        the reference widget for `fs`, and a restart it survives
 widgets/uptime         the reference widget for `command`, and the async shape
 widgets/vault          the reference widget for `secrets`, and a credential
@@ -245,6 +256,7 @@ Some tests need more than a compiler, and say so rather than skipping quietly:
 | the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
 | the HTTPS tests | `openssl`, to make a certificate for the TLS server they start themselves. No internet is used or needed. Without it they skip, and `UNIWIDGED_REQUIRE_NET=1` makes that a failure. |
 | the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
+| the two-monitor tests | `Xvfb` and `xrandr`, which declares two virtual RandR monitors over the nested server's screen — the same protocol path a docked laptop uses. Same bargain: skipped without them, a failure under `UNIWIDGED_REQUIRE_X11=1`. |
 
 ## Licence
 

@@ -588,12 +588,19 @@ there.
 * ~~**The keychain namespace.**~~ Done — see below.
 * ~~**A disk quota.**~~ Done — see below.
 * ~~**Autostart.**~~ Done — see below.
-* **Two monitors, actually tested.** The placement logic is tested against a
-  docked-laptop layout, and the enumeration against a nested server — which has
-  one screen. Nobody has yet watched a widget move between two real monitors.
+* ~~**Two monitors, actually tested.**~~ Done — see below, against two virtual
+  RandR monitors on a server the test starts. What remains untested is two
+  *physical* monitors, which this machine does not have and which differ from
+  the above only in the hardware behind the same protocol.
 * **Pointer input on Wayland**, which is wired but unmeasured — headless sway
   has no input device. The shared interaction model above it is covered by the
   X11 pointer tests; what is unverified is the Wayland plumbing into it.
+* **Applying a configuration without a restart.** `Host::configure` reaches a
+  running widget and is what a settings UI will call; `uniwidged configure`
+  writes the file, and a desktop already running picks it up when it next
+  starts. What is missing between them is a way for one process to tell the
+  other, and the honest options are a signal and a pid file or a socket. Named
+  rather than half-built.
 
 The milestone's original exit criterion — eight widgets across two monitors
 surviving a restart — is met except for the two monitors, which this machine
@@ -741,6 +748,143 @@ busy loop is that happening repeatedly with nothing behind it, so that is what
 is asserted now. Worth separating from the `Tasks` flake three sections above,
 which looked identical and was a real bug: the difference is whether the thing
 being sampled is allowed to vary.
+
+### Configuration, and two monitors — **done, 2026-08-28**
+
+Two more of M7's bullets, and the first of them closes a gap that had been
+sitting in the interface file since the very first commit.
+
+#### The event that had never fired
+
+`Event::Configured` has been in `wit/uniwidged.wit` since the first version and
+nothing has ever produced it. Not because it was hard, but because there was
+nothing to configure *by*: a widget had no way to declare a knob, a user had no
+way to turn one, and a variant with nothing behind it is a claim rather than a
+feature. That is exactly the shape `Event::Delivered` was in before the
+asynchronous work, and it is closed the same way — by building the thing the
+variant was waiting for.
+
+**A widget declares; the host validates; the widget reads.**
+
+```toml
+[[setting]]
+key = "warn-at"
+label = "Warn above"
+type = "number"
+default = 0.6
+min = 0.0
+max = 1.0
+```
+
+Four kinds — `text`, `number`, `toggle`, `choice` — and no fifth, for the same
+reason the icon set is closed: what a host cannot render is not something a
+widget should be able to ask for.
+
+**The point of declaring rather than handing over a string map** is that a
+widget can never be given a value it cannot handle. The type, the range and the
+option list are checked before a widget is started, so `cx.setting("warn-at")`
+returns a number or nothing at all and the code reading it has no branch for
+somebody typing `banana`. The user was told at the moment they typed it, by
+`uniwidged configure`, which is where a refusal can still be acted on.
+
+**The default is checked at parse time**, against the setting's own rules. A
+manifest shipping `default = 2` for a value capped at 1 has a number its own
+form would never let a user re-enter, and nothing would notice until somebody
+opened the form. `uniwidged check` shows the whole form, so an author finds out
+before publishing rather than after.
+
+**A stale key is reported, not fatal**, and the asymmetry with an over-grant is
+the interesting part. An over-grant refuses: the file exceeds what the user
+approved, and obliging it would hand a widget something nobody agreed to. A
+stale setting is what an *upgrade* produces — a widget dropped a knob in its
+new version — and refusing to start the desktop over that would make every
+upgrade a support question. So the key is ignored, the default is used, and
+`uniwidged configure` and the start-up log both say which line is being
+skipped. Nothing is rewritten: a desktop that silently deletes a line somebody
+typed is worse than one that explains why it is ignoring it.
+
+**Only what differs from the default is written.** Recording a value equal to
+the default would pin *this version's* default into the file, so a widget that
+later changed its mind about a sensible starting point would never reach the
+people who never touched it.
+
+**Not a capability.** There is no argument through which to name another
+widget's settings, the values came from this widget's own manifest, and a user
+who declined them would be declining the widget rather than a permission. `log`
+is the other host function with the same shape.
+
+**The handle is shared, not copied**, so a change reaches a widget that is
+already running. Reconfiguring by restarting would throw away everything a
+widget had loaded in order to alter a number — and for a widget holding a
+credential it would mean signing in again to move a threshold.
+
+ABI 5 → 6. Fifty-odd tests: the schema and what it refuses, the manifest
+parser, the resolution of a file against a manifest, the whole path through a
+real component, the desktop applying it to a running widget, and twelve driving
+`uniwidged configure` through the actual binary. `widgets/system-load` is the
+worked example — the two thresholds are the numbers a widget cannot pick for
+its user, because on a laptop 60 % is something to notice and on a build
+machine it is Tuesday — and `uniwidged new` now scaffolds a setting, because a
+feature a new author has to find in the guide is a feature most of them do not.
+
+#### Two monitors, actually tested
+
+Named as missing for two milestones: the placement logic was tested against a
+docked-laptop layout in memory, and the enumeration against a nested server
+with one screen. Nobody had watched the two meet, and everything about
+placement is arithmetic that is invisible on a single screen whose origin is
+zero.
+
+`xrandr --setmonitor` is what makes it testable at all. A nested `Xvfb` has one
+screen and no real outputs, and RandR 1.5 lets a client declare monitors over a
+screen's geometry — which is what `randr_get_monitors` then reports and what
+`uniwidged-shell` reads. So the code under test sees two named monitors side by
+side, through the same protocol path a docked laptop uses.
+
+Four tests: both monitors enumerated by name and position, a widget stored
+against the right-hand one opening at the right desktop coordinates *read back
+from the server*, an unplug that moves the widget somewhere reachable while
+keeping its stored name — and a re-plug that puts it back exactly — and a drag
+across the seam recorded against the monitor it landed on.
+
+One finding, and it is the kind this exists for: **no monitor is flagged
+primary** on such a server. X reports one only when something has set it, and a
+fresh RandR configuration or more than one Wayland compositor will not have.
+`placement::primary` already fell back to the first output rather than indexing
+into nothing, so this is a path that was written correctly and had never been
+run.
+
+#### And a Wayland flake that really was a bug
+
+`a_placement_survives_a_round_trip_through_the_compositor` failed once under a
+full-workspace run, reporting the size the surface started with. Not the
+machine: `WaylandWindow::take_resize` compared the compositor's last known size
+against the size the client had just *requested*, so in the gap between
+`set_geometry` and the answering configure it read the client's own pending
+request as a compositor resize — and reverted `placement.rect` to the old size,
+after which nothing asked again.
+
+On a quiet machine the configure arrives inside the same drain and the gap is
+invisible. On a loaded one it is not, and on a real desktop this is a widget
+that is dragged or resized on Wayland and snaps back. The comparison is against
+what was last *reported* now, which is a different fact from what was last
+requested, and there is a test that asks `take_resize` in the gap directly
+rather than leaving it to a race.
+
+Worth separating from the two flakes above it, which were tests: this one was
+found by a test that was also wrong, and fixing only the test would have hidden
+it.
+
+#### And a flake that was a fixed sleep
+
+`a_widget_dragged_across_the_desktop_is_recorded_against_the_monitor_it_lands_on`
+failed once, under load, with `placed: None` and nothing to suggest why: the
+button release arrived after the fixed 120 ms window the test spent pumping
+events. The end of a gesture is a fact, not a duration, so it is waited for now
+— on the *release* having been processed rather than on a placement, because a
+release that produced neither a click nor a placement is a real answer and this
+file has three tests about it. The suite got faster, which is the usual sign
+that a sleep was in the wrong place.
 
 ## Independent of its parents — **done, 2026-08-28**
 

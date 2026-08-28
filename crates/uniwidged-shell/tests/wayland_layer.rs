@@ -193,20 +193,67 @@ fn a_placement_survives_a_round_trip_through_the_compositor() {
     window.set_geometry(moved).expect("set geometry");
     assert_eq!(window.geometry(), moved);
 
-    // Pump until the compositor has answered the new size, which is what
-    // proves it accepted the request rather than that we recorded it.
+    // Pump until the compositor *announces* the new size. What is asserted is
+    // the announcement rather than the client's own record — the record is
+    // what `set_geometry` wrote, and asserting it would prove only that the
+    // assignment happened.
+    //
+    // The first version of this loop asked whether `geometry()` had reached
+    // the requested size and whether `take_resize` was quiet. It failed once
+    // under load, with the size it started with, and it was a real bug rather
+    // than a slow machine: `take_resize` compared the compositor's last known
+    // size against the *requested* one, so in the gap before the answering
+    // configure arrived it read the client's own pending request as a resize
+    // and reverted it. See `WaylandWindow::reported`.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
+    let mut announced = None;
+    while Instant::now() < deadline && announced != Some((moved.width, moved.height)) {
         window.wait(Some(Duration::from_millis(50))).expect("wait");
         let _ = window.drain_events().expect("events");
-        if window.geometry().width == moved.width && window.take_resize().is_none() {
-            break;
+        if let Some(size) = window.take_resize() {
+            announced = Some(size);
         }
     }
     assert_eq!(
+        announced,
+        Some((moved.width, moved.height)),
+        "the compositor should have granted the new size"
+    );
+    assert_eq!(
         (window.geometry().width, window.geometry().height),
         (moved.width, moved.height),
-        "the compositor granted the new size"
+        "and the window's own record should agree with it"
+    );
+}
+
+#[test]
+fn a_pending_resize_is_not_mistaken_for_the_compositor_answering() {
+    // The bug the test above found, pinned directly rather than left to a
+    // race. Between asking for a size and being told, `take_resize` must say
+    // *nothing*: reporting a resize there means reverting the client's own
+    // request to the size it had, and then never asking again.
+    let Some(compositor) = compositor("pending") else {
+        return;
+    };
+    let mut window = compositor.open(START, Prefer::LayerShell);
+    // Drain whatever the handshake left, so the compositor has nothing
+    // outstanding to say.
+    let _ = window.drain_events().expect("events");
+    assert_eq!(window.take_resize(), None, "nothing has changed yet");
+
+    let moved = PhysicalRect::new(0, 0, 500, 400);
+    window.set_geometry(moved).expect("set geometry");
+    // Deliberately *without* pumping: the compositor has not answered, so
+    // there is nothing for it to have announced.
+    assert_eq!(
+        window.take_resize(),
+        None,
+        "an unanswered request is not a resize"
+    );
+    assert_eq!(
+        (window.geometry().width, window.geometry().height),
+        (moved.width, moved.height),
+        "and the request must survive being asked about"
     );
 }
 

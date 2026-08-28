@@ -20,6 +20,7 @@ use uniwidged_runtime::keyring::{FileKeyring, Keyring};
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::settings::{SettingValue, Settings};
 use uniwidged_runtime::tasks::{TaskHandle, Tasks};
 use uniwidged_view::{Content, Node, View};
 
@@ -48,6 +49,27 @@ fn component_bytes() -> Vec<u8> {
 fn manifest() -> Manifest {
     let text = std::fs::read_to_string(widget_dir().join("widget.toml")).expect("widget.toml");
     Manifest::parse(&text).expect("the conformance manifest should parse")
+}
+
+/// A deadline long enough for a frame that does deliberate disk I/O.
+///
+/// The conformance widget's `view` is not a normal widget's. Under a fully
+/// served host it writes a file and reads it back, reads two more, starts a
+/// command, starts a request and reads a dozen settings — **on every frame**,
+/// because that is how a refusal is observed from the inside. A real widget
+/// does approximately none of that per frame, which is why the default is
+/// sixteen milliseconds and why it is right.
+///
+/// So the served tests below give it room. This does not weaken what they
+/// check: the deadline is still enforced, and the tests that are *about* the
+/// deadline — the widget that never returns, the one that allocates in a loop
+/// — keep the default and still get interrupted. What it stops is a suite that
+/// fails on a loaded machine for measuring that machine's disk.
+fn generous_deadline() -> Limits {
+    Limits {
+        call_deadline: Duration::from_secs(2),
+        ..Limits::default()
+    }
 }
 
 /// Instantiates the widget under `policy`, with a host that can serve nothing.
@@ -126,6 +148,7 @@ fn served_with_tasks(scratch: &Scratch, tasks: Arc<Tasks>) -> Services {
                 .with_http(Arc::new(uniwidged_runtime::net::Http::new())),
         )
         .with_secrets(scratch.keyring())
+        .with_settings(declared_defaults())
 }
 
 /// A text measurer with no fonts in it.
@@ -208,6 +231,22 @@ const ATTEMPTS: &[&str] = &[
 /// the list cannot quietly stop being checked either.
 const UNSERVED: &[&str] = &[];
 
+/// The settings a host hands the widget: every declared key at its default.
+///
+/// What `Host::install` does, written out here because this suite instantiates
+/// the runtime directly. A widget whose settings were empty would read every
+/// declared key as `None`, which means "never declared" — a different fact,
+/// and one the row below would catch.
+fn declared_defaults() -> Settings {
+    Settings::new(
+        manifest()
+            .settings
+            .iter()
+            .map(|setting| (setting.key.clone(), setting.default.clone()))
+            .collect(),
+    )
+}
+
 #[test]
 fn a_real_widget_instantiates_and_renders() {
     // The other half of the milestone: a component built for `wasm32-wasip2`,
@@ -279,7 +318,8 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     // because a host that answers `format_time` wrongly is not conformant
     // either.
     let scratch = Scratch::new("served");
-    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let (_runtime, mut instance) =
+        start_with(everything(), Some(generous_deadline()), served(&scratch));
     let view = instance.view().expect("render");
 
     assert_eq!(outcome(&view, "locale"), "00:00");
@@ -341,7 +381,8 @@ fn a_secret_outlives_the_instance_that_stored_it_and_no_neighbour_sees_it() {
     mine.set("token", b"hunter2").expect("set");
 
     {
-        let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+        let (_runtime, mut instance) =
+            start_with(everything(), Some(generous_deadline()), served(&scratch));
         assert_eq!(
             outcome(&instance.view().expect("render"), "secrets"),
             "roundtrip",
@@ -380,7 +421,8 @@ fn what_a_widget_writes_lands_in_its_own_directory_and_stays_there() {
     let expected = scratch.widget_dir().join("cache/roundtrip.bin");
 
     {
-        let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+        let (_runtime, mut instance) =
+            start_with(everything(), Some(generous_deadline()), served(&scratch));
         assert_eq!(
             outcome(&instance.view().expect("render"), "fs-roundtrip"),
             "roundtrip"
@@ -397,7 +439,8 @@ fn what_a_widget_writes_lands_in_its_own_directory_and_stays_there() {
     // read through `fs-read` rather than the round trip, because a round trip
     // would write it again and prove nothing.
     std::fs::copy(&expected, scratch.widget_dir().join("cache/today.json")).expect("copy");
-    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let (_runtime, mut instance) =
+        start_with(everything(), Some(generous_deadline()), served(&scratch));
     assert_eq!(
         outcome(&instance.view().expect("render"), "fs-read"),
         "present",
@@ -411,7 +454,8 @@ fn a_host_with_storage_still_refuses_a_path_out_of_the_directory() {
     // legitimate path — a check that only holds when there is nothing behind
     // it is not a check.
     let scratch = Scratch::new("escape");
-    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let (_runtime, mut instance) =
+        start_with(everything(), Some(generous_deadline()), served(&scratch));
     let view = instance.view().expect("render");
     assert_eq!(outcome(&view, "fs-escape"), "malformed");
     assert!(
@@ -428,7 +472,7 @@ fn a_widget_granted_storage_it_never_asked_for_still_cannot_use_it() {
     // call the previous test allowed.
     let scratch = Scratch::new("subpath");
     let policy = Policy::from_granted([Capability::Fs("state".into())]);
-    let (_runtime, mut instance) = start_with(policy, None, served(&scratch));
+    let (_runtime, mut instance) = start_with(policy, Some(generous_deadline()), served(&scratch));
     let view = instance.view().expect("render");
     assert_eq!(outcome(&view, "fs-roundtrip"), "not-granted");
     assert!(
@@ -465,6 +509,85 @@ fn logging_always_works_and_reaches_the_host() {
         log[0]
     );
     assert!(instance.take_log().is_empty(), "taking should drain");
+}
+
+#[test]
+fn every_declared_setting_arrives_as_its_declared_type() {
+    // The guarantee every widget's `match` depends on and that no widget can
+    // check for itself: a key declared as a number arrives as a number, so
+    // there is no arm for anything else and none is needed.
+    //
+    // It needs no capability and no grant, which is why this runs under
+    // `deny_all`: a widget's own configuration is not something it reaches out
+    // for, and a user who declined it would be declining the widget.
+    let (_runtime, mut instance) = start_with(
+        Policy::deny_all(),
+        None,
+        Services::none().with_settings(declared_defaults()),
+    );
+    let view = instance.view().expect("render");
+    assert_eq!(outcome(&view, "settings"), "typed");
+    // The manifest's declared defaults, through the whole path: TOML, the
+    // parser, the ABI and back.
+    assert_eq!(
+        outcome(&view, "settings-values"),
+        "default-text 7 false one"
+    );
+}
+
+#[test]
+fn a_key_no_manifest_declares_reads_as_absent_rather_than_defaulted() {
+    // `None` means "never declared" and nothing else — which is what lets a
+    // widget read a declared key without a fallback. A host that invented a
+    // value for an unknown key would take that away.
+    let (_runtime, mut instance) = start_with(Policy::deny_all(), None, Services::none());
+    let view = instance.view().expect("render");
+    // With no settings at all, every declared key is missing too — the row
+    // says which, and says it rather than reporting a shape.
+    assert_eq!(outcome(&view, "settings"), "missing:some-text");
+    assert_eq!(outcome(&view, "settings-values"), "- - - -");
+}
+
+#[test]
+fn a_configured_event_reaches_the_widget_and_the_new_values_do() {
+    // `Event::Configured` has been in `wit/uniwidged.wit` since the first
+    // version and nothing produced it, because until settings existed there
+    // was nothing to be configured by. This is the whole path running: the
+    // values change underneath a *started* instance, the event arrives, and
+    // the widget's next view reads the new numbers.
+    let settings = declared_defaults();
+    let (_runtime, mut instance) = start_with(
+        Policy::deny_all(),
+        None,
+        Services::none().with_settings(settings.clone()),
+    );
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "settings-values"),
+        "default-text 7 false one"
+    );
+
+    settings.replace(std::collections::BTreeMap::from([
+        (
+            "some-text".to_string(),
+            SettingValue::Text("changed".into()),
+        ),
+        ("some-number".to_string(), SettingValue::Number(42.0)),
+        ("some-toggle".to_string(), SettingValue::Toggle(true)),
+        ("some-choice".to_string(), SettingValue::Text("two".into())),
+    ]));
+    assert!(
+        instance
+            .on_event(Event::Configured)
+            .expect("the event should reach the widget"),
+        "the widget should say its view would differ"
+    );
+
+    let view = instance.view().expect("render");
+    assert_eq!(label(&view, "configured"), "configured: 1");
+    assert_eq!(outcome(&view, "settings-values"), "changed 42 true two");
+    // And the types are still the declared ones after a change, which is the
+    // half a host could break by writing the new map without checking it.
+    assert_eq!(outcome(&view, "settings"), "typed");
 }
 
 #[test]
@@ -657,7 +780,8 @@ fn a_measurement_crosses_the_boundary_with_the_role_the_widget_named() {
     // per character for `Display` and 7 for everything else, and the widget
     // asks for `Body`.
     let scratch = Scratch::new("role");
-    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let (_runtime, mut instance) =
+        start_with(everything(), Some(generous_deadline()), served(&scratch));
     // `measured` compares "MMMMMMMMMM" against "i" and "", so a host that
     // ignored the text would fail before the role ever mattered.
     assert_eq!(
@@ -673,7 +797,8 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
     // does not block, which is the invariant a sampling implementation gets
     // wrong by sleeping.
     let scratch = Scratch::new("metrics");
-    let (_runtime, mut instance) = start_with(everything(), None, served(&scratch));
+    let (_runtime, mut instance) =
+        start_with(everything(), Some(generous_deadline()), served(&scratch));
 
     let began = std::time::Instant::now();
     let view = instance.view().expect("render");
@@ -694,14 +819,15 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
 
 #[test]
 fn the_abi_version_is_checked_before_anything_else_runs() {
-    // The ABI has moved four times while the framework was pre-release:
+    // The ABI has moved five times while the framework was pre-release:
     // `read-file` answering `ok(none)`, `measure-text` taking a role rather
     // than a `u8`, one asynchronous mechanism replacing one per capability,
-    // and `get-secret` answering `ok(none)` — which is the first of those
-    // made again, in the one other place where absence was being reported as
-    // an error. The check is what makes that safe: a widget built against an
-    // older world is refused at instantiation, in a sentence naming both
-    // numbers, rather than failing somewhere confusing later.
+    // `get-secret` answering `ok(none)` — the first of those made again, in
+    // the one other place where absence was being reported as an error — and
+    // `setting`, which is a widget reading its own configuration. The check is
+    // what makes all of that safe: a widget built against an older world is
+    // refused at instantiation, in a sentence naming both numbers, rather than
+    // failing somewhere confusing later.
     let runtime = Runtime::new().expect("runtime");
     let component = runtime.compile(&component_bytes()).expect("compile");
     let manifest = Arc::new(manifest());
@@ -710,7 +836,7 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 5);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 6);
 }
 
 #[test]
@@ -726,7 +852,7 @@ fn an_asynchronous_request_finishes_and_comes_back_by_its_token() {
     let tasks = Arc::new(Tasks::detached());
     let (_runtime, mut instance) = start_with(
         everything(),
-        None,
+        Some(generous_deadline()),
         served_with_tasks(&scratch, tasks.clone()),
     );
 
@@ -776,7 +902,7 @@ fn a_command_the_manifest_did_not_declare_is_refused() {
     // call the test above allowed.
     let scratch = Scratch::new("wrong-command");
     let policy = Policy::from_granted([Capability::Command("uptime".into())]);
-    let (_runtime, mut instance) = start_with(policy, None, served(&scratch));
+    let (_runtime, mut instance) = start_with(policy, Some(generous_deadline()), served(&scratch));
     assert_eq!(
         outcome(&instance.view().expect("render"), "command"),
         "not-granted"
@@ -795,7 +921,7 @@ fn a_widget_ignores_an_answer_it_was_not_waiting_for() {
     let tasks = Arc::new(Tasks::detached());
     let (_runtime, mut instance) = start_with(
         everything(),
-        None,
+        Some(generous_deadline()),
         served_with_tasks(&scratch, tasks.clone()),
     );
 

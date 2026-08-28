@@ -10,7 +10,7 @@ makes of it. A widget written in another language that targets the component
 model implements the same world and gets the same guarantees; the names change
 and nothing else does.
 
-**ABI 5.** Checked at instantiation, before anything else runs — see
+**ABI 6.** Checked at instantiation, before anything else runs — see
 [ABI history](#abi-history).
 
 ---
@@ -26,6 +26,7 @@ and nothing else does.
 * [Scheduling](#scheduling)
 * [Events](#events)
 * [Host functions](#host-functions) — one section per capability
+* [Settings](#settings-no-capability)
 * [Refusals](#refusals)
 * [The manifest](#the-manifest)
 * [Limits](#limits)
@@ -208,6 +209,9 @@ pub enum Event {
 more than one request outstanding **must** check the token — acting on whichever
 arrived first is how the network's answer ends up in the command's place.
 
+`Configured` means the user changed one of your [settings](#settings-no-capability).
+Read them again and return `true` if your view would differ.
+
 `EnvironmentChanged` means the appearance, contrast or locale changed. The view
 is rebuilt either way; a widget rarely needs to do anything.
 
@@ -338,6 +342,42 @@ At most 64 arguments totalling 16 KiB.
 A command can do whatever that command can do. `command:sh` is arbitrary code
 execution wearing a small word.
 
+### Settings (no capability)
+
+```rust
+cx.setting(key: &str) -> Option<SettingValue>
+
+pub enum SettingValue { Text(String), Number(f64), Toggle(bool) }
+```
+
+A widget's own configuration, declared in its manifest. **Not a capability**:
+there is no argument through which to name another widget's, the values came
+from this widget's own manifest, and a user who declined it would be declining
+the widget. `log` is the other function with the same shape.
+
+`None` means the manifest never declared that key — a bug in the widget rather
+than a state to handle, because a declared key always has a value: its declared
+default if the user has set nothing. The type is always the one that was
+declared, so a `match` needs no arm for anything else:
+
+```rust
+let warn_at = match cx.setting("warn-at") {
+    Some(SettingValue::Number(n)) => n,
+    // Only reachable on a host older than your manifest.
+    _ => 0.6,
+};
+```
+
+There is no `Choice` variant. A choice's value *is* text, and the set it must
+come from is the manifest's business — the host has already checked it.
+
+Read them in `start` and again on `Event::Configured`, never in `view`: `view`
+runs on a deadline and may run sixty times a second, and a setting changes when
+somebody changes it and at no other time.
+
+See [declaring settings](#declaring-settings) for the manifest side, and
+`uniwidged configure <name>` for how a user changes them.
+
 ### Collecting an answer
 
 ```rust
@@ -406,6 +446,35 @@ ending with `-`.
 | `net:<host>` | one host, or `*.example.com` for its subdomains |
 | `command:<name>` | a program name with no path separator |
 
+### Declaring settings
+
+```toml
+[[setting]]
+key = "warn-at"        # 1–32 chars of [a-z0-9-], starting with a letter
+label = "Warn above"   # optional; defaults to the key
+type = "number"        # text | number | toggle | choice
+default = 0.6          # required — an unset setting is its default
+min = 0.0              # number only
+max = 1.0
+```
+
+```toml
+[[setting]]
+key = "units"
+type = "choice"
+default = "metric"
+options = ["metric", "imperial"]   # at least two
+```
+
+The host checks every value against this before the widget sees it, which is
+what lets a widget read one without a fallback. The declared **default** is
+checked too, at parse time — a manifest shipping a value its own form would
+refuse is broken in a way nobody notices until somebody opens the form.
+
+At most 32 settings; a text value at most 1024 bytes.
+
+### The signature
+
 The signature covers the component **and** the manifest together. A signature
 over the component alone would let anybody widen `capabilities` and pass it on
 with a signature that still verified.
@@ -425,6 +494,7 @@ with a signature that still verified.
 | Tasks | 16 outstanding per widget, 8 running per desktop |
 | Command | 64 arguments, 16 KiB total |
 | Log | 256 lines per call, 512 bytes per line |
+| Settings | 32 per widget, 32-character keys, 1024-byte text values |
 
 ---
 
@@ -439,3 +509,4 @@ refused in a sentence naming both numbers.
 | **2 → 3** | `measure-text` takes the `role` enum rather than a `u8` index into it. The index had no meaning an author could look up and nothing stopped one passing 200. |
 | **3 → 4** | One asynchronous mechanism instead of one per capability. `take-response` is gone; `take-result` collects any request by token and says what kind of answer it is. `run-command` joins `fetch` as the second thing that can start one. |
 | **4 → 5** | `get-secret` answers `ok(none)` for a key that was never set — the 1 → 2 change made again, in the other place where absence was being reported as an error. `remove-secret` is new: a widget that cannot forget a credential is one that keeps it forever. |
+| **5 → 6** | `setting` — a widget can read its own configuration. `Event::Configured` had been in the file since the first version with nothing to produce it, because until settings existed there was nothing to be configured by. |

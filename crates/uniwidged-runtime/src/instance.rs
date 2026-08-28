@@ -558,6 +558,23 @@ impl uniwidged::widget::host::Host for State {
         keyring.remove(&key).map_err(keyring_denied)
     }
 
+    fn setting(&mut self, key: String) -> Option<wit_host::SettingValue> {
+        // No `check` line, and that is the one function here where its absence
+        // is deliberate rather than a bug: these are the widget's own declared
+        // settings, there is no argument through which to name another
+        // widget's, and a user who declined would be declining the widget.
+        // `log` is the other one, for the same reason.
+        //
+        // `None` means the manifest never declared that key. A declared one
+        // always has a value, because an unset one is its default — which is
+        // what lets a widget read a setting without a fallback.
+        self.services.settings.get(&key).map(|value| match value {
+            crate::settings::SettingValue::Text(text) => wit_host::SettingValue::Text(text),
+            crate::settings::SettingValue::Number(number) => wit_host::SettingValue::Number(number),
+            crate::settings::SettingValue::Toggle(toggle) => wit_host::SettingValue::Toggle(toggle),
+        })
+    }
+
     fn cpu_load(&mut self) -> Result<f32, Denied> {
         self.check(Request::Metrics)?;
         let sampler = self.services.metrics.as_ref().ok_or_else(|| {

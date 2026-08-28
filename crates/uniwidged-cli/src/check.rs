@@ -55,6 +55,22 @@ pub fn check(args: &[String]) -> Result<(), String> {
         manifest.limits.memory_bytes / (1024 * 1024)
     );
 
+    // The form its users will see, from the manifest that describes it. An
+    // author who declared a range they did not mean, or a default outside it,
+    // finds out here — before publishing rather than after.
+    if !manifest.settings.is_empty() {
+        println!("\n  It can be configured:");
+        for setting in &manifest.settings {
+            println!(
+                "    · {} = {} — {}, {}",
+                setting.key,
+                setting.default.display(),
+                setting.label,
+                setting.describe()
+            );
+        }
+    }
+
     // And now actually run it — under **deny-all**, whatever it declared. What
     // is being checked is that it starts and draws, and a widget that needs a
     // grant to do either would be one that shows its user nothing until they

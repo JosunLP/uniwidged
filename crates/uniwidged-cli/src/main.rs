@@ -13,10 +13,17 @@
 //! uniwidged lock <name>             pin a widget where it is
 //! uniwidged unlock <name>           let it be dragged again
 //! uniwidged move <name> [--x N …]   place a widget without a pointer
+//! uniwidged configure <name>         the knobs a widget declared
 //! uniwidged autostart enable        start with the session
 //! uniwidged doctor                  what this session can and cannot do
 //! uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG
 //! ```
+//!
+//! `configure` is the other one worth explaining. A widget declares what it can
+//! be configured with — a key, a type, a range, a default — and this is where a
+//! value is checked against that declaration. Refusing here rather than later
+//! is the whole point: a widget can then be written with no branch for a value
+//! it cannot handle, because it will never be given one.
 //!
 //! `move` exists because a pointer is not always available: a widget can be
 //! placed over SSH, from a dotfiles script, or back onto a monitor that was
@@ -30,6 +37,7 @@
 
 mod autostart;
 mod check;
+mod configure;
 mod new;
 mod paths;
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -60,6 +68,7 @@ fn main() -> ExitCode {
         Some("lock") => command_lock(&rest, true),
         Some("unlock") => command_lock(&rest, false),
         Some("move") => command_move(&rest),
+        Some("configure") => configure::command(&rest),
         Some("autostart") => autostart::command(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
@@ -96,6 +105,7 @@ fn print_usage() {
            uniwidged lock <name>             pin a widget where it is\n  \
            uniwidged unlock <name>           let it be dragged again\n  \
            uniwidged move <name> [--x N] [--y N] [--width N] [--height N] [--output NAME]\n  \
+           uniwidged configure <name> [--set k=v] [--reset k] [--reset-all]\n  \
            uniwidged autostart [enable|disable|status]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n"
@@ -109,7 +119,7 @@ pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
-fn config_path(args: &[String]) -> PathBuf {
+pub(crate) fn config_path(args: &[String]) -> PathBuf {
     flag(args, "--config")
         .map(PathBuf::from)
         .unwrap_or_else(paths::config_file)
@@ -209,6 +219,22 @@ fn command_install(args: &[String]) -> Result<(), String> {
             "  Its keychain here is {}.\n",
             uniwidged_runtime::FileKeyring::new(paths::keyring_dir()).describe()
         );
+    }
+
+    if !manifest.settings.is_empty() {
+        // Said at installation because it is the moment somebody is looking:
+        // a widget whose knobs are only discoverable by running another
+        // command is a widget whose knobs nobody finds.
+        println!(
+            "  It can be configured: {}",
+            manifest
+                .settings
+                .iter()
+                .map(|setting| setting.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!("  `uniwidged configure {}`\n", manifest.name);
     }
 
     let path = paths::config_file();

@@ -226,3 +226,213 @@ fn every_refusal_explains_itself() {
         assert!(message.len() > 30, "{message:?} explains nothing");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// A manifest is what a user is shown and what the host enforces, so a
+/// `[[setting]]` block that does not mean something exact is refused where its
+/// author can fix it. These are mostly the refusals, and the one that matters
+/// most is the declared default: a manifest shipping a value its own form
+/// would not let a user re-enter is broken in a way nobody notices until they
+/// open the form.
+fn with_setting(block: &str) -> Result<Manifest, ManifestError> {
+    Manifest::parse(&format!(
+        "name = \"example\"\nversion = \"1.0.0\"\n\n[[setting]]\n{block}"
+    ))
+}
+
+#[test]
+fn a_manifest_declares_each_kind_of_setting() {
+    let manifest = Manifest::parse(
+        r#"
+name = "weather"
+version = "1.0.0"
+
+[[setting]]
+key = "city"
+label = "City"
+type = "text"
+default = "Berlin"
+
+[[setting]]
+key = "warn-at"
+type = "number"
+default = 0.8
+min = 0.0
+max = 1.0
+
+[[setting]]
+key = "show-date"
+type = "toggle"
+default = true
+
+[[setting]]
+key = "units"
+type = "choice"
+default = "metric"
+options = ["metric", "imperial"]
+"#,
+    )
+    .expect("a manifest with settings should parse");
+
+    assert_eq!(manifest.settings.len(), 4);
+    // In the order the manifest wrote them: that is the order the form is
+    // shown in, and its author chose it.
+    let keys: Vec<&str> = manifest.settings.iter().map(|s| s.key.as_str()).collect();
+    assert_eq!(keys, ["city", "warn-at", "show-date", "units"]);
+
+    assert_eq!(manifest.settings[0].label, "City");
+    // A widget that wrote no label still produces a usable form rather than an
+    // empty one.
+    assert_eq!(manifest.settings[1].label, "warn-at");
+    assert_eq!(
+        manifest.settings[1].kind,
+        SettingKind::Number { min: 0.0, max: 1.0 }
+    );
+    assert_eq!(manifest.settings[2].default, SettingValue::Toggle(true));
+}
+
+#[test]
+fn an_integer_default_for_a_number_is_a_number() {
+    // TOML distinguishes `1` from `1.0`, and an author writing `default = 1`
+    // for a number means one. Refusing that would be a manifest error nobody
+    // could see the point of.
+    let manifest = with_setting("key = \"count\"\ntype = \"number\"\ndefault = 1")
+        .expect("an integer default should parse");
+    assert_eq!(manifest.settings[0].default, SettingValue::Number(1.0));
+}
+
+#[test]
+fn a_declared_default_its_own_form_would_refuse_is_caught_at_parse_time() {
+    // The interesting one. A widget shipping `default = 2` for a setting
+    // capped at 1 has a value the user can never re-enter once they change it,
+    // and nothing would notice until somebody opened the form.
+    let error =
+        with_setting("key = \"warn-at\"\ntype = \"number\"\ndefault = 2.0\nmin = 0.0\nmax = 1.0")
+            .expect_err("a default outside its own range should be refused");
+    let said = error.to_string();
+    assert!(said.contains("declared default"), "{said}");
+
+    let error = with_setting(
+        "key = \"units\"\ntype = \"choice\"\ndefault = \"furlongs\"\noptions = [\"metric\", \"imperial\"]",
+    )
+    .expect_err("a default outside its own options should be refused");
+    assert!(error.to_string().contains("declared default"));
+}
+
+#[test]
+fn a_default_of_the_wrong_type_is_refused() {
+    assert!(with_setting("key = \"n\"\ntype = \"number\"\ndefault = \"0.8\"").is_err());
+    assert!(with_setting("key = \"t\"\ntype = \"toggle\"\ndefault = \"true\"").is_err());
+    assert!(with_setting("key = \"s\"\ntype = \"text\"\ndefault = 1").is_err());
+}
+
+#[test]
+fn a_setting_with_no_default_is_refused() {
+    // There is no such thing as an unset setting: an unset one is its default.
+    // That is what lets a widget read a declared key without a fallback, so a
+    // manifest with no default would break the guarantee for every reader.
+    let error = with_setting("key = \"city\"\ntype = \"text\"")
+        .expect_err("a setting with no default should be refused");
+    assert!(error.to_string().contains("no default"), "{error}");
+}
+
+#[test]
+fn an_unknown_type_is_refused_rather_than_treated_as_text() {
+    let error = with_setting("key = \"city\"\ntype = \"string\"\ndefault = \"Berlin\"")
+        .expect_err("`string` is not a type");
+    let said = error.to_string();
+    assert!(said.contains("text, number, toggle or choice"), "{said}");
+}
+
+#[test]
+fn a_key_that_would_not_survive_a_file_or_a_command_line_is_refused() {
+    for bad in ["City", "warn_at", "2fast", "with space", "trailing-"] {
+        assert!(
+            with_setting(&format!(
+                "key = \"{bad}\"\ntype = \"text\"\ndefault = \"x\""
+            ))
+            .is_err(),
+            "`{bad}` should not be a key"
+        );
+    }
+}
+
+#[test]
+fn a_key_declared_twice_is_refused() {
+    // Not a manifest that means two things — one whose author will be
+    // surprised by which of them wins.
+    let error = Manifest::parse(
+        r#"
+name = "example"
+version = "1.0.0"
+
+[[setting]]
+key = "city"
+type = "text"
+default = "Berlin"
+
+[[setting]]
+key = "city"
+type = "text"
+default = "Hamburg"
+"#,
+    )
+    .expect_err("a repeated key should be refused");
+    assert!(error.to_string().contains("twice"), "{error}");
+}
+
+#[test]
+fn a_choice_of_one_is_refused() {
+    // A choice of one is a decision its author already made, and showing the
+    // user a list they cannot change is a form that wastes their time.
+    let error = with_setting(
+        "key = \"units\"\ntype = \"choice\"\ndefault = \"metric\"\noptions = [\"metric\"]",
+    )
+    .expect_err("a single-option choice should be refused");
+    assert!(error.to_string().contains("at least two"), "{error}");
+}
+
+#[test]
+fn a_range_no_value_can_satisfy_is_refused() {
+    let error = with_setting("key = \"n\"\ntype = \"number\"\ndefault = 1.0\nmin = 2.0\nmax = 1.0")
+        .expect_err("min above max should be refused");
+    assert!(
+        error.to_string().contains("no value can satisfy"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_number_needs_no_bounds() {
+    // A widget taking a count has no honest upper bound to write, and
+    // demanding one would get an arbitrary number typed in.
+    let manifest = with_setting("key = \"count\"\ntype = \"number\"\ndefault = 3")
+        .expect("an unbounded number should parse");
+    assert_eq!(
+        manifest.settings[0].check(&SettingValue::Number(1e9)),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_widget_may_not_declare_an_unbounded_number_of_settings() {
+    let many: String = (0..MAX_SETTINGS + 1)
+        .map(|i| format!("[[setting]]\nkey = \"k{i}\"\ntype = \"toggle\"\ndefault = false\n\n"))
+        .collect();
+    let error = Manifest::parse(&format!(
+        "name = \"example\"\nversion = \"1.0.0\"\n\n{many}"
+    ))
+    .expect_err("too many settings should be refused");
+    assert!(error.to_string().contains("at most"), "{error}");
+}
+
+#[test]
+fn a_manifest_with_no_settings_has_none_and_is_still_a_manifest() {
+    // Which is every manifest written before this existed, and most of them
+    // afterwards.
+    let manifest = Manifest::parse("name = \"example\"\nversion = \"1.0.0\"").expect("parse");
+    assert!(manifest.settings.is_empty());
+}

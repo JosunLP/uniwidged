@@ -125,6 +125,7 @@ interface types {
         toggled(tuple<u32, bool>),
         /// A capability request has an answer, correlated by its token.
         delivered(u32),
+        /// The user changed one of this widget's settings. Read them again.
         configured,
         environment-changed,
     }
@@ -238,6 +239,33 @@ interface host {
     /// whether something was actually removed.
     remove-secret: func(key: string) -> result<bool, denied>;
 
+    /// One of this widget's own settings, as its manifest declared it and its
+    /// user set it.
+    ///
+    /// `choice` is not a variant here on purpose: a choice's value *is* text,
+    /// and the set it must come from is the manifest's business rather than
+    /// the widget's. The host has already checked it, so a widget switching on
+    /// the string it gets back needs no fallback for a value that is not one
+    /// of its own options — it cannot receive one.
+    variant setting-value {
+        text(string),
+        number(f64),
+        toggle(bool),
+    }
+
+    /// Reads one of this widget's own settings.
+    ///
+    /// **Needs no capability.** These are the widget's own declared settings,
+    /// and a widget that could not read its own configuration would have no
+    /// reason to have one. Nothing here can reach another widget's.
+    ///
+    /// `none` means the manifest never declared that key, which is a bug in
+    /// the widget rather than a state to handle: a declared key always has a
+    /// value, because an unset one is its declared default. The type is always
+    /// the one the manifest declared — the host refuses anything else before a
+    /// widget ever sees it.
+    setting: func(key: string) -> option<setting-value>;
+
     /// Machine counters — needs `metrics`.
     cpu-load: func() -> result<f32, denied>;
 
@@ -271,6 +299,10 @@ interface guest {
     /// reported as an error — a widget's first run has no token, and that is
     /// its normal case. `remove-secret` is new: a widget that cannot forget a
     /// credential is one that keeps it forever.
+    ///
+    /// 5 → 6: `setting` — a widget can read its own configuration. The
+    /// `configured` event has been in this file since the first version and
+    /// nothing produced it, because there was nothing to configure.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

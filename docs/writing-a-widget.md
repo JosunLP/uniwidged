@@ -271,7 +271,59 @@ which — a session keychain that a login unlocked, or an encrypted file that
 protects a backup but not a program already running as the user. `install`
 prints the same sentence at the moment somebody is asked to approve it.
 
-## 6. Asking for something that takes time
+## 6. Settings
+
+Some things a widget cannot pick for its user: a city, a threshold, which units.
+Declare them and the host handles the rest — the form, the validation, the file.
+
+```toml
+[[setting]]
+key = "warn-at"
+label = "Warn above"
+type = "number"
+default = 0.6
+min = 0.0
+max = 1.0
+```
+
+```rust
+fn start(&mut self, cx: &Cx) -> Result<(), String> {
+    self.warn_at = match cx.setting("warn-at") {
+        Some(SettingValue::Number(n)) => n as f32,
+        _ => 0.6,
+    };
+    Ok(())
+}
+
+fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
+    if matches!(event, Event::Configured) { /* read them again */ }
+    // …
+}
+```
+
+`type` is `text`, `number`, `toggle` or `choice` (which takes `options`), and
+every setting needs a `default` — **an unset setting is its default**, which is
+what lets you read one without handling absence.
+
+**You never parse a setting.** The host checks the type, the range and the
+option list before you are started, so the `_ =>` arm above is only reachable
+on a host older than your manifest. That is the whole reason settings are
+declared rather than a string map: your users are told at the moment they type,
+and you have no branch for what they typed.
+
+Settings need **no capability**. They are your own manifest's, there is no
+argument through which to name another widget's, and a user who declined them
+would be declining you.
+
+Read them in `start` and again on `Event::Configured` — never in `view`, which
+runs on a deadline and may run sixty times a second for a value that changes
+when a person changes it.
+
+Your users run `uniwidged configure <your-widget>`.
+[`widgets/system-load`](../widgets/system-load) is the worked example, and
+`uniwidged new` scaffolds one for you.
+
+## 7. Asking for something that takes time
 
 A widget must never wait. Every call into your code is bounded, and a widget
 that blocked on a process or a network round trip would be interrupted
@@ -343,7 +395,7 @@ Ask for the smallest command that answers your question.
 [`widgets/uptime`](../widgets/uptime) is the worked example, and it asks for
 `uptime` rather than `sh` for exactly this reason.
 
-## 7. Testing your widget
+## 8. Testing your widget
 
 Everything except the host works natively, so `cargo test` runs your logic with
 no WASM toolchain at all. Off-target, `Cx` answers `NotGranted` to everything —
@@ -369,7 +421,7 @@ CI. It parses your manifest, loads your component, checks the ABI, starts it,
 draws it **with nothing granted**, and prints the consent lines your users will
 see. Everything `install` would find out, without installing anything.
 
-## 8. Publishing it
+## 9. Publishing it
 
 `install` refuses an unsigned widget. That is not ceremony: a `.wasm` somebody
 sent you is a program, and the sandbox only starts protecting you once it is
@@ -400,7 +452,7 @@ writes it `0600` and refuses to overwrite one.
 
 For your own builds, `--allow-unsigned` says so out loud and installs anyway.
 
-## 9. What the host does to you
+## 10. What the host does to you
 
 Running other people's code on a desktop only works because of two limits, and
 you should know they are there:
@@ -417,7 +469,7 @@ A fresh instance starts from `Default::default()`, which is why the counter in
 §5 keeps its number on disk: **your state should be derived from your data**,
 and then a restart costs nothing.
 
-## 10. Worked examples
+## 11. Worked examples
 
 Five reference widgets in this repository, one per capability, each small
 enough to read in a sitting:
@@ -425,7 +477,7 @@ enough to read in a sitting:
 | | |
 |---|---|
 | [`widgets/clock`](../widgets/clock) | `locale`. The smallest useful widget: asks for an instant, redraws once a minute. |
-| [`widgets/system-load`](../widgets/system-load) | `metrics`. How often to sample, and how to show a reading you could not take. |
+| [`widgets/system-load`](../widgets/system-load) | `metrics` and **settings**. How often to sample, how to show a reading you could not take, and the two numbers a widget cannot pick for its user. |
 | [`widgets/counter`](../widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
 | [`widgets/uptime`](../widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
 | [`widgets/vault`](../widgets/vault) | `secrets`. Keeping a credential, and keeping it out of the view. |
@@ -434,7 +486,7 @@ And [`widgets/conformance`](../widgets/conformance), which tries every
 capability and reports what happened — the fastest way to see what the sandbox
 actually does.
 
-## 11. What you cannot do
+## 12. What you cannot do
 
 Named so nobody has to find out the hard way:
 
@@ -444,8 +496,11 @@ Named so nobody has to find out the hard way:
 * **You cannot choose a font, a colour or a size.** See §2.
 * **You cannot see the pointer.** You are told which node was activated.
 * **You cannot block.** There is no synchronous `fetch` and no synchronous
-  `run_command`; you get a token and an event — see §6. A widget blocked on the
+  `run_command`; you get a token and an event — see §7. A widget blocked on the
   network is a widget holding its deadline open.
+* **You cannot invent a setting at run time.** Settings come from the manifest,
+  which is what a user is shown and what a settings form is built from. A key
+  you did not declare reads as `None` and there is nothing to write it with.
 * **You cannot reach anything you did not declare.** WASI Preview 2 grants no
   ambient authority, so an undeclared capability is *absent* rather than
   denied. There is nothing to escape from.

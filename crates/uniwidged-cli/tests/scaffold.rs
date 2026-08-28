@@ -131,7 +131,10 @@ fn a_scaffolded_widget_builds_runs_and_responds() {
         manifest.capabilities.is_empty(),
         "a scaffold should start by asking for nothing"
     );
-
+    // It does declare a setting, though: settings are not a capability, and a
+    // scaffold that omitted the feature would leave a new author to find it in
+    // the guide or not at all.
+    assert_eq!(manifest.settings.len(), 1);
     let runtime = Runtime::new().expect("runtime");
     let component = runtime
         .compile(&wasm)
@@ -161,6 +164,69 @@ fn a_scaffolded_widget_builds_runs_and_responds() {
         text_of(&instance.view().expect("it should render again"), "clicks"),
         "1",
         "clicking the generated button should count"
+    );
+}
+
+#[test]
+fn a_scaffolded_widget_reads_its_declared_setting_and_reacts_to_a_change() {
+    // The generated widget is the first thing a new author edits, so what it
+    // does has to actually work. This drives the whole settings path through
+    // it: the declared default reaches its first frame, and a change reaches a
+    // widget that is already started.
+    let scratch = Scratch::new("settings");
+    let output = uniwidged(&["new", "demo", "--dir", &scratch.path()]);
+    assert!(output.status.success(), "{output:?}");
+    let dir = std::path::Path::new(&scratch.path()).join("demo");
+    let built = Command::new(env!("CARGO"))
+        .current_dir(&dir)
+        .args(["build", "--release", "--target", "wasm32-wasip2"])
+        .status()
+        .expect("cargo");
+    assert!(built.success(), "the generated widget should build");
+
+    let wasm =
+        std::fs::read(dir.join("target/wasm32-wasip2/release/demo.wasm")).expect("the component");
+    let manifest = Manifest::parse(&std::fs::read_to_string(dir.join("widget.toml")).unwrap())
+        .expect("the generated manifest should parse");
+    let settings = uniwidged_runtime::settings::Settings::new(
+        manifest
+            .settings
+            .iter()
+            .map(|setting| (setting.key.clone(), setting.default.clone()))
+            .collect(),
+    );
+
+    let runtime = Runtime::new().expect("runtime");
+    let component = runtime.compile(&wasm).expect("compile");
+    let mut instance = runtime
+        .instantiate(
+            &component,
+            Arc::new(manifest),
+            Policy::deny_all(),
+            Services::none().with_settings(settings.clone()),
+        )
+        .expect("instantiate");
+
+    let view = instance.view().expect("render");
+    assert!(
+        format!("{view:?}").contains("Hello"),
+        "the declared default should reach the first frame: {view:?}"
+    );
+
+    settings.replace(std::collections::BTreeMap::from([(
+        "greeting".to_string(),
+        uniwidged_runtime::settings::SettingValue::Text("Guten Tag".into()),
+    )]));
+    assert!(
+        instance
+            .on_event(Event::Configured)
+            .expect("the event should be delivered"),
+        "the generated widget should say its view would differ"
+    );
+    let view = instance.view().expect("render");
+    assert!(
+        format!("{view:?}").contains("Guten Tag"),
+        "the new value should reach the next frame: {view:?}"
     );
 }
 

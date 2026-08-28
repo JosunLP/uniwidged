@@ -54,18 +54,18 @@ pub mod prelude;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
-pub use host::{CommandOutput, Cx, Denied, HttpResponse, TaskResult};
+pub use host::{CommandOutput, Cx, Denied, HttpResponse, SettingValue, TaskResult};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod stub;
 #[cfg(not(target_arch = "wasm32"))]
-pub use stub::{CommandOutput, Cx, Denied, HttpResponse, TaskResult};
+pub use stub::{CommandOutput, Cx, Denied, HttpResponse, SettingValue, TaskResult};
 
 use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
 /// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 /// Something that happened to your widget.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +80,8 @@ pub enum Event {
     Delivered {
         token: u32,
     },
-    /// The user changed your configuration.
+    /// The user changed one of your settings. Read them again with
+    /// [`Cx::setting`] and return `true` if your view would differ.
     Configured,
     /// The desktop's appearance, contrast or locale changed. Your view will be
     /// rebuilt; you rarely need to do anything.

@@ -642,3 +642,95 @@ fn the_default_quota_is_generous_enough_not_to_be_hit_by_accident() {
     assert_eq!(DEFAULT_MAX_TOTAL_BYTES, 32 * 1024 * 1024);
     assert!(DEFAULT_MAX_TOTAL_BYTES > DEFAULT_MAX_FILE_BYTES as u64);
 }
+
+#[test]
+fn an_ordinary_write_does_not_walk_the_directory() {
+    // A write happens inside a widget's `view`, on its deadline, and walking
+    // the directory to answer "is there room?" is work proportional to what is
+    // already there. The first version did that on every write; this asserts
+    // that it does not, by making the walk *impossible* — a directory the
+    // process cannot read would fail one — and checking the write still lands.
+    //
+    // Asserted as a property rather than a timing, because a timing test of a
+    // filesystem measures the machine.
+    let scratch = Scratch::new("quota-cheap");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("first", &[0u8; 100])
+        .expect("the first write walks once");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch.0.join("widgets/example");
+        let readable = std::fs::metadata(&root).expect("metadata").permissions();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o300))
+            .expect("make it unlistable");
+        // Unlistable, so a walk cannot succeed — and the write does.
+        let wrote = dir.write("second", &[0u8; 100]);
+        std::fs::set_permissions(&root, readable).expect("restore");
+        wrote.expect("a write under quota should not need a walk");
+    }
+    assert_eq!(dir.used_bytes(), Ok(200));
+}
+
+#[test]
+fn a_refusal_recounts_before_it_refuses() {
+    // The cache can drift high — a user deleted a cache file by hand, a
+    // `--purge` was interrupted — and a quota that refused on a stale number
+    // would leave a widget permanently unable to write with an empty
+    // directory. So the walk happens exactly where it decides something.
+    let scratch = Scratch::new("quota-stale");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    dir.write("big", &[0u8; 1000]).expect("write");
+    assert!(matches!(
+        dir.write("more", &[0u8; 100]),
+        Err(StoreError::Full { .. })
+    ));
+
+    // Deleted from outside, which the cache cannot know about.
+    std::fs::remove_file(scratch.0.join("widgets/example/big")).expect("remove");
+    dir.write("more", &[0u8; 100])
+        .expect("the recount should find the room");
+    assert_eq!(dir.used_bytes(), Ok(100));
+}
+
+#[test]
+fn a_write_that_failed_is_not_counted() {
+    // A write charged before it landed would shrink a widget's room for good,
+    // one failure at a time. The refusal here is the per-file cap, which is
+    // checked before anything touches the disk.
+    let scratch = Scratch::new("quota-failed");
+    let dir = scratch
+        .dir()
+        .with_max_total_bytes(1024)
+        .with_max_file_bytes(64);
+    dir.write("small", &[0u8; 10]).expect("write");
+    for _ in 0..100 {
+        assert!(matches!(
+            dir.write("toobig", &[0u8; 65]),
+            Err(StoreError::TooLarge { .. })
+        ));
+    }
+    // A hundred refusals later there is still the room there always was. Had
+    // each one been counted, the quota would show 6 510 bytes used and the
+    // next write would be refused.
+    for i in 0..15 {
+        dir.write(&format!("k{i}"), &[0u8; 64]).expect("still room");
+    }
+    assert_eq!(dir.used_bytes(), Ok(10 + 15 * 64));
+}
+
+#[test]
+fn a_clone_of_the_handle_shares_the_count() {
+    // A widget that restarts is handed the same `Services`, and its `DataDir`
+    // is cloned into each fresh instance. Two counts that disagreed would let
+    // a widget double its quota by failing.
+    let scratch = Scratch::new("quota-clone");
+    let dir = scratch.dir().with_max_total_bytes(1024);
+    let restarted = dir.clone();
+    dir.write("a", &[0u8; 600]).expect("write");
+    assert!(matches!(
+        restarted.write("b", &[0u8; 600]),
+        Err(StoreError::Full { .. })
+    ));
+}

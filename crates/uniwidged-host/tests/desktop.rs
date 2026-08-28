@@ -67,9 +67,27 @@ fn host() -> Host {
 }
 
 /// Installs a widget and gives it somewhere to draw.
+///
+/// With room in the call deadline, and that needs saying. The conformance
+/// widget's `view` is not a normal widget's: it attempts every capability on
+/// every frame — writing a file and reading it back, starting a command,
+/// starting a request, reading a dozen settings — because that is the only way
+/// a refusal can be observed from the inside. A real widget does approximately
+/// none of that per frame, which is why the default is sixteen milliseconds and
+/// why it is right.
+///
+/// Nothing is weakened by this. The two tests that are *about* the deadline set
+/// their own, on a widget that really does hang, and still get interrupted.
+/// What it stops is a suite failing on a loaded machine for measuring that
+/// machine's disk.
 fn install(host: &mut Host, name: &str, policy: Policy) -> WidgetId {
+    let mut manifest = manifest(name);
+    manifest.limits = Limits {
+        call_deadline: Duration::from_secs(2),
+        ..manifest.limits
+    };
     let id = host
-        .install(&component(name), manifest(name), policy)
+        .install(&component(name), manifest, policy)
         .expect("install");
     host.attach_readback(id, SIZE).expect("surface");
     id
@@ -106,6 +124,24 @@ impl Drop for Scratch {
 ///
 /// The widget reports what each capability did as its own view, so a host test
 /// reads the answer the same way a screen would show it.
+fn label(host: &Host, id: WidgetId, name: &str) -> String {
+    fn find(node: &uniwidged_view::Node, id: NodeId) -> Option<&uniwidged_view::Node> {
+        if node.id == id {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, id))
+    }
+    let view = host
+        .widget(id)
+        .and_then(|w| w.last_view())
+        .expect("the widget should have produced a view");
+    let node = find(&view.root, NodeId::named(name)).unwrap_or_else(|| panic!("no node {name}"));
+    match &node.content {
+        uniwidged_view::Content::Text(text) => text.clone(),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
 fn outcome(host: &Host, id: WidgetId, name: &str) -> String {
     fn find(node: &uniwidged_view::Node, id: NodeId) -> Option<&uniwidged_view::Node> {
         if node.id == id {
@@ -640,6 +676,118 @@ fn a_host_can_say_which_capabilities_it_serves() {
         host.keyring_description()
             .is_some_and(|what| what.contains("encrypted file")),
         "the host should be able to say what its keychain actually is"
+    );
+}
+
+#[test]
+fn a_widget_starts_at_its_declared_defaults_and_can_be_reconfigured_while_running() {
+    // `Event::Configured` has been in `wit/uniwidged.wit` since the first
+    // version and nothing produced it, because until settings existed there
+    // was nothing to be configured by. This is the whole path at desktop
+    // level.
+    //
+    // The widget is *not* restarted. That is the point of the shared handle:
+    // reconfiguring a widget by restarting it would throw away everything it
+    // had loaded to change a number, and a widget with a credential in memory
+    // would have to fetch it again.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    // Its manifest's defaults, reaching a widget that asked for nothing:
+    // settings are not a capability, and this widget is granted none.
+    assert_eq!(
+        outcome(&host, id, "settings-values"),
+        "default-text 7 false one",
+        "a widget should start at what its own manifest declared"
+    );
+    assert_eq!(outcome(&host, id, "settings"), "typed");
+
+    let report = host
+        .configure(
+            id,
+            &std::collections::BTreeMap::from([(
+                "some-number".to_string(),
+                uniwidged_runtime::settings::SettingValue::Number(42.0),
+            )]),
+        )
+        .expect("configure");
+    assert!(report.changed, "the widget said its view would differ");
+    assert!(report.complaints.is_empty(), "{:?}", report.complaints);
+
+    // Scheduled by the change rather than redrawn inside it: one place decides
+    // what a frame is.
+    let after = host.tick(now().0, now().1).expect("tick");
+    assert!(after.redrawn.contains(&id));
+    assert_eq!(label(&host, id, "configured"), "configured: 1");
+    // The key that was set moved, and the ones that were not fell back to
+    // their declared defaults rather than to nothing.
+    assert_eq!(
+        outcome(&host, id, "settings-values"),
+        "default-text 42 false one"
+    );
+}
+
+#[test]
+fn a_key_a_widget_does_not_declare_is_reported_rather_than_handed_over() {
+    // The guarantee a widget's `match` on a declared type depends on. A caller
+    // — a settings UI, a hand-edited file read by the CLI — must not be able to
+    // put a key or a shape into a widget that its manifest never described.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    let report = host
+        .configure(
+            id,
+            &std::collections::BTreeMap::from([
+                (
+                    "never-declared".to_string(),
+                    uniwidged_runtime::settings::SettingValue::Number(1.0),
+                ),
+                (
+                    // Declared, and as a number.
+                    "some-number".to_string(),
+                    uniwidged_runtime::settings::SettingValue::Text("42".into()),
+                ),
+            ]),
+        )
+        .expect("configure");
+    assert_eq!(report.complaints.len(), 2, "{:?}", report.complaints);
+    assert!(
+        !report.changed,
+        "nothing usable changed, so nothing changed"
+    );
+
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(outcome(&host, id, "settings"), "typed");
+    assert_eq!(
+        outcome(&host, id, "settings-values"),
+        "default-text 7 false one",
+        "a value the widget would not accept must leave it at its default"
+    );
+}
+
+#[test]
+fn configuring_a_widget_with_what_it_already_has_is_not_an_event() {
+    // Saving a form usually changes nothing, and a desktop that woke every
+    // widget and compared every tree each time somebody opened and closed a
+    // settings window would be paying for a decision nobody made.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    host.tick(now().0, now().1).expect("tick");
+
+    let same = std::collections::BTreeMap::from([(
+        "some-number".to_string(),
+        uniwidged_runtime::settings::SettingValue::Number(7.0),
+    )]);
+    let report = host.configure(id, &same).expect("configure");
+    assert!(!report.changed);
+    host.tick(now().0, now().1).expect("tick");
+    assert_eq!(
+        label(&host, id, "configured"),
+        "configured: 0",
+        "the widget should not have been told about a change that was not one"
     );
 }
 

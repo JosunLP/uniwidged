@@ -18,7 +18,7 @@ pub mod scheduler;
 pub mod supervisor;
 
 pub use config::{Config, Placement, WidgetConfig};
-pub use host::{Host, HostError, TickReport};
+pub use host::{Configured, Host, HostError, TickReport};
 pub use interaction::{Edge, Interaction, Press, Release};
 pub use placement::{Output, Resolved};
 pub use scheduler::{Scheduler, Tick};

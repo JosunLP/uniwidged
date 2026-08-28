@@ -44,6 +44,47 @@ pub enum TaskResult {
     Failed(String),
 }
 
+/// One of your widget's own settings, as your manifest declared it and your
+/// user set it.
+///
+/// There is no `Choice` variant: a choice's value *is* text, and the set it
+/// has to come from is your manifest's business. The host has already checked
+/// it, so matching on the strings you listed needs no arm for one you did not.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    Text(String),
+    Number(f64),
+    Toggle(bool),
+}
+
+impl SettingValue {
+    /// The text of a `text` or `choice` setting, or `None` for the others.
+    ///
+    /// A convenience for the common shape — `matches!` on a variant you
+    /// declared is the honest read, and this is what saves writing it for a
+    /// choice you are about to compare against a literal.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            SettingValue::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            SettingValue::Number(number) => Some(*number),
+            _ => None,
+        }
+    }
+
+    pub fn as_toggle(&self) -> Option<bool> {
+        match self {
+            SettingValue::Toggle(toggle) => Some(*toggle),
+            _ => None,
+        }
+    }
+}
+
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Denied {
@@ -111,6 +152,14 @@ impl Cx {
 
     pub fn remove_secret(&self, _key: &str) -> Result<bool, Denied> {
         Err(Denied::NotGranted)
+    }
+
+    /// Off-target there is no host and therefore no configuration, which
+    /// reads to a widget exactly like a manifest that declared nothing. A
+    /// widget's own tests can still exercise the branch by constructing its
+    /// state directly.
+    pub fn setting(&self, _key: &str) -> Option<SettingValue> {
+        None
     }
 
     pub fn cpu_load(&self) -> Result<f32, Denied> {

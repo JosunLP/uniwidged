@@ -10,6 +10,12 @@
 //! description = "Today's forecast for one place"
 //! capabilities = ["timer", "net:api.open-meteo.com", "fs:cache"]
 //! memory-mb = 32
+//!
+//! [[setting]]
+//! key = "city"
+//! label = "City"
+//! type = "text"
+//! default = "Berlin"
 //! ```
 //!
 //! ## Why capabilities are strings
@@ -24,9 +30,12 @@ use serde::Deserialize;
 
 use crate::capability::Capability;
 use crate::limits::Limits;
+use crate::settings::{
+    MAX_LABEL_LEN, MAX_SETTINGS, Setting, SettingKind, SettingValue, is_usable_key,
+};
 
 /// The ABI version this host speaks. See `wit/uniwidged.wit`.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 /// The most memory a widget may ask for.
 ///
@@ -37,7 +46,11 @@ pub const ABI_VERSION: u32 = 5;
 pub const MAX_MEMORY_MB: u32 = 256;
 
 /// A widget's declared identity, needs and limits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Eq` and not `Ord`: a setting's default can be a number, and `f64` has no
+/// total equality. `PartialEq` is what the tests need and is what a manifest
+/// can honestly offer.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     /// Also the widget's directory name and its keychain namespace, which is
     /// why it is restricted to characters that are safe in both.
@@ -45,6 +58,10 @@ pub struct Manifest {
     pub version: String,
     pub description: String,
     pub capabilities: Vec<Capability>,
+    /// What the user may change, declared by the widget and enforced by the
+    /// host — see `crate::settings`. Ordered as the manifest wrote them,
+    /// because that is the order the form is shown in and its author chose it.
+    pub settings: Vec<Setting>,
     pub limits: Limits,
 }
 
@@ -59,6 +76,31 @@ struct Raw {
     capabilities: Vec<String>,
     #[serde(default, rename = "memory-mb")]
     memory_mb: Option<u32>,
+    #[serde(default, rename = "setting")]
+    settings: Vec<RawSetting>,
+}
+
+/// One `[[setting]]` block, before it is checked.
+///
+/// `default` is `Option` rather than required so that the error for a missing
+/// one can say what is missing; `toml::Value` rather than a typed field
+/// because what is valid depends on `type`, which is another field of the same
+/// table.
+#[derive(Debug, Deserialize)]
+struct RawSetting {
+    key: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    default: Option<toml::Value>,
+    #[serde(default)]
+    min: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
+    #[serde(default)]
+    options: Option<Vec<String>>,
 }
 
 /// Why a manifest was refused.
@@ -70,6 +112,10 @@ pub enum ManifestError {
     UnknownCapability(String),
     MalformedCapability(String),
     MemoryTooLarge(u32),
+    /// A `[[setting]]` block that does not describe a setting. One variant
+    /// rather than eight, because every one of them is "this manifest's author
+    /// has to change this line" and the string says which line and why.
+    BadSetting(String),
 }
 
 impl std::fmt::Display for ManifestError {
@@ -92,6 +138,7 @@ impl std::fmt::Display for ManifestError {
                 f,
                 "a widget may ask for at most {MAX_MEMORY_MB} MB; this one asks for {mb}"
             ),
+            ManifestError::BadSetting(why) => write!(f, "{why}"),
         }
     }
 }
@@ -117,11 +164,14 @@ impl Manifest {
             .map(|text| parse_capability(text))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let settings = parse_settings(&raw.settings)?;
+
         Ok(Manifest {
             name: raw.name,
             version: raw.version,
             description: raw.description,
             capabilities,
+            settings,
             limits: Limits {
                 memory_bytes: memory_mb as usize * 1024 * 1024,
                 ..Limits::default()
@@ -160,6 +210,142 @@ fn is_usable_name(name: &str) -> bool {
     }
     name.chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Turns `[[setting]]` blocks into declarations the host can enforce.
+///
+/// Strict, and for the same reason the capability parser is: a manifest is
+/// what a user is shown and what the host then enforces, so a line that does
+/// not mean something exact is refused where its author can still fix it
+/// rather than being interpreted for them later.
+///
+/// The default is checked against the setting's own rules, so a `number`
+/// declared with `default = 2` and `max = 1` fails here — at the moment its
+/// author writes it, rather than the first time a user opens a form and finds
+/// a value the widget already had that the form will not let them re-enter.
+fn parse_settings(raw: &[RawSetting]) -> Result<Vec<Setting>, ManifestError> {
+    let bad = |why: String| ManifestError::BadSetting(why);
+
+    if raw.len() > MAX_SETTINGS {
+        return Err(bad(format!(
+            "a widget may declare at most {MAX_SETTINGS} settings; this one \
+             declares {}",
+            raw.len()
+        )));
+    }
+
+    let mut settings: Vec<Setting> = Vec::with_capacity(raw.len());
+    for entry in raw {
+        if !is_usable_key(&entry.key) {
+            return Err(bad(format!(
+                "`{}` is not a usable setting key: it is a bare key in a file \
+                 people edit and an argument on a command line, so it must be \
+                 1–32 characters of lowercase letters, digits and hyphens, \
+                 starting with a letter",
+                entry.key
+            )));
+        }
+        // Two settings with one key is not a manifest that means two things —
+        // it is one whose author will be surprised by which one wins.
+        if settings.iter().any(|s| s.key == entry.key) {
+            return Err(bad(format!(
+                "`{}` is declared twice; a key names one setting",
+                entry.key
+            )));
+        }
+        let label = entry.label.clone().unwrap_or_else(|| entry.key.clone());
+        if label.len() > MAX_LABEL_LEN {
+            return Err(bad(format!(
+                "the label for `{}` may be at most {MAX_LABEL_LEN} characters",
+                entry.key
+            )));
+        }
+
+        let kind = match entry.kind.as_str() {
+            "text" => SettingKind::Text,
+            "toggle" => SettingKind::Toggle,
+            "number" => {
+                // Unbounded by default rather than refused: a widget taking a
+                // count has no honest upper bound to write, and demanding one
+                // would get an arbitrary number typed in.
+                let min = entry.min.unwrap_or(f64::MIN);
+                let max = entry.max.unwrap_or(f64::MAX);
+                // `min > max` rather than `!(min <= max)`: with two `f64` the
+                // two differ when either is `NaN`, and a `NaN` bound is caught
+                // by the default check below with a message about the value
+                // rather than about the range.
+                if min > max {
+                    return Err(bad(format!(
+                        "`{}` has min {min} above max {max}, which no value can satisfy",
+                        entry.key
+                    )));
+                }
+                SettingKind::Number { min, max }
+            }
+            "choice" => {
+                let options = entry.options.clone().unwrap_or_default();
+                if options.len() < 2 {
+                    return Err(bad(format!(
+                        "`{}` is a choice and needs at least two options; a \
+                         choice of one is a decision its author already made",
+                        entry.key
+                    )));
+                }
+                SettingKind::Choice { options }
+            }
+            other => {
+                return Err(bad(format!(
+                    "`{}` is declared as `{other}`; a setting is text, number, \
+                     toggle or choice",
+                    entry.key
+                )));
+            }
+        };
+
+        let Some(default) = entry.default.as_ref() else {
+            return Err(bad(format!(
+                "`{}` has no default. Every declared key always has a value — \
+                 that is what lets a widget read one without a fallback — so \
+                 there is no such thing as a setting that is unset",
+                entry.key
+            )));
+        };
+        let default = value_from_toml(&entry.key, default)?;
+
+        let setting = Setting {
+            key: entry.key.clone(),
+            label,
+            kind,
+            default,
+        };
+        // The declared default has to be a value the setting would accept from
+        // a user. One that is not is a manifest that ships a value its own
+        // form would refuse.
+        setting
+            .check(&setting.default)
+            .map_err(|e| bad(format!("{e} — and that is the declared default")))?;
+        settings.push(setting);
+    }
+    Ok(settings)
+}
+
+/// A TOML scalar as a setting value.
+///
+/// Integers become numbers, because TOML distinguishes `1` from `1.0` and a
+/// manifest author writing `default = 1` for a number means one. Everything
+/// else — a table, an array, a datetime — is refused rather than stringified.
+fn value_from_toml(key: &str, value: &toml::Value) -> Result<SettingValue, ManifestError> {
+    match value {
+        toml::Value::String(text) => Ok(SettingValue::Text(text.clone())),
+        toml::Value::Boolean(toggle) => Ok(SettingValue::Toggle(*toggle)),
+        toml::Value::Float(number) => Ok(SettingValue::Number(*number)),
+        toml::Value::Integer(number) => Ok(SettingValue::Number(*number as f64)),
+        other => Err(ManifestError::BadSetting(format!(
+            "the default for `{key}` is {}, and a setting is text, a number or \
+             a toggle",
+            other.type_str()
+        ))),
+    }
 }
 
 fn parse_capability(text: &str) -> Result<Capability, ManifestError> {

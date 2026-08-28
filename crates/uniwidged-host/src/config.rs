@@ -17,6 +17,9 @@
 //! y = 48
 //! width = 320
 //! height = 200
+//!
+//! [widget.settings]
+//! warn-at = 0.9
 //! ```
 //!
 //! ## The granted list is checked against the manifest
@@ -28,11 +31,13 @@
 //! fine and expected: declining one capability is how a user says no to part
 //! of a widget without saying no to all of it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uniwidged_runtime::capability::{Capability, Policy};
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::settings::{SettingValue, Settings};
 
 /// Where a widget sits.
 ///
@@ -68,7 +73,10 @@ impl Default for Placement {
 }
 
 /// One installed widget.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is absent because a setting's value can be a number. `PartialEq` is
+/// what a test wants and is what a configuration can honestly offer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WidgetConfig {
     /// Must match the manifest's name. Also the widget's data directory and
     /// its keychain namespace.
@@ -85,6 +93,16 @@ pub struct WidgetConfig {
     pub granted: Vec<String>,
     #[serde(default)]
     pub placement: Placement,
+    /// What the user set, verbatim, and only what they set — a key at its
+    /// default is absent rather than written out. That keeps the file short
+    /// and, more usefully, keeps a widget's own change of default from being
+    /// silently overridden by a value nobody chose.
+    ///
+    /// Not checked against the manifest here. It is checked where it is
+    /// *used*, by [`WidgetConfig::settings`], because a stale key must not
+    /// stop the whole configuration from being read — see the module note.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, SettingValue>,
     #[serde(default = "yes")]
     pub enabled: bool,
 }
@@ -93,7 +111,7 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default, rename = "widget")]
     pub widgets: Vec<WidgetConfig>,
@@ -247,8 +265,46 @@ impl WidgetConfig {
             manifest: None,
             granted: manifest.capabilities.iter().map(capability_text).collect(),
             placement: Placement::default(),
+            // Nothing, on purpose: a fresh installation is every setting at
+            // its declared default, and writing them out would freeze this
+            // version's defaults into the file for good.
+            settings: BTreeMap::new(),
             enabled: true,
         }
+    }
+
+    /// The values this widget should run with, and what was wrong with the
+    /// file.
+    ///
+    /// Every key the manifest declares gets a value — the user's if it is
+    /// usable, the manifest's default otherwise — and nothing else gets one.
+    /// A key the widget no longer declares, or a value it would refuse, is
+    /// *reported* rather than fatal: see
+    /// [`Settings::resolve`](uniwidged_runtime::settings::Settings::resolve),
+    /// where the difference from an over-grant is argued.
+    pub fn settings(&self, manifest: &Manifest) -> (BTreeMap<String, SettingValue>, Vec<String>) {
+        Settings::resolve(&manifest.settings, &self.settings)
+    }
+
+    /// Records what the user set, dropping anything that is merely the
+    /// default.
+    ///
+    /// The asymmetry is deliberate. Storing a value equal to the default would
+    /// pin this version's default into the file, so a widget that later
+    /// changed its mind about a sensible starting point would never reach the
+    /// people who never touched it.
+    pub fn set_settings(&mut self, manifest: &Manifest, values: &BTreeMap<String, SettingValue>) {
+        self.settings = values
+            .iter()
+            .filter(|(key, value)| {
+                manifest
+                    .settings
+                    .iter()
+                    .find(|declared| &&declared.key == key)
+                    .is_none_or(|declared| &&declared.default != value)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
     }
 }
 

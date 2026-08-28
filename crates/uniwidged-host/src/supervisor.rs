@@ -248,6 +248,41 @@ impl Supervised {
         self.deliver(runtime, Event::Clicked(node))
     }
 
+    /// What this widget declared it can be configured with.
+    fn declared_settings(&self) -> &[uniwidged_runtime::settings::Setting] {
+        &self.manifest.settings
+    }
+
+    /// Replaces this widget's configuration and tells it.
+    ///
+    /// The values are resolved against the widget's own manifest first, so a
+    /// caller cannot hand a widget a key it never declared or a value of the
+    /// wrong type — the guarantee a widget's `setting` call depends on is
+    /// enforced here rather than trusted.
+    ///
+    /// The handle is *shared* with the running instance, so this reaches a
+    /// widget that is already started. Restarting one to change a number would
+    /// throw away everything it had loaded.
+    ///
+    /// Returns whether the widget says its view would now differ, and anything
+    /// wrong with what it was given.
+    pub fn configure(
+        &mut self,
+        runtime: &Runtime,
+        values: &std::collections::BTreeMap<String, uniwidged_runtime::settings::SettingValue>,
+    ) -> (bool, Vec<String>) {
+        let (resolved, complaints) =
+            uniwidged_runtime::settings::Settings::resolve(self.declared_settings(), values);
+        // Unchanged is not an event. A configuration written back with nothing
+        // altered — which is what saving a form usually is — should not cost
+        // every widget a call and a tree comparison.
+        if resolved == self.services.settings.snapshot() {
+            return (false, complaints);
+        }
+        self.services.settings.replace(resolved);
+        (self.deliver(runtime, Event::Configured), complaints)
+    }
+
     /// Anything the widget logged, prefixed with its name.
     pub fn take_log(&mut self) -> Vec<String> {
         self.instance

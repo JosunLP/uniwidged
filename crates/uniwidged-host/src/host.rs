@@ -36,6 +36,7 @@ use uniwidged_runtime::keyring::{Keyring, SecretStore};
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::net::Http;
 use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::settings::{Setting, SettingValue, Settings};
 use uniwidged_runtime::tasks::{TaskHandle, Tasks, Waker};
 
 use crate::scheduler::Scheduler;
@@ -49,6 +50,18 @@ use crate::scheduler::Scheduler;
 /// short enough that a widget which failed once is back before anyone looks.
 const RESTART_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
 use crate::supervisor::{State, Supervised};
+
+/// What configuring a widget did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Configured {
+    /// The widget was told, and says its view would now differ.
+    pub changed: bool,
+    /// What was wrong with the values — a key the widget does not declare, a
+    /// value it would not accept. Reported rather than fatal, and rather than
+    /// silently dropped: a hand-edited line that is being ignored is something
+    /// somebody has to be able to find out about.
+    pub complaints: Vec<String>,
+}
 
 /// What one turn of the loop did.
 ///
@@ -260,7 +273,7 @@ impl Host {
     /// strict about what a name may contain: two widgets sharing a name would
     /// share a directory, and the isolation would be gone without anything
     /// looking wrong.
-    fn services_for(&self, id: WidgetId, name: &str) -> Services {
+    fn services_for(&self, id: WidgetId, name: &str, declared: &[Setting]) -> Services {
         Services {
             data: self
                 .data_root
@@ -287,6 +300,16 @@ impl Host {
                 .keyring
                 .as_ref()
                 .map(|store| Keyring::new(store.clone(), name)),
+            // Every widget starts at its own declared defaults, so a widget
+            // that reads a setting on its very first frame gets the value its
+            // author chose rather than nothing. The user's own values arrive
+            // through `configure`, which is also what tells the widget.
+            settings: Settings::new(
+                declared
+                    .iter()
+                    .map(|setting| (setting.key.clone(), setting.default.clone()))
+                    .collect(),
+            ),
         }
     }
 
@@ -320,7 +343,7 @@ impl Host {
     ) -> Result<WidgetId, HostError> {
         let id = WidgetId(self.next_id);
         self.next_id += 1;
-        let services = self.services_for(id, &manifest.name);
+        let services = self.services_for(id, &manifest.name, &manifest.settings);
         let widget = Supervised::start(&self.runtime, id, wasm, manifest, policy, services)
             .map_err(HostError::Runtime)?;
         self.widgets.push(widget);
@@ -534,7 +557,7 @@ impl Host {
     /// field to be `None`. The conformance suite asserts the same list from the
     /// other side, so the two cannot drift apart silently.
     pub fn capabilities(&self) -> Vec<(&'static str, bool)> {
-        let services = self.services_for(WidgetId(0), "doctor");
+        let services = self.services_for(WidgetId(0), "doctor", &[]);
         vec![
             // Needs nothing behind it: the scheduler is always there.
             ("timer", true),
@@ -589,6 +612,43 @@ impl Host {
             );
         }
         Ok(Some(node))
+    }
+
+    /// Applies a widget's configuration and tells it.
+    ///
+    /// This is what `Event::Configured` was always for. The variant has been
+    /// in `wit/uniwidged.wit` since the first version and nothing produced it,
+    /// because until settings existed there was nothing to be configured *by*
+    /// — the same shape of gap `Event::Delivered` was before the asynchronous
+    /// work, and closed the same way.
+    ///
+    /// The values are resolved against the widget's own manifest, so a caller
+    /// cannot hand a widget a key it never declared or a value of the wrong
+    /// type. Anything wrong with them comes back rather than being applied or
+    /// refused wholesale — see `uniwidged_runtime::settings::Settings::resolve`
+    /// on why a stale key is not fatal where an over-grant is.
+    ///
+    /// A widget that says its view would now differ is scheduled immediately
+    /// rather than redrawn here: one place decides what a frame is.
+    pub fn configure(
+        &mut self,
+        id: WidgetId,
+        values: &std::collections::BTreeMap<String, SettingValue>,
+    ) -> Result<Configured, HostError> {
+        let index = self.index(id)?;
+        let (changed, complaints) = self.widgets[index].configure(&self.runtime, values);
+        if changed {
+            self.scheduler.schedule(
+                id,
+                uniwidged_core::Wake::After(std::time::Duration::ZERO),
+                Instant::now(),
+                SystemTime::now(),
+            );
+        }
+        Ok(Configured {
+            changed,
+            complaints,
+        })
     }
 
     /// Forces one widget to be drawn again, whatever its view says.

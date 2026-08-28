@@ -23,7 +23,9 @@ jobs:
       # The platform tests start their own nested server — Xvfb for X11, a
       # headless sway for Wayland — so this needs no session and no display,
       # only the binaries.
-      - run: sudo apt-get update && sudo apt-get install -y xvfb sway
+      # `x11-xserver-utils` is `xrandr`, which the two-monitor tests use to
+      # declare virtual RandR monitors over the nested server's screen.
+      - run: sudo apt-get update && sudo apt-get install -y xvfb sway x11-xserver-utils
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets
       # The documentation is most of this codebase, and a doc link that no
@@ -58,7 +60,7 @@ jobs:
         with:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers xvfb sway
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers xvfb sway x11-xserver-utils
       - run: cargo test --workspace
         env:
           WGPU_BACKEND: vulkan

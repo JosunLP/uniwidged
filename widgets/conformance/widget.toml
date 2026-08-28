@@ -6,3 +6,34 @@ version = "0.1.0"
 description = "Tries every capability, so the sandbox can be tested for what it refuses"
 capabilities = []
 memory-mb = 16
+
+# One of every kind, so that the whole path — manifest, host validation,
+# `config.toml`, the ABI, the widget — is exercised for each. The conformance
+# widget is where the boundary is tested, and a shape only one of these covers
+# is a shape nothing covers.
+[[setting]]
+key = "some-text"
+label = "Some text"
+type = "text"
+default = "default-text"
+
+[[setting]]
+key = "some-number"
+label = "Some number"
+type = "number"
+default = 7
+min = 0
+max = 100
+
+[[setting]]
+key = "some-toggle"
+label = "Some toggle"
+type = "toggle"
+default = false
+
+[[setting]]
+key = "some-choice"
+label = "Some choice"
+type = "choice"
+default = "one"
+options = ["one", "two"]

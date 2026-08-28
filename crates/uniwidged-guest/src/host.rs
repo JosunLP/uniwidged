@@ -35,6 +35,57 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
+/// One of your widget's own settings, as your manifest declared it and your
+/// user set it.
+///
+/// There is no `Choice` variant: a choice's value *is* text, and the set it
+/// has to come from is your manifest's business. The host has already checked
+/// it, so matching on the strings you listed needs no arm for one you did not.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    Text(String),
+    Number(f64),
+    Toggle(bool),
+}
+
+impl SettingValue {
+    /// The text of a `text` or `choice` setting, or `None` for the others.
+    ///
+    /// A convenience for the common shape — `matches!` on a variant you
+    /// declared is the honest read, and this is what saves writing it for a
+    /// choice you are about to compare against a literal.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            SettingValue::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            SettingValue::Number(number) => Some(*number),
+            _ => None,
+        }
+    }
+
+    pub fn as_toggle(&self) -> Option<bool> {
+        match self {
+            SettingValue::Toggle(toggle) => Some(*toggle),
+            _ => None,
+        }
+    }
+}
+
+impl From<raw::SettingValue> for SettingValue {
+    fn from(value: raw::SettingValue) -> Self {
+        match value {
+            raw::SettingValue::Text(text) => SettingValue::Text(text),
+            raw::SettingValue::Number(number) => SettingValue::Number(number),
+            raw::SettingValue::Toggle(toggle) => SettingValue::Toggle(toggle),
+        }
+    }
+}
+
 /// The answer to one asynchronous request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskResult {
@@ -201,6 +252,33 @@ impl Cx {
     /// out twice is not something to guard against.
     pub fn remove_secret(&self, key: &str) -> Result<bool, Denied> {
         raw::remove_secret(key).map_err(Into::into)
+    }
+
+    /// Reads one of your widget's own settings.
+    ///
+    /// **No capability needed.** These are the settings your own manifest
+    /// declared, and nothing here can name another widget's.
+    ///
+    /// `None` means your manifest never declared that key, which is a bug in
+    /// your widget rather than a state to handle: a declared key always has a
+    /// value, because an unset one is its declared default. The type is always
+    /// the one you declared — the host refuses anything else before you see
+    /// it — so matching on the variant you expect needs no other arm.
+    ///
+    /// ```ignore
+    /// let warn_at = match cx.setting("warn-at") {
+    ///     Some(SettingValue::Number(n)) => n,
+    ///     // Only reachable if the manifest and this line disagree.
+    ///     _ => 0.8,
+    /// };
+    /// ```
+    ///
+    /// When the user changes one, you are sent [`Event::Configured`]; read
+    /// them again and return `true` if your view would differ.
+    ///
+    /// [`Event::Configured`]: crate::Event::Configured
+    pub fn setting(&self, key: &str) -> Option<SettingValue> {
+        raw::setting(key).map(Into::into)
     }
 
     pub fn cpu_load(&self) -> Result<f32, Denied> {

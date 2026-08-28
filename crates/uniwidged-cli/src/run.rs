@@ -280,9 +280,23 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             );
         }
 
+        // The user's own values, resolved against this manifest before the
+        // widget is asked for a view. `install` starts every widget at its
+        // declared defaults, so without this a configuration would be a file
+        // nothing reads.
+        let (values, complaints) = widget.settings(&manifest);
         let id = host
             .install(&wasm, manifest, policy)
             .map_err(|e| e.to_string())?;
+        if let Err(e) = host.configure(id, &values) {
+            eprintln!("uniwidged: could not configure `{}`: {e}", widget.name);
+        }
+        for complaint in complaints {
+            // A line in somebody's configuration that is being ignored has to
+            // be findable. `uniwidged configure <name>` says the same thing
+            // without starting a desktop.
+            eprintln!("uniwidged: `{}`: {complaint}", widget.name);
+        }
         let (display, handle) = window.raw_handles();
         // SAFETY: the window is kept in `windows` for the lifetime of the
         // host, and was configured and mapped above.

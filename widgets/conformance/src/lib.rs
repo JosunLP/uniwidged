@@ -23,6 +23,11 @@ pub struct Conformance {
     started: bool,
     /// Counts events, so the host can check that delivery works at all.
     events: u32,
+    /// Counts `Configured` in particular. The variant has been in the WIT file
+    /// since the first version and nothing produced it until settings existed,
+    /// so "it arrived at all" is worth counting separately from "an event
+    /// arrived".
+    configured: u32,
     /// Set when the host asks for it, so the deadline can be tested against a
     /// widget that really does not return.
     spin: bool,
@@ -80,6 +85,7 @@ impl Widget for Conformance {
         // rather than the word "allowed": a host that answers the call and
         // answers it wrongly is not conformant either, and only the value can
         // show the difference.
+        let read_settings = Settings::read(cx);
         let attempts = vec![
             Attempt {
                 name: "locale",
@@ -143,8 +149,21 @@ impl Widget for Conformance {
                 outcome: describe(cx.get_secret("not a key")),
             },
             Attempt {
+                // Not a capability, so it is not gated and there is no
+                // refusal to report. What is reported is whether every
+                // declared key came back with the declared *type* — a host
+                // that handed a widget a number for a toggle would break the
+                // guarantee every widget's `match` depends on.
+                name: "settings",
+                outcome: settings(&read_settings),
+            },
+            Attempt {
                 name: "metrics",
                 outcome: describe(cx.cpu_load()),
+            },
+            Attempt {
+                name: "settings-values",
+                outcome: setting_values(&read_settings),
             },
             Attempt {
                 name: "command",
@@ -170,6 +189,11 @@ impl Widget for Conformance {
                 .role(Role::Caption)
                 .id(NodeId::named("events")),
         );
+        root = root.child(
+            text(format!("configured: {}", self.configured))
+                .role(Role::Caption)
+                .id(NodeId::named("configured")),
+        );
         for attempt in attempts {
             root = root.child(
                 row()
@@ -188,6 +212,9 @@ impl Widget for Conformance {
 
     fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
         self.events += 1;
+        if matches!(event, Event::Configured) {
+            self.configured += 1;
+        }
         // A click on this node asks the widget to hang, so the host's deadline
         // can be tested against something that genuinely does not return.
         if let Event::Clicked(id) = event {
@@ -309,6 +336,93 @@ fn roundtrip(cx: &Cx) -> String {
         Ok(None) => "vanished".to_string(),
         Err(denied) => refusal(&denied),
     }
+}
+
+/// Reads every declared setting and checks each came back as its own type.
+///
+/// The value is *not* asserted here — a host test sets one and reads it back
+/// through the row below, which is where the values are known. What this
+/// checks is the invariant the widget side depends on and cannot otherwise
+/// see: that a key declared as a number arrives as a number, so a widget's
+/// `match` needs no arm for anything else.
+fn settings(read: &Settings) -> String {
+    let wrong = |key: &str| format!("wrong-type:{key}");
+    match &read.text {
+        Some(SettingValue::Text(_)) => {}
+        Some(_) => return wrong("some-text"),
+        None => return "missing:some-text".to_string(),
+    }
+    match &read.number {
+        Some(SettingValue::Number(_)) => {}
+        Some(_) => return wrong("some-number"),
+        None => return "missing:some-number".to_string(),
+    }
+    match &read.toggle {
+        Some(SettingValue::Toggle(_)) => {}
+        Some(_) => return wrong("some-toggle"),
+        None => return "missing:some-toggle".to_string(),
+    }
+    // A choice's value is text; there is no `Choice` variant, on purpose.
+    match &read.choice {
+        Some(SettingValue::Text(_)) => {}
+        Some(_) => return wrong("some-choice"),
+        None => return "missing:some-choice".to_string(),
+    }
+    // A key nothing declared. `None` and not an error, and not a default:
+    // there is nothing to default to.
+    if read.undeclared.is_some() {
+        return "invented".to_string();
+    }
+    "typed".to_string()
+}
+
+/// The five settings this widget looks at, read **once** per view.
+///
+/// Two rows report on them and each used to read them itself, which is ten
+/// host calls a frame for five answers. Every one of those is charged to this
+/// widget's deadline, and this widget already does more per frame than any
+/// real one — so reading each key once and deriving both rows from it is the
+/// same argument the rest of this project keeps making, applied to the widget
+/// side of the boundary for once.
+struct Settings {
+    text: Option<SettingValue>,
+    number: Option<SettingValue>,
+    toggle: Option<SettingValue>,
+    choice: Option<SettingValue>,
+    undeclared: Option<SettingValue>,
+}
+
+impl Settings {
+    fn read(cx: &Cx) -> Self {
+        Self {
+            text: cx.setting("some-text"),
+            number: cx.setting("some-number"),
+            toggle: cx.setting("some-toggle"),
+            choice: cx.setting("some-choice"),
+            undeclared: cx.setting("never-declared"),
+        }
+    }
+}
+
+/// The four settings' values, as one string a host test can assert on.
+///
+/// Separate from the row above because the two answer different questions: one
+/// is about the shapes, which the widget can check by itself, and this is
+/// about the values, which only the side that set them knows.
+fn setting_values(read: &Settings) -> String {
+    let one = |value: &Option<SettingValue>| match value {
+        Some(SettingValue::Text(text)) => text.clone(),
+        Some(SettingValue::Number(number)) => format!("{number}"),
+        Some(SettingValue::Toggle(toggle)) => toggle.to_string(),
+        None => "-".to_string(),
+    };
+    format!(
+        "{} {} {} {}",
+        one(&read.text),
+        one(&read.number),
+        one(&read.toggle),
+        one(&read.choice)
+    )
 }
 
 /// Stores a secret, reads it back, and forgets it.

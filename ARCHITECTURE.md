@@ -310,6 +310,49 @@ truncation against a different number is deciding against a guess, and a
 measurer that copied the theme would keep answering plausibly after a light/dark
 switch.
 
+### Configuration
+
+A widget declares what it can be configured with; the host validates and
+stores; the widget reads. That division is the design, and it is the same one
+as capabilities — declared, shown to the user, enforced by the host — applied
+to a different question.
+
+```toml
+[[setting]]
+key = "warn-at"
+type = "number"
+default = 0.6
+min = 0.0
+max = 1.0
+```
+
+It buys three things a string map does not. **A widget can never receive a
+value it cannot handle**, so there is no branch for "the user typed `banana`
+into a number" — the user was told at the moment they typed it. **The user can
+be shown a form**: a toggle is a switch, a choice is a list, a bounded number
+is a slider, and none of that is derivable from a widget that parses its own
+strings. And **a stale key is visible**: the declared set is the authority, so
+a configuration naming something the manifest no longer declares is a fact
+somebody can be told about.
+
+That last one is reported rather than fatal, and the asymmetry with an
+over-grant is deliberate. An over-grant is a *security* fact — the file exceeds
+what the user approved — and obliging it would hand a widget something nobody
+agreed to, so it refuses. A stale setting is an *upgrade artefact*: a widget
+dropped a knob in its new version, and refusing to start the desktop over that
+would make every upgrade a support question.
+
+Settings are **not a capability**. There is no argument through which to reach
+another widget's, the values came from this widget's own manifest, and a user
+who declined them would be declining the widget rather than a permission. `log`
+is the other host function with the same shape and the same answer.
+
+The handle is *shared* with the running instance rather than copied into it, so
+a change reaches a widget that is already started. Reconfiguring by restarting
+would throw away everything the widget had loaded in order to alter a number —
+and `Event::Configured`, which has been in `wit/uniwidged.wit` since the first
+version with nothing to produce it, is what tells it.
+
 ### Anything that takes time
 
 A widget must never wait, so nothing slow is a function call. `fetch` and
