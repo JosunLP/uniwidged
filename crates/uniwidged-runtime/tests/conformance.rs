@@ -18,7 +18,8 @@ use uniwidged_runtime::capability::{Capability, Policy};
 use uniwidged_runtime::instance::{Event, Instance, Runtime, RuntimeError};
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
-use uniwidged_runtime::services::{CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::tasks::{TaskHandle, Tasks};
 use uniwidged_view::{Content, Node, View};
 
 fn widget_dir() -> PathBuf {
@@ -103,11 +104,20 @@ impl Drop for Scratch {
 ///
 /// UTC, so the strings a test expects are the same on every machine it runs on.
 fn served(scratch: &Scratch) -> Services {
+    served_with_tasks(scratch, Arc::new(Tasks::default()))
+}
+
+/// The same, sharing a task registry the test can look into.
+fn served_with_tasks(scratch: &Scratch, tasks: Arc<Tasks>) -> Services {
     Services::none()
         .with_data_dir(DataDir::new(scratch.widget_dir()))
         .with_locale(Locale::default())
         .with_text_metrics(Arc::new(Ruler))
         .with_metrics(Arc::new(CpuSampler::new()))
+        .with_tasks(
+            TaskHandle::new(uniwidged_core::WidgetId(1), tasks)
+                .with_commands(Arc::new(Commands::new())),
+        )
 }
 
 /// A text measurer with no fonts in it.
@@ -138,6 +148,7 @@ fn everything() -> Policy {
         Capability::Fs("cache".into()),
         Capability::Secrets,
         Capability::Metrics,
+        Capability::Command("echo".into()),
     ])
 }
 
@@ -176,6 +187,7 @@ const ATTEMPTS: &[&str] = &[
     "fs-roundtrip",
     "secrets",
     "metrics",
+    "command",
 ];
 
 /// The ones this host still has nothing behind, however much is granted.
@@ -270,6 +282,9 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     // and the relationship does not.
     assert_eq!(outcome(&view, "measure"), "measured");
     assert_eq!(outcome(&view, "metrics"), "allowed");
+    // Asynchronous by design: the first view can only report that the request
+    // was *started*. The next test watches it finish.
+    assert_eq!(outcome(&view, "command"), "started");
 
     // Everything still unbuilt says so, in the same view, so this test fails
     // when one of them is implemented and nobody updated the list.
@@ -604,11 +619,12 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
 
 #[test]
 fn the_abi_version_is_checked_before_anything_else_runs() {
-    // The ABI has moved twice in one day — `read-file` answering `ok(none)`,
-    // then `measure-text` taking a role rather than a `u8`. The check is what
-    // makes that safe: a widget built against an older world is refused at
-    // instantiation, in a sentence naming both numbers, rather than failing
-    // somewhere confusing later.
+    // The ABI has moved three times while the framework was pre-release:
+    // `read-file` answering `ok(none)`, `measure-text` taking a role rather
+    // than a `u8`, and one asynchronous mechanism replacing one per
+    // capability. The check is what makes that safe: a widget built against an
+    // older world is refused at instantiation, in a sentence naming both
+    // numbers, rather than failing somewhere confusing later.
     let runtime = Runtime::new().expect("runtime");
     let component = runtime.compile(&component_bytes()).expect("compile");
     let manifest = Arc::new(manifest());
@@ -617,5 +633,117 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 3);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 4);
+}
+
+#[test]
+fn an_asynchronous_request_finishes_and_comes_back_by_its_token() {
+    // The whole of the asynchronous path, end to end and through the sandbox:
+    // the widget starts a command and is not blocked, the work happens
+    // somewhere else, the host learns which token finished, delivers an event
+    // carrying it, and the widget collects the answer by that token.
+    //
+    // Nothing in the project exercised this before — `Event::Delivered` was a
+    // variant nothing produced.
+    let scratch = Scratch::new("command");
+    let tasks = Arc::new(Tasks::default());
+    let (_runtime, mut instance) = start_with(
+        everything(),
+        None,
+        served_with_tasks(&scratch, tasks.clone()),
+    );
+
+    let began = std::time::Instant::now();
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "command"),
+        "started"
+    );
+    assert!(
+        began.elapsed() < Duration::from_millis(200),
+        "starting a command took {:?}, so the widget waited for it",
+        began.elapsed()
+    );
+
+    // The host's job: notice, and tell the widget which token it was.
+    let finished = wait_for_a_task(&tasks);
+    assert_eq!(finished.len(), 1);
+    let (owner, token) = finished[0];
+    assert_eq!(owner, uniwidged_core::WidgetId(1));
+    assert!(
+        instance
+            .on_event(Event::Delivered(token))
+            .expect("the event is delivered"),
+        "the widget says the answer changes its view"
+    );
+
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "command"),
+        "conformance",
+        "which is what `echo conformance` says, so the answer really is that \
+         command's output"
+    );
+}
+
+#[test]
+fn a_command_the_manifest_did_not_declare_is_refused() {
+    // `command:echo` is a grant for `echo`. The conformance widget runs
+    // exactly that, so granting a *different* command must refuse the same
+    // call the test above allowed.
+    let scratch = Scratch::new("wrong-command");
+    let policy = Policy::from_granted([Capability::Command("uptime".into())]);
+    let (_runtime, mut instance) = start_with(policy, None, served(&scratch));
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "command"),
+        "not-granted"
+    );
+}
+
+#[test]
+fn a_widget_cannot_collect_a_token_it_did_not_start() {
+    // Tokens come from one counter shared by the desktop, so a widget can
+    // simply try a number. It is told the request does not exist — the same
+    // answer as for one that never did, because distinguishing them would
+    // report how many requests its neighbours have made.
+    let scratch = Scratch::new("stranger");
+    let tasks = Arc::new(Tasks::default());
+    let (_runtime, mut instance) = start_with(
+        everything(),
+        None,
+        served_with_tasks(&scratch, tasks.clone()),
+    );
+
+    // A task belonging to somebody else entirely.
+    let stranger = tasks
+        .start(
+            uniwidged_core::WidgetId(99),
+            Box::new(|| uniwidged_runtime::tasks::TaskResult::Failed("not yours".into())),
+        )
+        .expect("started");
+    wait_for_a_task(&tasks);
+
+    instance.view().expect("render");
+    instance
+        .on_event(Event::Delivered(stranger))
+        .expect("the event is delivered");
+    assert_eq!(
+        outcome(&instance.view().expect("render"), "command"),
+        "malformed",
+        "somebody else's token is not a token this widget has"
+    );
+}
+
+/// Waits until at least one task has been reported finished.
+fn wait_for_a_task(tasks: &Tasks) -> Vec<(uniwidged_core::WidgetId, u32)> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let finished = tasks.finished();
+        if !finished.is_empty() {
+            return finished;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no task finished within fifteen seconds"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }

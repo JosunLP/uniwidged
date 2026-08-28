@@ -19,6 +19,9 @@ pub mod win32;
 pub mod appkit;
 
 #[cfg(all(unix, not(target_os = "macos")))]
+pub mod linux;
+
+#[cfg(all(unix, not(target_os = "macos")))]
 pub mod wayland;
 
 #[cfg(all(unix, not(target_os = "macos")))]

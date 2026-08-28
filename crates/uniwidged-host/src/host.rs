@@ -33,7 +33,8 @@ use uniwidged_render::{RenderError, Renderer, SurfaceId};
 use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::instance::{Runtime, RuntimeError};
 use uniwidged_runtime::manifest::Manifest;
-use uniwidged_runtime::services::{CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::tasks::{TaskHandle, Tasks, Waker};
 
 use crate::scheduler::Scheduler;
 
@@ -62,6 +63,9 @@ pub struct TickReport {
     pub restarting: Vec<WidgetId>,
     /// Widgets given up on this turn.
     pub suspended: Vec<WidgetId>,
+    /// Widgets handed the answer to a request they started, and which said the
+    /// answer changes what they would draw.
+    pub delivered: Vec<WidgetId>,
     /// `queue.submit` calls. Zero when nothing changed.
     pub submits: usize,
 }
@@ -120,6 +124,10 @@ pub struct Host {
     /// One sampler for the whole desktop. It is one machine, and two widgets
     /// sampling separately would each see half the window and report noise.
     cpu: Arc<CpuSampler>,
+    /// Every widget's outstanding asynchronous work, and one concurrency budget
+    /// shared between them.
+    tasks: Arc<Tasks>,
+    commands: Arc<Commands>,
 }
 
 /// The compositor's fonts, as the sandbox sees them.
@@ -141,6 +149,21 @@ impl Host {
     /// `frame` is the refresh interval of the output the widgets are on, for
     /// `Wake::Animating`.
     pub fn new(theme: Theme, frame: std::time::Duration) -> Result<Self, HostError> {
+        Self::with_waker(theme, frame, Waker::flag_only())
+    }
+
+    /// A host whose finished tasks can interrupt a blocking wait.
+    ///
+    /// A desktop blocks on its window system's socket with no timer at all when
+    /// nothing is scheduled — that is what makes it free — so a task finishing
+    /// on a worker thread has to be able to end that block. A headless host has
+    /// no block to end and uses [`Waker::flag_only`], which is why this is
+    /// separate from [`Host::new`] rather than required by it.
+    pub fn with_waker(
+        theme: Theme,
+        frame: std::time::Duration,
+        waker: Waker,
+    ) -> Result<Self, HostError> {
         Ok(Self {
             runtime: Runtime::new().map_err(HostError::Runtime)?,
             compositor: Compositor::new(theme),
@@ -154,6 +177,8 @@ impl Host {
             data_root: None,
             locale: Locale::system(),
             cpu: Arc::new(CpuSampler::new()),
+            tasks: Arc::new(Tasks::new(waker)),
+            commands: Arc::new(Commands::new()),
         })
     }
 
@@ -195,7 +220,7 @@ impl Host {
     /// strict about what a name may contain: two widgets sharing a name would
     /// share a directory, and the isolation would be gone without anything
     /// looking wrong.
-    fn services_for(&self, name: &str) -> Services {
+    fn services_for(&self, id: WidgetId, name: &str) -> Services {
         Services {
             data: self
                 .data_root
@@ -207,6 +232,11 @@ impl Host {
             // about to be drawn in rather than the one it started under.
             measure: Some(Arc::new(Fonts(self.compositor.measurer()))),
             metrics: Some(self.cpu.clone()),
+            // The handle carries the widget's own id, so no host function can
+            // start or collect a task without saying whose it is.
+            tasks: Some(
+                TaskHandle::new(id, self.tasks.clone()).with_commands(self.commands.clone()),
+            ),
         }
     }
 
@@ -240,7 +270,7 @@ impl Host {
     ) -> Result<WidgetId, HostError> {
         let id = WidgetId(self.next_id);
         self.next_id += 1;
-        let services = self.services_for(&manifest.name);
+        let services = self.services_for(id, &manifest.name);
         let widget = Supervised::start(&self.runtime, id, wasm, manifest, policy, services)
             .map_err(HostError::Runtime)?;
         self.widgets.push(widget);
@@ -301,6 +331,11 @@ impl Host {
         if self.widgets.iter().any(|w| self.needs_first_frame(w)) {
             return Some(std::time::Duration::ZERO);
         }
+        // A finished task is not idleness. Without this the loop would block on
+        // its socket with an answer already sitting in memory.
+        if self.tasks.has_finished() {
+            return Some(std::time::Duration::ZERO);
+        }
         self.scheduler.next_timeout(now)
     }
 
@@ -317,7 +352,28 @@ impl Host {
     pub fn tick(&mut self, now: Instant, wall: SystemTime) -> Result<TickReport, HostError> {
         let mut report = TickReport::default();
 
+        // Answers first. A widget whose request finished is told before it is
+        // asked for a view, so that the view it produces is the one that has
+        // the answer in it — telling it afterwards would show the old frame
+        // for one more turn.
+        for (owner, token) in self.tasks.finished() {
+            let Ok(index) = self.index(owner) else {
+                continue;
+            };
+            if self.widgets[index].deliver(
+                &self.runtime,
+                uniwidged_runtime::instance::Event::Delivered(token),
+            ) {
+                report.delivered.push(owner);
+            }
+        }
+
         let mut due: Vec<WidgetId> = self.scheduler.run_due(now).due;
+        for (owner, _) in report.delivered.iter().map(|id| (*id, ())) {
+            if !due.contains(&owner) {
+                due.push(owner);
+            }
+        }
         for widget in &self.widgets {
             if self.needs_first_frame(widget) && !due.contains(&widget.id) {
                 due.push(widget.id);
@@ -396,6 +452,10 @@ impl Host {
             let Ok(index) = self.index(*id) else { continue };
             if report.suspended.contains(id) {
                 self.scheduler.suspend(*id);
+                // Nothing will collect this widget's results, and a result
+                // delivered to whatever takes its place would be worse than
+                // one dropped.
+                self.tasks.forget(*id);
                 continue;
             }
             if report.restarting.contains(id) {
@@ -424,7 +484,7 @@ impl Host {
     /// field to be `None`. The conformance suite asserts the same list from the
     /// other side, so the two cannot drift apart silently.
     pub fn capabilities(&self) -> Vec<(&'static str, bool)> {
-        let services = self.services_for("doctor");
+        let services = self.services_for(WidgetId(0), "doctor");
         vec![
             // Needs nothing behind it: the scheduler is always there.
             ("timer", true),
@@ -434,7 +494,7 @@ impl Host {
             ("fs", services.data.is_some()),
             ("net", false),
             ("secrets", false),
-            ("command", false),
+            ("command", services.tasks.is_some()),
         ]
     }
 

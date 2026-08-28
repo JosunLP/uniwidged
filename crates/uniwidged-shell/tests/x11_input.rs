@@ -24,7 +24,8 @@ use std::time::{Duration, Instant};
 use uniwidged_core::WidgetId;
 use uniwidged_core::geom::PhysicalRect;
 use uniwidged_host::interaction::{Interaction, Press, Release};
-use uniwidged_shell::platform::x11::{Input, WindowKind, X11Window};
+use uniwidged_shell::Input;
+use uniwidged_shell::platform::x11::{WindowKind, X11Window};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{self, ConnectionExt as _};

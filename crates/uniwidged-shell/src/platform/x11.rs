@@ -49,7 +49,7 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 
-use crate::{Capabilities, Output, Placement};
+use crate::{Capabilities, Input, Output, Placement};
 use uniwidged_core::geom::PhysicalRect;
 
 /// Which of the three transparency paths this session ended up on.
@@ -632,7 +632,21 @@ impl X11Window {
     /// desktop and is what makes it cost nothing: there is no timer to fire and
     /// no loop to turn. This is X11's half of `ARCHITECTURE.md` §5.
     pub fn wait(&self, timeout: Option<std::time::Duration>) -> Result<(), X11Error> {
-        use std::os::unix::io::AsRawFd;
+        self.wait_with(timeout, None)
+    }
+
+    /// As [`X11Window::wait`], also waking when a background task finishes.
+    ///
+    /// Two descriptors, not one. A widget's asynchronous work completes on a
+    /// worker thread, and with `None` for a timeout there is otherwise nothing
+    /// to end the block — the answer would sit in memory until the user
+    /// happened to move the mouse.
+    pub fn wait_with(
+        &self,
+        timeout: Option<std::time::Duration>,
+        wake: Option<&crate::WakePipe>,
+    ) -> Result<(), X11Error> {
+        use std::os::fd::AsRawFd;
         // Anything already queued means there is nothing to wait for. Checking
         // first also closes the race where an event arrived between the last
         // dispatch and this call, which would otherwise be slept through.
@@ -644,19 +658,32 @@ impl X11Window {
             Some(d) => d.as_millis().min(i32::MAX as u128) as i32,
             None => -1,
         };
-        let mut fds = [libc::pollfd {
+        let mut fds = vec![libc::pollfd {
             fd: self.conn.as_raw_fd(),
             events: libc::POLLIN,
             revents: 0,
         }];
-        // SAFETY: one valid descriptor, borrowed for the duration of the call.
-        let result = unsafe { libc::poll(fds.as_mut_ptr(), 1, millis) };
+        if let Some(wake) = wake {
+            fds.push(libc::pollfd {
+                fd: wake.as_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            });
+        }
+        // SAFETY: valid descriptors, borrowed for the duration of the call.
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
         if result < 0 {
             let error = std::io::Error::last_os_error();
             // A signal is not a failure; the loop simply comes round again.
             if error.kind() != std::io::ErrorKind::Interrupted {
                 return Err(X11Error::Protocol(error.to_string()));
             }
+        }
+        // Emptied whether or not it is what woke us: a pipe left readable makes
+        // every later poll return immediately, and an idle desktop becomes a
+        // busy one.
+        if let Some(wake) = wake {
+            wake.drain();
         }
         Ok(())
     }
@@ -774,45 +801,6 @@ impl X11Window {
         self.conn.flush().map_err(protocol)?;
         Ok(())
     }
-}
-
-/// Something the user did, in terms the host can act on.
-///
-/// Presses and releases are reported separately rather than as a click,
-/// because on a desktop widget the two are not the same event: a press that
-/// travels is a drag, and only the release knows which it was. Which *node* a
-/// press landed on remains the host's business — it did the layout.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Input {
-    /// The primary button went down.
-    Pressed {
-        window: u32,
-        /// In the window's own physical pixels. Used to find the node and the
-        /// resize edge.
-        local: (i32, i32),
-        /// In the desktop's coordinates. A drag is measured in these: a
-        /// window-relative delta feeds the window's own movement back into its
-        /// input, and the widget shivers instead of moving.
-        root: (i32, i32),
-    },
-    /// The primary button came up.
-    Released {
-        window: u32,
-        root: (i32, i32),
-    },
-    /// The pointer moved with the primary button down.
-    Motion {
-        window: u32,
-        root: (i32, i32),
-    },
-    /// The window's contents were lost and have to be put back. An X11 window
-    /// has no backing store by default, so this is not optional.
-    Exposed {
-        window: u32,
-    },
-    Closed {
-        window: u32,
-    },
 }
 
 /// The monitors on a display, without opening a window first.

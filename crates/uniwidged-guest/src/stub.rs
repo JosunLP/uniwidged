@@ -12,6 +12,38 @@ pub struct Cx {
     _private: (),
 }
 
+/// What a finished command left behind. See the on-target version for what
+/// each field means; off-target nothing ever produces one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub status: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl CommandOutput {
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).trim_end().to_string()
+    }
+
+    pub fn succeeded(&self) -> bool {
+        self.status == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskResult {
+    Command(CommandOutput),
+    Http(HttpResponse),
+    Failed(String),
+}
+
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Denied {
@@ -53,7 +85,11 @@ impl Cx {
         Err(Denied::NotGranted)
     }
 
-    pub fn take_response(&self, _token: u32) -> Result<Vec<u8>, Denied> {
+    pub fn run_command(&self, _name: &str, _args: &[&str]) -> Result<u32, Denied> {
+        Err(Denied::NotGranted)
+    }
+
+    pub fn take_result(&self, _token: u32) -> Result<TaskResult, Denied> {
         Err(Denied::NotGranted)
     }
 

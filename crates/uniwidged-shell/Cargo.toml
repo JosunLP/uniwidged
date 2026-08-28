@@ -14,6 +14,18 @@ raw-window-handle.workspace = true
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb.workspace = true
+# The system libwayland, not the pure-Rust backend: Mesa's Vulkan WSI drives the
+# same `wl_display`, and the two have to be holding the same C object. A Rust
+# connection has no pointer to give wgpu.
+#
+# `dlopen` rather than linking: libwayland is loaded at runtime if it is there.
+# That is what lets one binary run on an X11-only machine with no libwayland
+# installed at all — which is most servers, and every container anybody builds
+# this in. It also means the build needs no `-dev` package.
+wayland-client = { version = "0.31", features = ["dlopen"] }
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # For `poll` on the X11 connection: blocking with a timeout is what makes an
 # idle desktop cost nothing, and there is no portable std equivalent.
 libc = "0.2"

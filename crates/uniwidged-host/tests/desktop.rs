@@ -618,9 +618,10 @@ fn a_host_can_say_which_capabilities_it_serves() {
         .map(|(name, _)| name)
         .collect();
     // `fs` is here too, but for a different reason: this host was given no
-    // data root, so it *could* serve it and has nowhere to. The other three
-    // have nothing behind them at all.
-    assert_eq!(unserved, vec!["fs", "net", "secrets", "command"]);
+    // data root, so it *could* serve it and has nowhere to. The other two have
+    // nothing behind them at all — `command` left this list when the task
+    // machinery landed, and this assertion is what noticed.
+    assert_eq!(unserved, vec!["fs", "net", "secrets"]);
 
     // `fs` is the one that depends on how the host was set up rather than on
     // what is implemented — which is the distinction the report exists to
@@ -632,4 +633,91 @@ fn a_host_can_say_which_capabilities_it_serves() {
             .any(|(name, served)| name == "fs" && served),
         "a host with a data root serves fs"
     );
+}
+
+#[test]
+fn a_finished_request_wakes_the_desktop_and_reaches_the_widget_that_started_it() {
+    // The asynchronous path at desktop level: a widget starts a command, the
+    // desktop is *not* idle while it runs, the answer arrives as an event
+    // carrying the token, and the next frame has it in it.
+    //
+    // `Event::Delivered` was a variant nothing produced until this existed.
+    let mut host = host();
+    let id = install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Command("echo".into())]),
+    );
+
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    assert_eq!(
+        outcome(&host, id, "command"),
+        "started",
+        "the first view can only say the request went out"
+    );
+
+    // Idle by every other measure — the conformance widget asks for no
+    // schedule at all — and still not idle, because an answer is coming.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut delivered = Vec::new();
+    while delivered.is_empty() && Instant::now() < deadline {
+        let (i, w) = now();
+        let report = host.tick(i, w).expect("tick");
+        delivered = report.delivered.clone();
+        if delivered.is_empty() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert_eq!(delivered, vec![id], "the answer reached its widget");
+
+    // And the widget could collect it, which means the token survived the trip
+    // out to a worker thread and back through the sandbox.
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    assert_eq!(
+        outcome(&host, id, "command"),
+        "conformance",
+        "which is what `echo conformance` prints"
+    );
+}
+
+#[test]
+fn a_desktop_with_a_finished_request_does_not_block() {
+    // The scheduler's half. A widget that asked for no schedule and has an
+    // answer waiting must make `next_timeout` say "now" — otherwise the loop
+    // blocks on its socket with the answer already in memory.
+    let mut host = host();
+    install(
+        &mut host,
+        "conformance",
+        Policy::from_granted([Capability::Command("echo".into())]),
+    );
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut woke = false;
+    while Instant::now() < deadline {
+        if host.next_timeout(Instant::now()) == Some(Duration::ZERO) {
+            woke = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        woke,
+        "a desktop with a finished request reported itself idle"
+    );
+}
+
+#[test]
+fn a_widget_without_the_command_capability_is_refused_by_the_desktop() {
+    // The gate, at the level a user sees it. The widget is installed the same
+    // way and asks for the same thing; only the approval differs.
+    let mut host = host();
+    let id = install(&mut host, "conformance", Policy::deny_all());
+    let (i, w) = now();
+    host.tick(i, w).expect("tick");
+    assert_eq!(outcome(&host, id, "command"), "not-granted");
 }

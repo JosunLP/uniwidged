@@ -247,6 +247,115 @@ what a widget writes is on disk in its own directory, that a fresh instance
 finds it there, and that the same host which serves `cache/…` still refuses
 `../../.ssh`.
 
+### Asynchronous capabilities, and `command` — **done, 2026-08-28**
+
+The mechanism `fetch` was designed around in M3 had never once run. `Event::
+Delivered` was a variant nothing produced, `take-response` a function nothing
+called, and the whole shape — ask, get a token, be told later — existed only as
+a claim in the WIT file. It runs now, and `command` is what proves it.
+
+**One mechanism, not one per capability.** `fetch` and `run-command` both start
+a task; `take-result` collects any of them and says what kind of answer it is.
+Adding a third kind is a variant, not a mechanism. That is the ABI 3 → 4 change,
+and it is why `net` will be a transport rather than a redesign.
+
+**Tokens are owned.** They come from one counter shared by every widget on the
+desktop, so nothing stops a widget guessing its neighbour's — except that the
+handle a widget is given has its own id baked in, so no host function can start
+or collect a task without saying whose it is. A token that is not yours reads
+exactly like one that never existed, because distinguishing them would report
+how many requests the neighbours have made.
+
+**The desktop never waits.** Work happens on a worker thread against a
+desktop-wide budget of eight, with a per-widget limit of sixteen outstanding —
+a widget that starts a request on every view is *refused*, which is the host
+telling its author about the bug rather than quietly growing. And a finished
+task has to be able to end a block that has **no timeout at all**, which is what
+`uniwidged_shell::wake` is: a pipe in the loop's `poll` set beside the display
+socket. `ARCHITECTURE.md` §5 named "the host's wake pipe" from the start; this
+is it, built.
+
+**What `command:<name>` costs.** It is a hole a user deliberately opens, so the
+tests are about how wide it is: no shell anywhere — the injection everybody
+expects is asserted against directly — the granted name exactly and never a
+path, `PATH` and nothing else in the environment because a desktop's holds
+session tokens, no standard input, and bounds on time and output enforced by
+killing rather than asking. Output is read on its own threads, because waiting
+for a process and reading afterwards deadlocks the moment it fills a 64 KB pipe
+buffer, which happens on real output rather than only in theory.
+
+The consent line still says "run the `uptime` command", and that is honest as
+far as it goes: a command can do whatever that command can do, and neither the
+host nor the user can know what that is. `command:sh` is arbitrary code
+execution wearing a small word. The guide says so in as many words rather than
+making it look small.
+
+**A fourth reference widget.** [`widgets/uptime`](widgets/uptime) is the
+asynchronous shape written out — ask, draw something now, collect on the event —
+and it asks for `uptime` rather than `sh` for the reason above. Its test watches
+the first frame say it is waiting and a later one carry the machine's real
+uptime.
+
+### Wayland — **done, 2026-08-28**
+
+The platform half of the project's promise, and the one a majority of Linux
+users are actually on. `uniwidged run` now creates a `zwlr_layer_shell_v1`
+surface on the `BOTTOM` layer, and the M0 spike's code has been promoted into
+`uniwidged-shell` rather than left where only a person running a script could
+reach it.
+
+Everything above the shell is unchanged, so all three differences live in
+`platform/wayland.rs`:
+
+* **A client cannot place a window.** There is no `ConfigureWindow`. A layer
+  surface is anchored to an edge and pushed away by margins, so `set_geometry`
+  is an anchor and two margins — the same result by a different mechanism.
+* **A client is never told where the pointer is.** Wayland reports
+  surface-local coordinates only, deliberately, so a client cannot watch the
+  pointer cross somebody else's window. The desktop coordinates the interaction
+  model wants are therefore *computed* from the placement this file asked for,
+  which it knows exactly because it set it. The host's drag logic is then
+  identical on both platforms, which is what stops a widget behaving
+  differently depending on which session it was started in.
+* **The pointer grab is implicit.** From button-down to button-up every event
+  goes to the surface it started on. X11 needs `grab_pointer` for the same
+  guarantee; here asking for it would be asking for something that does not
+  exist.
+
+`platform::linux` is where the two meet: one `DesktopWindow`, chosen at run
+time, because a user does not rebuild uniwidged when they log into a different
+session. A Wayland session that also runs XWayland gets the native protocol —
+going through XWayland means giving up the layer shell, which is the whole
+definition of a desktop widget. If the Wayland connection fails, X11 is tried
+anyway and the start-up log says which happened.
+
+libwayland is loaded with **`dlopen` rather than linked**. One binary then runs
+on an X11-only machine that has no libwayland at all — which is most servers
+and every container this gets built in — and the build needs no `-dev` package.
+
+**Measured.** `crates/uniwidged-shell/tests/wayland_layer.rs` starts its own
+headless `sway`, creates the surface `uniwidged run` creates, and checks the
+facts only a compositor can confirm: that the layer shell accepted the `BOTTOM`
+role, that the configure handshake completed with a size the *compositor*
+chose, that a placement survives a round trip through it, that the monitor comes
+back named, and that an idle widget actually blocks. The `xdg_toplevel`
+fallback — what a GNOME session gets, since Mutter has no layer shell and has
+said it will not — is exercised deliberately by a parameter rather than an
+environment variable, because a test that has to set one cannot run beside
+another test.
+
+One finding worth keeping: sway puts its IPC socket at
+`$XDG_RUNTIME_DIR/sway-ipc.<uid>.<pid>.sock`, and a Unix socket path cannot
+exceed 108 bytes. Past that sway logs one line and segfaults, which from a
+client looks exactly like "no compositor" — and `TMPDIR` on a build machine is
+routinely long enough to trigger it. The test's runtime directory is short by
+construction now, and says why.
+
+**Not done here:** pointer input is wired and compiles on Wayland but is not
+measured — headless sway has no input device, and driving one through sway's
+IPC is a test this does not have yet. The X11 pointer tests cover the shared
+interaction model; what is unverified is the Wayland event plumbing into it.
+
 ### The fonts and the machine — **done, 2026-08-28**
 
 The two remaining capabilities that could be served without a network stack or
@@ -343,18 +452,20 @@ there.
 
 **Not done, and named rather than glossed over:**
 
-* **The keychain namespace.** `secrets` still answers `unavailable`, and so do
-  `net` and `command`. The conformance suite asserts that, so implementing one
-  and forgetting the list fails a test.
+* **The keychain namespace, and the network.** `secrets` and `net` still answer
+  `unavailable`. The conformance suite asserts that, so implementing one and
+  forgetting the list fails a test. `net` is now a *transport* rather than a
+  design: the token machinery, the delivery and the wake are all built and
+  tested, and a client slots into `Tasks::start`.
 * **A disk quota.** The cap is per file, not per widget: a widget granted `fs`
   can still fill a disk one file at a time.
 * **Two monitors, actually tested.** The placement logic is tested against a
   docked-laptop layout, and the enumeration against a nested server — which has
   one screen. Nobody has yet watched a widget move between two real monitors.
-* **Autostart**, and `uniwidged new`.
-* **The Wayland shell.** Its window code is still in `spikes/m0_layer_shell`
-  and has to be promoted into `uniwidged-shell` — the next platform job, and a
-  larger one than it looks because the surface lifecycle is driven differently.
+* **Autostart.**
+* **Pointer input on Wayland**, which is wired but unmeasured — headless sway
+  has no input device. The shared interaction model above it is covered by the
+  X11 pointer tests; what is unverified is the Wayland plumbing into it.
 
 The milestone's original exit criterion — eight widgets across two monitors
 surviving a restart — is met except for the two monitors, which this machine
@@ -390,8 +501,8 @@ depends on, and what once rendered "live" as "li…".
 * Packaging: MSI/MSIX, a signed and notarised `.app`, Flatpak, an AUR package,
   a `.deb`.
 * A widget registry format, and signature verification on install.
-* The authoring guide, an API reference, and four reference widgets — clock,
-  weather, system load, calendar — each exercising a different capability.
+* The authoring guide, an API reference, and four reference widgets, each
+  exercising a different capability.
 
 **Exit:** somebody who has never seen the repository writes and installs a
 widget from the guide alone.
@@ -408,12 +519,12 @@ The exit criterion cannot be asserted, but its mechanical half can, and now is.
   scaffold accepts is one the host will run.
 * **[`docs/writing-a-widget.md`](docs/writing-a-widget.md)** — the guide. Nine
   sections, including the one most guides omit: what you *cannot* do, and why.
-* **Three reference widgets**, one per served capability —
+* **Four reference widgets**, one per served capability —
   [`clock`](widgets/clock) (`locale`), [`system-load`](widgets/system-load)
-  (`metrics`), [`counter`](widgets/counter) (`fs`). The fourth, weather, waits
-  on `net`. Each declares only what it uses, and a test asserts that list
-  rather than deriving it: a worked example that over-declares teaches every
-  reader to over-declare.
+  (`metrics`), [`counter`](widgets/counter) (`fs`) and
+  [`uptime`](widgets/uptime) (`command`). Each declares only what it uses, and a
+  test asserts that list rather than deriving it: a worked example that
+  over-declares teaches every reader to over-declare.
 
 **Measured.** `crates/uniwidged-cli/tests/scaffold.rs` runs `uniwidged new`,
 runs the generated crate's own tests, builds it for `wasm32-wasip2`,

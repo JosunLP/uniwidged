@@ -1,0 +1,8 @@
+# The reference widget for `command`, and the one whose consent line deserves
+# reading twice: a command can do whatever that command can do. `uptime` can do
+# very little, which is why it is the example.
+name = "uptime"
+version = "1.0.0"
+description = "How long this machine has been up"
+capabilities = ["timer", "command:uptime"]
+memory-mb = 8

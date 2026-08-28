@@ -177,7 +177,7 @@ memory-mb = 16
 | `measure` | measuring your own text in a named role |
 | `metrics` | CPU counters |
 | `fs:<subpath>` | reading and writing one folder inside your own directory |
-| `net:<host>` | HTTPS to exactly that host |
+| `net:<host>` | HTTPS to exactly that host (**not served yet**) |
 | `secrets` | the OS keychain, namespaced to you |
 | `command:<name>` | running one declared external command |
 
@@ -225,7 +225,76 @@ a whole file or none.
 Your directory is yours. Paths are relative, `..` is refused, and so is a
 symlink somebody planted that points out of it.
 
-## 6. Testing your widget
+## 6. Asking for something that takes time
+
+A widget must never wait. Every call into your code is bounded, and a widget
+that blocked on a process or a network round trip would be interrupted
+mid-instruction. So anything slow works the same way, and there is one
+mechanism for all of it:
+
+```rust
+fn view(&mut self, cx: &Cx) -> View {
+    if self.pending.is_none() {
+        // Returns immediately, with a receipt.
+        match cx.run_command("uptime", &["-p"]) {
+            Ok(token) => self.pending = Some(token),
+            Err(denied) => self.trouble = Some(denied.to_string()),
+        }
+    }
+    // Draw *something* now. Your widget is on screen the whole time.
+    panel(NodeId::named("root"))
+        .child(text(self.reading.clone().unwrap_or_else(|| "…".into())))
+        .view()
+}
+
+fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
+    let Event::Delivered { token } = event else { return false };
+    if self.pending != Some(*token) { return false; }
+    self.pending = None;
+    match cx.take_result(*token) {
+        Ok(TaskResult::Command(out)) if out.succeeded() => self.reading = Some(out.text()),
+        Ok(TaskResult::Command(out)) => self.trouble = Some(format!("exit {}", out.status)),
+        Ok(TaskResult::Failed(why)) => self.trouble = Some(why),
+        _ => {}
+    }
+    true
+}
+```
+
+Three things worth getting right:
+
+* **Keep the token and check it.** One counter serves the whole desktop, and
+  `take_result` refuses a token that is not yours — but a widget that acted on
+  any token it was handed would be a widget waiting to be confused by its own
+  second request.
+* **Guard the start.** A widget that calls `run_command` on every view has
+  sixteen requests outstanding within a second and is then refused. That
+  refusal is the host telling you about the bug; the `pending` field is the
+  fix.
+* **A non-zero exit is a result, not a failure.** `TaskResult::Failed` means it
+  did not run — not installed, timed out. `TaskResult::Command` with a non-zero
+  status means it ran and said no. Users can act on the difference.
+
+`cx.fetch(url)` will work exactly this way when `net` lands; nothing above
+changes.
+
+### What `command:` actually grants
+
+`command:uptime` reads as "run the `uptime` command", and it means that — but a
+command can do whatever that command can do, and neither the host nor your user
+can know what that is. `command:sh` is a request for arbitrary code execution
+wearing a small word.
+
+What the host does guarantee: no shell anywhere, so nothing in your arguments
+can become a second command; the granted name exactly, never joined with a
+path; almost no environment, because a desktop's environment holds session
+tokens; no standard input; and bounds on time and output.
+
+Ask for the smallest command that answers your question.
+[`widgets/uptime`](../widgets/uptime) is the worked example, and it asks for
+`uptime` rather than `sh` for exactly this reason.
+
+## 7. Testing your widget
 
 Everything except the host works natively, so `cargo test` runs your logic with
 no WASM toolchain at all. Off-target, `Cx` answers `NotGranted` to everything —
@@ -246,7 +315,7 @@ To see it on a desktop: `cargo build --release --target wasm32-wasip2`, then
 `uniwidged install` and `uniwidged run`. `uniwidged snapshot <name>` renders it
 headlessly to a PNG, which is what to put in a pull request.
 
-## 7. What the host does to you
+## 8. What the host does to you
 
 Running other people's code on a desktop only works because of two limits, and
 you should know they are there:
@@ -263,7 +332,7 @@ A fresh instance starts from `Default::default()`, which is why the counter in
 §5 keeps its number on disk: **your state should be derived from your data**,
 and then a restart costs nothing.
 
-## 8. Worked examples
+## 9. Worked examples
 
 Three reference widgets in this repository, one per capability, each small
 enough to read in a sitting:
@@ -273,12 +342,13 @@ enough to read in a sitting:
 | [`widgets/clock`](../widgets/clock) | `locale`. The smallest useful widget: asks for an instant, redraws once a minute. |
 | [`widgets/system-load`](../widgets/system-load) | `metrics`. How often to sample, and how to show a reading you could not take. |
 | [`widgets/counter`](../widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
+| [`widgets/uptime`](../widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
 
 And [`widgets/conformance`](../widgets/conformance), which tries every
 capability and reports what happened — the fastest way to see what the sandbox
 actually does.
 
-## 9. What you cannot do
+## 10. What you cannot do
 
 Named so nobody has to find out the hard way:
 
@@ -287,8 +357,9 @@ Named so nobody has to find out the hard way:
   series.
 * **You cannot choose a font, a colour or a size.** See §2.
 * **You cannot see the pointer.** You are told which node was activated.
-* **You cannot block.** There is no synchronous `fetch`; you get a token and an
-  event. A widget blocked on the network is a widget holding its deadline open.
+* **You cannot block.** There is no synchronous `fetch` and no synchronous
+  `run_command`; you get a token and an event — see §6. A widget blocked on the
+  network is a widget holding its deadline open.
 * **You cannot reach anything you did not declare.** WASI Preview 2 grants no
   ambient authority, so an undeclared capability is *absent* rather than
   denied. There is nothing to escape from.
@@ -296,5 +367,5 @@ Named so nobody has to find out the hard way:
 ---
 
 `ARCHITECTURE.md` has the reasoning behind all of this, and `ROADMAP.md` says
-what is not built yet — `net`, `secrets` and `command` currently answer
-`Unavailable` however much is granted.
+what is not built yet — `net` and `secrets` currently answer `Unavailable`
+however much is granted.

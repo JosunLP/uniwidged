@@ -158,13 +158,58 @@ interface host {
     /// against a different number would be deciding against a guess.
     measure-text: func(text: string, role: role) -> result<f32, denied>;
 
+    /// What a finished command left behind.
+    record command-output {
+        /// The process's exit code, or -1 where it was killed — by its own
+        /// timeout, or by a signal.
+        status: s32,
+        stdout: list<u8>,
+        stderr: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        body: list<u8>,
+    }
+
+    /// The answer to one asynchronous request.
+    ///
+    /// One variant per kind of work, and one `take-result` for all of them,
+    /// because there is one token space and one `delivered` event. A widget
+    /// that started two different kinds of request tells them apart by the
+    /// token it kept, not by which function it calls to collect them.
+    variant task-result {
+        command(command-output),
+        http(http-response),
+        /// The work did not happen: the command could not be started, the
+        /// name resolved to nothing, the request timed out. Distinct from a
+        /// non-zero exit status, which *is* a result.
+        failed(string),
+    }
+
     /// An HTTPS request to a granted host — needs `net:<host>`.
     ///
     /// Returns immediately with a token; the answer arrives as a `delivered`
     /// event. A widget never blocks, because a blocked widget is a widget
     /// holding its deadline open.
     fetch: func(url: string) -> result<u32, denied>;
-    take-response: func(token: u32) -> result<list<u8>, denied>;
+
+    /// Runs one command the manifest declared — needs `command:<name>`.
+    ///
+    /// Asynchronous for the same reason `fetch` is: a process that takes two
+    /// seconds would otherwise be two seconds of a widget holding its deadline
+    /// open, and the host would interrupt it.
+    ///
+    /// `name` must equal the granted name exactly. It is looked up on `PATH`
+    /// and run **without a shell**, so nothing in `args` can become another
+    /// command.
+    run-command: func(name: string, args: list<string>) -> result<u32, denied>;
+
+    /// Collects a finished request, by the token that started it.
+    ///
+    /// A token may be taken once, and only by the widget that started it.
+    /// Asking before the `delivered` event arrives answers `unavailable`.
+    take-result: func(token: u32) -> result<task-result, denied>;
 
     /// The widget's own data directory — needs `fs:<subpath>`.
     ///
@@ -201,6 +246,11 @@ interface guest {
     /// 2 → 3: `measure-text` takes the `role` enum rather than a `u8` index
     /// into it. The index had no meaning a widget author could look up, and
     /// nothing stopped one passing 200.
+    ///
+    /// 3 → 4: one asynchronous mechanism instead of one per capability.
+    /// `take-response` is gone; `take-result` collects any request by token
+    /// and says what kind of answer it is. `run-command` joins `fetch` as the
+    /// second thing that can start one.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

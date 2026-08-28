@@ -29,6 +29,11 @@ pub struct Conformance {
     /// Set when the host asks for it, so the memory cap can be tested against
     /// a widget that really does try to take the machine's memory.
     grow: bool,
+    /// The token of a command this widget started, and what came back. The
+    /// asynchronous path cannot be observed in one `view` — that is the whole
+    /// point of it — so it is observed across two.
+    command: Option<u32>,
+    command_said: Option<String>,
 }
 
 impl Widget for Conformance {
@@ -122,6 +127,10 @@ impl Widget for Conformance {
                 name: "metrics",
                 outcome: describe(cx.cpu_load()),
             },
+            Attempt {
+                name: "command",
+                outcome: self.command_row(cx),
+            },
         ];
 
         // Logging is the one thing that is always available, so it is used to
@@ -154,7 +163,7 @@ impl Widget for Conformance {
         Wake::Never
     }
 
-    fn on_event(&mut self, event: &Event, _cx: &Cx) -> bool {
+    fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
         self.events += 1;
         // A click on this node asks the widget to hang, so the host's deadline
         // can be tested against something that genuinely does not return.
@@ -166,7 +175,48 @@ impl Widget for Conformance {
                 self.grow = true;
             }
         }
+        // The other half of the asynchronous path: an answer arrives as an
+        // event carrying the token that started it, and the widget collects it
+        // by that token.
+        if let Event::Delivered { token } = event {
+            self.command_said = Some(match cx.take_result(*token) {
+                Ok(TaskResult::Command(output)) => {
+                    if output.succeeded() {
+                        output.text()
+                    } else {
+                        format!("exit {}", output.status)
+                    }
+                }
+                Ok(TaskResult::Http(_)) => "http".to_string(),
+                Ok(TaskResult::Failed(_)) => "failed".to_string(),
+                Err(denied) => refusal(&denied),
+            });
+        }
         true
+    }
+}
+
+impl Conformance {
+    /// Starts a command once, then reports what happened to it.
+    ///
+    /// Three states, and a host test can watch it move through them: the
+    /// request was refused, the request is in flight, or the answer is here.
+    fn command_row(&mut self, cx: &Cx) -> String {
+        if let Some(said) = &self.command_said {
+            return said.clone();
+        }
+        if self.command.is_some() {
+            return "pending".to_string();
+        }
+        // `echo` is the one command that exists everywhere, does nothing, and
+        // says what it was given — so a wrong answer is unambiguous.
+        match cx.run_command("echo", &["conformance"]) {
+            Ok(token) => {
+                self.command = Some(token);
+                "started".to_string()
+            }
+            Err(denied) => refusal(&denied),
+        }
     }
 }
 

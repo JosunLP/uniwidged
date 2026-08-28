@@ -41,6 +41,10 @@ pub struct Services {
     /// machine — and because two widgets sampling separately would each see
     /// half the window and report noise.
     pub metrics: Option<Arc<CpuSampler>>,
+    /// This widget's access to asynchronous work — `fetch` and `run-command`.
+    /// Carries the widget's own id, so no host function can start or collect a
+    /// task without saying whose it is.
+    pub tasks: Option<crate::tasks::TaskHandle>,
 }
 
 impl std::fmt::Debug for Services {
@@ -53,6 +57,7 @@ impl std::fmt::Debug for Services {
             .field("locale", &self.locale)
             .field("measure", &self.measure.is_some())
             .field("metrics", &self.metrics.is_some())
+            .field("tasks", &self.tasks)
             .finish()
     }
 }
@@ -81,6 +86,11 @@ impl Services {
 
     pub fn with_metrics(mut self, sampler: Arc<CpuSampler>) -> Self {
         self.metrics = Some(sampler);
+        self
+    }
+
+    pub fn with_tasks(mut self, tasks: crate::tasks::TaskHandle) -> Self {
+        self.tasks = Some(tasks);
         self
     }
 }
@@ -265,6 +275,184 @@ fn existing_root(root: &Path) -> Result<Option<PathBuf>, StoreError> {
         Ok(root) => Ok(Some(root)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(StoreError::Io(e.to_string())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Running a declared command
+// ---------------------------------------------------------------------------
+
+/// Runs the one command a widget's manifest declared.
+///
+/// ## What a user is agreeing to
+///
+/// `command:notify-send` reads as "run the `notify-send` command", and it means
+/// exactly that — but a command can do whatever that command can do, and there
+/// is no way for this type to know what that is. `command:sh` is a request for
+/// arbitrary code execution wearing a small word. The manifest parser refuses a
+/// name containing a path separator, which stops a widget naming a binary
+/// inside its own directory; everything past that is the user's judgement, and
+/// the consent line is written to make the judgement possible rather than to
+/// make it look small.
+///
+/// ## What this type does guarantee
+///
+/// * **No shell.** The name is passed to `exec` directly, so nothing in `args`
+///   can become a second command. There is no `sh -c` anywhere in this file.
+/// * **The granted name, exactly.** Checked by [`crate::Policy`] before this is
+///   reached, and the name is never joined with anything.
+/// * **Almost no environment.** `PATH` is passed through, because a command has
+///   to be findable. Nothing else is: a desktop process's environment routinely
+///   holds session tokens, and handing it to a widget's command would be
+///   handing them to the widget.
+/// * **No standard input.** A command that waits for input would otherwise
+///   occupy a worker until its timeout.
+/// * **A bound on time and on output.** Both are the desktop's, not the
+///   widget's, and both are enforced by killing rather than by asking.
+#[derive(Debug, Clone)]
+pub struct Commands {
+    timeout: Duration,
+    max_output: usize,
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Self {
+            timeout: crate::tasks::COMMAND_TIMEOUT,
+            max_output: crate::tasks::MAX_OUTPUT,
+        }
+    }
+}
+
+impl Commands {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn with_max_output(mut self, bytes: usize) -> Self {
+        self.max_output = bytes;
+        self
+    }
+
+    /// Runs it and waits. **Called on a worker thread, never on the loop.**
+    pub fn run(&self, name: &str, args: &[String]) -> crate::tasks::TaskResult {
+        use crate::tasks::{CommandOutput, TaskResult};
+        use std::process::{Command, Stdio};
+
+        // Defence in depth: the policy has already refused a name that is not
+        // exactly a granted one, and the manifest refused a path at parse time.
+        // This is the check that holds if either is ever reached another way.
+        if name.is_empty() || name.contains('/') || name.contains('\\') {
+            return TaskResult::Failed(format!("`{name}` is not a command name"));
+        }
+
+        let mut command = Command::new(name);
+        command
+            .args(args)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // The one variable a command cannot do without. `env_clear` first, so
+        // this is an allow-list rather than a subtraction from whatever this
+        // process happens to be holding.
+        if let Some(path) = std::env::var_os("PATH") {
+            command.env("PATH", path);
+        }
+
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            // The common case by far: the command is not installed. Said
+            // plainly, because a widget author reading "No such file or
+            // directory" has to guess which file.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return TaskResult::Failed(format!("`{name}` is not installed on this machine"));
+            }
+            Err(e) => return TaskResult::Failed(format!("could not run `{name}`: {e}")),
+        };
+
+        // Output is read on threads of their own. Waiting on the process first
+        // and reading afterwards deadlocks the moment a command fills a pipe
+        // buffer — which is 64 KB, so it happens on real output rather than
+        // only in theory.
+        let cap = self.max_output;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let reader = |pipe: Option<std::process::ChildStdout>| {
+            std::thread::spawn(move || pipe.map(|pipe| read_capped(pipe, cap)).unwrap_or_default())
+        };
+        let out = reader(stdout);
+        let err = std::thread::spawn(move || {
+            stderr
+                .map(|pipe| read_capped(pipe, cap))
+                .unwrap_or_default()
+        });
+
+        let status = match wait_with_timeout(&mut child, self.timeout) {
+            Some(status) => status.code().unwrap_or(-1),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                -1
+            }
+        };
+        TaskResult::Command(CommandOutput {
+            status,
+            stdout: out.join().unwrap_or_default(),
+            stderr: err.join().unwrap_or_default(),
+        })
+    }
+}
+
+/// Reads until the end or the cap, whichever comes first.
+///
+/// Truncated rather than refused: a widget reading the first line of `uptime`
+/// should get it even if something upstream has gone mad.
+fn read_capped(mut pipe: impl std::io::Read, cap: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    while out.len() < cap {
+        match pipe.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let room = cap - out.len();
+                out.extend_from_slice(&chunk[..read.min(room)]);
+            }
+        }
+    }
+    // Drained to the end even past the cap, so the child is not left blocked on
+    // a full pipe and therefore never exiting.
+    let mut sink = [0u8; 8192];
+    while matches!(pipe.read(&mut sink), Ok(n) if n > 0) {}
+    out
+}
+
+/// `wait`, but giving up after `timeout`.
+///
+/// Polled rather than using a platform waiter, because the alternative is
+/// `pidfd` on Linux and `kqueue` elsewhere for a bound that is measured in
+/// seconds. Ten milliseconds of latency on a process that ran for two seconds
+/// is not worth two platform implementations.
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

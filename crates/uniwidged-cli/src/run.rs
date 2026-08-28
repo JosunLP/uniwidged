@@ -15,10 +15,11 @@
 //! desktop-layer window and its own swapchain, all rendered from the same
 //! device.
 //!
-//! Wayland is not wired up here yet: its window code is in
-//! `spikes/m0_layer_shell` and still has to be promoted into
-//! `uniwidged-shell`, which is the next platform job rather than a missing
-//! design. On a Wayland session this runs through XWayland, and says so.
+//! **Both window systems.** A Wayland session gets a `wlr-layer-shell` surface
+//! on the bottom layer; an X11 session gets a 32-bit `_NET_WM_STATE_BELOW`
+//! window. Which one happened is in the start-up log, along with anything the
+//! session could not provide. Everything below the first twenty lines is the
+//! same either way — `uniwidged_shell::platform::linux` is where the two meet.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,8 +34,9 @@ use uniwidged_host::interaction::{Interaction, Press, Release};
 use uniwidged_host::placement;
 use uniwidged_render::SurfaceId;
 use uniwidged_runtime::manifest::Manifest;
-use uniwidged_shell::Output;
-use uniwidged_shell::platform::x11::{AlphaPath, Input, X11Window};
+use uniwidged_shell::platform::linux::{self, DesktopWindow, Session};
+use uniwidged_shell::platform::x11::{AlphaPath, X11Window};
+use uniwidged_shell::{Input, Output, WakePipe};
 
 /// One widget on the desktop: what it is, where it draws, and whether the user
 /// has pinned it down.
@@ -48,18 +50,39 @@ struct Running {
     locked: bool,
 }
 
-/// What `uniwidged doctor` can say about an X11 session without starting one.
+/// What `uniwidged doctor` can say about this session without starting one.
 pub fn doctor() {
-    match std::env::var("WAYLAND_DISPLAY") {
-        Ok(display) if !display.is_empty() => {
+    match linux::session() {
+        Session::Wayland => {
+            let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
             println!("  session: Wayland ({display})");
-            println!(
-                "    this build has no native Wayland shell yet, so widgets run \
-                 through XWayland — whether they stay below other windows is \
-                 then the compositor's decision, and several ignore it"
-            );
+            // Opening a real surface is the only way to find out whether this
+            // compositor has a layer shell, and it is the question that decides
+            // whether a widget is a widget here.
+            match DesktopWindow::open(PhysicalRect::new(0, 0, 32, 32), "uniwidged doctor") {
+                Ok(window) => {
+                    println!("    shell: {}", window.describe());
+                    let outputs = window.outputs();
+                    if outputs.is_empty() {
+                        println!("    monitors: this compositor reports no names");
+                    } else {
+                        println!("    monitors:");
+                        for output in outputs {
+                            println!(
+                                "      {} {}x{} at {},{}",
+                                output.name,
+                                output.rect.width,
+                                output.rect.height,
+                                output.rect.x,
+                                output.rect.y
+                            );
+                        }
+                    }
+                }
+                Err(e) => println!("    cannot create a surface: {e}"),
+            }
         }
-        _ => println!("  session: X11"),
+        Session::X11 => println!("  session: X11"),
     }
     let locale = uniwidged_runtime::services::Locale::system();
     println!(
@@ -104,6 +127,13 @@ pub fn doctor() {
             );
         }
         Err(e) => println!("  capabilities: cannot say — {e}"),
+    }
+    if linux::session() == Session::Wayland {
+        // The rest of this is about X11's transparency paths, which a Wayland
+        // session does not have and does not need: `VK_COMPOSITE_ALPHA_PRE_
+        // MULTIPLIED` is advertised there. Reporting on XWayland instead would
+        // be reporting on a path this desktop is not taking.
+        return;
     }
     // Placement is stored against these names, so a user who is wondering why a
     // widget is on the wrong screen needs to see what the server calls them.
@@ -170,8 +200,17 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         ));
     }
 
-    let mut host =
-        Host::new(Theme::default(), Duration::from_millis(16)).map_err(|e| e.to_string())?;
+    // The loop blocks on its window system's socket with no timer at all when
+    // nothing is scheduled. A widget's asynchronous work finishes on a worker
+    // thread, and this is what lets it end that block — see
+    // `uniwidged_shell::wake`.
+    let wake = WakePipe::new().map_err(|e| format!("could not make a wake pipe: {e}"))?;
+    let mut host = Host::with_waker(
+        Theme::default(),
+        Duration::from_millis(16),
+        uniwidged_runtime::tasks::Waker::with_notify(wake.notifier()),
+    )
+    .map_err(|e| e.to_string())?;
     // What is behind the `fs` gate. Each widget gets `<root>/<its name>`, and
     // the directory is created by its first write rather than at start-up: a
     // desktop should not leave an empty folder for every widget that never
@@ -179,21 +218,14 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     host.set_data_root(crate::paths::data_root());
     // Every widget's window, kept alive for as long as the desktop is: dropping
     // one destroys the window and, with it, the surface wgpu is drawing into.
-    // Asked once, before any window exists, because a window's initial
-    // geometry *is* its placement. A server that cannot say answers an error,
-    // and the stored coordinates are then used as they stand.
-    let outputs: Vec<Output> = match uniwidged_shell::platform::x11::outputs(None) {
-        Ok(outputs) => outputs,
-        Err(e) => {
-            eprintln!(
-                "uniwidged: this display cannot list its monitors ({e}), so \
-                 widgets are placed at the coordinates they were saved with"
-            );
-            Vec::new()
-        }
-    };
+    // X11 can be asked before a window exists; Wayland reports its outputs
+    // through a connection, and a connection here means a surface. So widgets
+    // are opened at the coordinates they were saved with and *then* placed —
+    // which is one extra `set_geometry` on X11 and the only possible order on
+    // Wayland.
+    let mut outputs: Vec<Output> = linux::outputs();
 
-    let mut windows: Vec<X11Window> = Vec::new();
+    let mut windows: Vec<DesktopWindow> = Vec::new();
     let mut running: Vec<Running> = Vec::new();
     let mut by_window: HashMap<u32, usize> = HashMap::new();
 
@@ -206,21 +238,15 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         let policy = widget.policy(&manifest).map_err(|e| e.to_string())?;
 
         let placement = &widget.placement;
-        // Stored relative to a named monitor, resolved against the ones that
-        // are actually here. A widget whose monitor is unplugged appears on the
-        // primary and keeps its name, so docking again puts it back.
-        let resolved = placement::resolve(placement, &outputs);
-        if resolved.displaced {
-            eprintln!(
-                "uniwidged: `{}` belongs on {}, which is not connected; it is \
-                 on {} for now and will go back when that monitor returns",
-                widget.name,
-                placement.output.as_deref().unwrap_or("another monitor"),
-                resolved.output.as_deref().unwrap_or("this one"),
-            );
+        let geometry =
+            PhysicalRect::new(placement.x, placement.y, placement.width, placement.height);
+        let window = DesktopWindow::open(geometry, &widget.name).map_err(|e| e.to_string())?;
+        if windows.is_empty() {
+            println!("  shell: {}", window.describe());
+            if outputs.is_empty() {
+                outputs = window.outputs();
+            }
         }
-        let geometry = resolved.rect;
-        let window = X11Window::open(geometry, &widget.name).map_err(|e| e.to_string())?;
         if !window.has_compositor() {
             eprintln!(
                 "uniwidged: no compositing manager is running, so `{}` will be \
@@ -265,13 +291,40 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             locked: placement.locked,
         });
         windows.push(window);
+    }
+
+    // Now that the monitors are known, put every widget where it belongs.
+    // Stored relative to a named one, resolved against the ones that are
+    // actually here: a widget whose monitor is unplugged appears on the primary
+    // and keeps its name, so docking again puts it back.
+    for (index, widget) in enabled.iter().enumerate() {
+        let resolved = placement::resolve(&widget.placement, &outputs);
+        if resolved.displaced {
+            eprintln!(
+                "uniwidged: `{}` belongs on {}, which is not connected; it is \
+                 on {} for now and will go back when that monitor returns",
+                widget.name,
+                widget
+                    .placement
+                    .output
+                    .as_deref()
+                    .unwrap_or("another monitor"),
+                resolved.output.as_deref().unwrap_or("this one"),
+            );
+        }
+        if resolved.rect != windows[running[index].window].geometry() {
+            windows[running[index].window]
+                .set_geometry(resolved.rect)
+                .map_err(|e| e.to_string())?;
+        }
+        let at = windows[running[index].window].geometry();
         println!(
             "  {} at {},{} {}x{}{}",
             widget.name,
-            geometry.x,
-            geometry.y,
-            geometry.width,
-            geometry.height,
+            at.x,
+            at.y,
+            at.width,
+            at.height,
             resolved
                 .output
                 .as_deref()
@@ -306,14 +359,29 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             (None, None) => None,
             (t, _) => Some(t.unwrap_or(Duration::from_millis(250))),
         };
-        windows[0].wait(timeout).map_err(|e| e.to_string())?;
+        windows[0]
+            .wait_with(timeout, Some(&wake))
+            .map_err(|e| e.to_string())?;
 
         // Drained first, then acted on. A burst of motion events during a
         // drag is one geometry change rather than forty, and the last one is
         // the only one that describes where the pointer actually is.
         let mut events = Vec::new();
-        for window in &windows {
+        for window in &mut windows {
             events.extend(window.drain_events().map_err(|e| e.to_string())?);
+        }
+        // A layer surface's size is the compositor's decision, not the
+        // client's, and it may answer with less than was asked for on a small
+        // output. That is not something the *user* did, so it does not arrive
+        // as an input — but the swapchain has to follow it or the last frame is
+        // stretched until something else redraws.
+        for index in 0..running.len() {
+            if let Some((width, height)) = windows[running[index].window].take_resize() {
+                host.renderer_mut()
+                    .resize(running[index].surface, width, height)
+                    .map_err(|e| e.to_string())?;
+                host.redraw(running[index].id);
+            }
         }
         let mut latest_motion = None;
         for input in events {
@@ -423,7 +491,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 /// in, and the damage check compares views.
 fn apply_geometry(
     host: &mut Host,
-    windows: &mut [X11Window],
+    windows: &mut [DesktopWindow],
     widget: &Running,
     rect: PhysicalRect,
 ) -> Result<(), String> {

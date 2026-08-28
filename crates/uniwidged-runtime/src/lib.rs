@@ -41,6 +41,7 @@ pub mod capability;
 pub mod limits;
 pub mod manifest;
 pub mod services;
+pub mod tasks;
 
 #[cfg(feature = "wasmtime")]
 pub mod instance;
@@ -49,3 +50,4 @@ pub use capability::{Capability, Policy, Request};
 pub use limits::Limits;
 pub use manifest::{ABI_VERSION, Manifest, ManifestError};
 pub use services::{DataDir, Locale, Services};
+pub use tasks::{TaskResult, Tasks, Waker};

@@ -247,10 +247,10 @@ The gate and what is behind it are separate, and a widget can tell them apart.
 *can*. An ungranted capability answers `not-granted`, and a granted one with
 nothing behind it answers `unavailable` — which are different facts, and a
 widget told the first when the second is true sends its author to fix a
-manifest that is already right. As of 2026-08-28, `fs`, `locale`, `measure` and
-`metrics` are served, and `net`, `secrets` and `command` answer `unavailable`;
-the conformance suite asserts exactly that, so implementing one and forgetting
-to say so fails a test.
+manifest that is already right. As of 2026-08-28, `fs`, `locale`, `measure`,
+`metrics` and `command` are served, and `net` and `secrets` answer
+`unavailable`; the conformance suite asserts exactly that, so implementing one
+and forgetting to say so fails a test.
 
 `measure` is worth a sentence of its own, because it is the one capability that
 hands a widget something the host would otherwise keep. The handle behind it
@@ -259,6 +259,32 @@ widget is told is the width the layout will use — a widget deciding its own
 truncation against a different number is deciding against a guess, and a
 measurer that copied the theme would keep answering plausibly after a light/dark
 switch.
+
+### Anything that takes time
+
+A widget must never wait, so nothing slow is a function call. `fetch` and
+`run-command` return a **token** immediately; the work happens on a worker
+thread; the answer arrives as a `delivered` event carrying that token, and
+`take-result` collects it. One mechanism for every kind of slow thing, so that
+adding one is a variant rather than a redesign.
+
+Tokens come from one counter shared by the whole desktop, which makes them
+guessable — so the handle a widget is given carries its own id, and no host
+function can start or collect a task without saying whose it is. A token that is
+not yours reads exactly like one that never existed; distinguishing them would
+report how many requests the neighbours have made.
+
+The budget is the desktop's: eight tasks at once, sixteen outstanding per
+widget. A widget that starts a request on every view is refused rather than
+queued, because a queue hides the bug.
+
+**The wake pipe.** §5's loop blocks with no timer at all when nothing is
+scheduled, so a task finishing on another thread would otherwise sit in memory
+until the user moved the mouse. The loop therefore waits on two descriptors:
+the display socket, and a pipe a worker writes one byte to. A pipe rather than
+a condition variable because it is the only thing a `poll` set can hold that
+another thread can touch without a lock, and rather than a timeout because a
+timeout is exactly the polling this project is most careful not to do.
 
 ### Moving a widget
 
@@ -292,6 +318,27 @@ when a screen is plugged in on the left, so a widget remembered either way ends
 up somewhere its user did not put it. A widget whose monitor is gone appears on
 the primary and *keeps its stored name*, so plugging the monitor back in puts
 it back.
+
+### One binary, two window systems
+
+Linux is the only platform where a user can log into a different window system
+tomorrow without reinstalling anything, so the choice is made at **run** time in
+`platform::linux`, not at compile time. `WAYLAND_DISPLAY` is tried first,
+because a Wayland session running XWayland sets both — and reaching a widget
+through XWayland means giving up `wlr-layer-shell`, which is the whole
+definition of a desktop widget. A failed Wayland connection falls through to
+X11 rather than refusing to start, and the start-up log says which happened.
+
+libwayland is `dlopen`ed rather than linked, so the same binary runs on an
+X11-only machine that has none installed.
+
+The two shells differ in three ways, and all three are confined to
+`platform/wayland.rs`: a Wayland client cannot place a window (a layer surface
+is an anchor and margins), is never told where the pointer is on the desktop
+(so those coordinates are computed from the placement the client itself asked
+for), and is grabbed implicitly for the duration of a press. Above that file
+the host's interaction model is identical, which is what stops a widget
+behaving differently depending on the session it was started in.
 
 ### Containment
 

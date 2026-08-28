@@ -35,17 +35,22 @@ model.
 > gates now have something behind them — a widget's own data directory, which
 > it cannot leave even through a symlink; dates and times in the machine's
 > locale; text measured against the host's real fonts in the theme it is about
-> to be drawn in; and the machine's CPU load, sampled without ever blocking a
-> widget's deadline. `net`, `secrets` and `command` are what is left, and the
-> conformance suite asserts that, so implementing one and forgetting to say so
-> fails a test. The
+> to be drawn in; the machine's CPU load, sampled without ever blocking a
+> widget's deadline; and declared commands, run asynchronously so that a widget
+> never waits. `net` and `secrets` are what is left, and the conformance suite
+> asserts that, so implementing one and forgetting to say so fails a test. The
 > workspace builds from crates.io alone: no sibling checkout, no private
 > repository, `git clone && cargo test`. Widgets can be dragged, resized and
 > pinned, and they remember which monitor they were on — measured against a
 > real X server with synthetic pointer input, not asserted. What is still
 > missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed over — the
-> Wayland shell, the network and keychain capabilities, and the Windows and
-> macOS platforms.
+> network and keychain capabilities, and the Windows and macOS platforms.
+>
+> **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
+> surface on the bottom layer; an X11 session gets a 32-bit
+> `_NET_WM_STATE_BELOW` window; the binary picks at start-up and says which. A
+> test starts its own headless `sway`, creates the surface `uniwidged run`
+> creates, and checks what only a compositor can confirm.
 >
 > And somebody else can write one. `uniwidged new` scaffolds a widget that
 > already builds, draws and responds; [the authoring
@@ -182,6 +187,7 @@ crates/
   uniwidged-compose    view → layout → text → Vello scene · hit rects · a11y
   uniwidged-render     one wgpu device, many surfaces, swapchain or readback
   uniwidged-shell      desktop-layer surfaces: wayland · x11 · win32 · appkit
+                       (`platform::linux` picks between the first two at run time)
   uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
   uniwidged-guest      the SDK widget authors compile against
   uniwidged-host       the daemon: scheduler, configuration, policy
@@ -190,6 +196,7 @@ wit/uniwidged.wit      the host/guest contract
 widgets/clock          the reference widget for `locale`
 widgets/system-load    the reference widget for `metrics`
 widgets/counter        the reference widget for `fs`, and a restart it survives
+widgets/uptime         the reference widget for `command`, and the async shape
 widgets/conformance    a widget that tries everything, so the sandbox can be
                        tested for what it refuses
 docs/writing-a-widget.md  the guide
@@ -212,6 +219,7 @@ Some tests need more than a compiler, and say so rather than skipping quietly:
 |---|---|
 | the golden images | a Vulkan driver — `mesa-vulkan-drivers` supplies a software one. Without it they skip; `UNIWIDGED_REQUIRE_GPU=1` turns that into a failure, and CI sets it. |
 | the sandbox conformance suite | `rustup target add wasm32-wasip2`. It builds the conformance widget itself, so there is nothing to skip. |
+| the layer-shell tests | `sway`. They start their own headless compositor, so no session is needed; without it they skip, and `UNIWIDGED_REQUIRE_WAYLAND=1` makes that a failure. CI sets it. |
 | the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
 | the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
 

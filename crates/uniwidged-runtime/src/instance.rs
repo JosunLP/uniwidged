@@ -44,6 +44,10 @@ wasmtime::component::bindgen!({
 });
 
 use uniwidged::widget::host::Denied;
+// The host interface carries types of its own — the asynchronous ones — so it
+// gets an alias beside the view vocabulary rather than being reached through a
+// path four levels deep at every use.
+use uniwidged::widget::host as wit_host;
 use uniwidged::widget::types as wit;
 
 /// How often the epoch advances.
@@ -442,11 +446,53 @@ impl uniwidged::widget::host::Host for State {
         // allow is exactly what that exists to prevent.
         let host = host_of(&url).ok_or(Denied::Malformed("not an https URL".into()))?;
         self.check(Request::Net { host })?;
+        // The mechanism is here; the transport is not. See `tasks`: a widget
+        // granted `net` gets a token as soon as there is something to fetch
+        // with, and nothing above this line changes when that lands.
         Err(Denied::Unavailable(NOT_YET.into()))
     }
 
-    fn take_response(&mut self, _token: u32) -> Result<Vec<u8>, Denied> {
-        Err(Denied::Unavailable(NOT_YET.into()))
+    fn run_command(&mut self, name: String, args: Vec<String>) -> Result<u32, Denied> {
+        self.check(Request::Command { name: name.clone() })?;
+        // Bounded here rather than in the runner, because a widget sending ten
+        // thousand arguments is a malformed *request* — something its author
+        // can fix — and not a command that failed.
+        if args.len() > MAX_ARGS {
+            return Err(Denied::Malformed(format!(
+                "a command may take at most {MAX_ARGS} arguments"
+            )));
+        }
+        if args.iter().map(String::len).sum::<usize>() > MAX_ARG_BYTES {
+            return Err(Denied::Malformed(format!(
+                "a command's arguments may be at most {MAX_ARG_BYTES} bytes in total"
+            )));
+        }
+        let tasks =
+            self.services.tasks.as_ref().ok_or_else(|| {
+                Denied::Unavailable("granted, but this host runs no tasks".into())
+            })?;
+        tasks.run_command(&name, args).map_err(Denied::Unavailable)
+    }
+
+    fn take_result(&mut self, token: u32) -> Result<wit_host::TaskResult, Denied> {
+        use crate::tasks::TakeError;
+        let tasks =
+            self.services.tasks.as_ref().ok_or_else(|| {
+                Denied::Unavailable("granted, but this host runs no tasks".into())
+            })?;
+        match tasks.take(token) {
+            Ok(result) => Ok(result_to_wire(result)),
+            // A token that is not this widget's reads the same as one that
+            // never existed — see `tasks`, where the reason is that
+            // distinguishing them would tell a widget how many requests its
+            // neighbours have made.
+            Err(TakeError::NotYours) | Err(TakeError::Gone) => {
+                Err(Denied::Malformed("no such request".into()))
+            }
+            Err(TakeError::NotReady) => Err(Denied::Unavailable(
+                "that request has not finished; wait for its `delivered` event".into(),
+            )),
+        }
     }
 
     fn read_file(&mut self, path: String) -> Result<Option<Vec<u8>>, Denied> {
@@ -520,6 +566,30 @@ impl uniwidged::widget::host::Host for State {
 const NOT_YET: &str = "granted, but this host cannot serve it yet — see ROADMAP.md";
 
 const ESCAPED: &str = "that path leaves the widget's own directory";
+
+/// The most arguments one command may be given, and their total size.
+///
+/// A widget cannot make the host allocate without bound on its behalf. These
+/// are generous for anything a widget legitimately runs and far short of what
+/// it takes to matter.
+const MAX_ARGS: usize = 64;
+const MAX_ARG_BYTES: usize = 16 * 1024;
+
+fn result_to_wire(result: crate::tasks::TaskResult) -> wit_host::TaskResult {
+    use crate::tasks::TaskResult;
+    match result {
+        TaskResult::Command(output) => wit_host::TaskResult::Command(wit_host::CommandOutput {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        }),
+        TaskResult::Http(response) => wit_host::TaskResult::Http(wit_host::HttpResponse {
+            status: response.status,
+            body: response.body,
+        }),
+        TaskResult::Failed(why) => wit_host::TaskResult::Failed(why),
+    }
+}
 
 /// Granted, but this embedder gave the widget no directory.
 ///

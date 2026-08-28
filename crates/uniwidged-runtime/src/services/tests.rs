@@ -364,3 +364,172 @@ fn the_sampler_never_blocks() {
         began.elapsed()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Running a command
+// ---------------------------------------------------------------------------
+//
+// This is a hole in the sandbox that a user deliberately opened, so the tests
+// are about how wide it is. Everything here runs a real process.
+
+use crate::tasks::{CommandOutput, TaskResult};
+
+fn ran(result: TaskResult) -> CommandOutput {
+    match result {
+        TaskResult::Command(output) => output,
+        other => panic!("expected a command result, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_command_runs_and_its_output_comes_back() {
+    let output = ran(Commands::new().run("echo", &["hello".into(), "world".into()]));
+    assert_eq!(output.status, 0);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hello world"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_failing_command_is_a_result_and_not_a_failure() {
+    // The distinction a widget has to be able to draw: `git status` in a
+    // directory that is not a repository *ran*, and said no. That is different
+    // from `git` not being installed, and a widget should say so differently.
+    let output = ran(Commands::new().run("false", &[]));
+    assert_ne!(output.status, 0);
+
+    let missing = Commands::new().run("uniwidged-no-such-command", &[]);
+    match missing {
+        TaskResult::Failed(why) => assert!(
+            why.contains("not installed"),
+            "a missing command should say so plainly, got {why:?}"
+        ),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn there_is_no_shell_anywhere() {
+    // The injection everybody expects, and the reason `Command::new` is used
+    // directly. If any of these were passed through a shell, the semicolon
+    // would start a second command and the output would not be the literal
+    // string.
+    for hostile in [
+        "hello; touch /tmp/uniwidged-should-not-exist",
+        "$(touch /tmp/uniwidged-should-not-exist)",
+        "`id`",
+        "a && b",
+        "* ?",
+    ] {
+        let output = ran(Commands::new().run("echo", &[hostile.to_string()]));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            hostile,
+            "the argument was interpreted rather than passed"
+        );
+    }
+    assert!(
+        !std::path::Path::new("/tmp/uniwidged-should-not-exist").exists(),
+        "a shell ran something"
+    );
+}
+
+#[test]
+fn a_command_cannot_be_a_path() {
+    // The manifest refuses a path at parse time and the policy refuses a name
+    // that is not exactly a granted one. This is the third check, and it is
+    // the one that holds if either of those is ever reached another way — a
+    // widget naming `./something` inside its own data directory would
+    // otherwise be running code it wrote itself.
+    for hostile in ["/bin/echo", "./echo", "../echo", "sub/echo", ""] {
+        match Commands::new().run(hostile, &[]) {
+            TaskResult::Failed(why) => assert!(why.contains("not a command name"), "{why}"),
+            other => panic!("{hostile:?} should not have run, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_command_gets_almost_no_environment() {
+    // A desktop process's environment routinely holds session tokens, and a
+    // widget's command inheriting it would be the widget inheriting it. `PATH`
+    // is the one exception, because a command has to be findable.
+    let output = ran(Commands::new().run("env", &[]));
+    let environment = String::from_utf8_lossy(&output.stdout);
+    let names: Vec<&str> = environment
+        .lines()
+        .filter_map(|line| line.split('=').next())
+        .filter(|name| !name.is_empty())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["PATH"],
+        "a command should see PATH and nothing else, saw {names:?}"
+    );
+}
+
+#[test]
+fn a_command_that_will_not_stop_is_killed() {
+    // The bound on how long one widget can occupy a worker. Without it a
+    // widget granted `command:sleep` could hold one for as long as it liked,
+    // and eight of them could hold the whole budget forever.
+    let began = Instant::now();
+    let output = ran(Commands::new()
+        .with_timeout(Duration::from_millis(300))
+        .run("sleep", &["30".into()]));
+    assert_eq!(output.status, -1, "killed, rather than exited");
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "it took {:?}",
+        began.elapsed()
+    );
+}
+
+#[test]
+fn a_command_that_says_too_much_is_truncated_rather_than_refused() {
+    // Truncated, because a widget reading the first line of something should
+    // get it even if what is upstream has gone mad — and capped, because
+    // otherwise the output is in the desktop's memory and then across the
+    // sandbox boundary.
+    let output = ran(Commands::new()
+        .with_max_output(64)
+        .run("yes", &["spam".into()]));
+    assert_eq!(output.stdout.len(), 64);
+    // And the process was not left blocked on a pipe nobody was reading, which
+    // is what would happen if the cap simply stopped reading.
+    assert_eq!(
+        output.status, -1,
+        "`yes` is stopped by the timeout or a signal"
+    );
+}
+
+#[test]
+fn a_command_that_writes_a_lot_still_finishes() {
+    // The deadlock this guards against is real and common: waiting for the
+    // process before reading its output stalls the moment the child fills the
+    // 64 KB pipe buffer. Half a megabyte is comfortably past that.
+    let output = ran(Commands::new()
+        .with_timeout(Duration::from_secs(20))
+        .run("head", &["-c".into(), "500000".into(), "/dev/zero".into()]));
+    assert_eq!(output.status, 0, "it should have exited normally");
+    // Half a megabyte written, the default quarter-megabyte cap kept — and,
+    // crucially, the process still reached its own end rather than blocking
+    // forever on a pipe nobody was draining.
+    assert_eq!(output.stdout.len(), crate::tasks::MAX_OUTPUT);
+}
+
+#[test]
+fn a_command_gets_no_standard_input() {
+    // A command that waits for input would otherwise occupy a worker until its
+    // timeout. `cat` with no argument reads stdin and stops at end of file,
+    // which is immediate when there is nothing there.
+    let began = Instant::now();
+    let output = ran(Commands::new()
+        .with_timeout(Duration::from_secs(5))
+        .run("cat", &[]));
+    assert_eq!(output.status, 0);
+    assert!(output.stdout.is_empty());
+    assert!(began.elapsed() < Duration::from_secs(2));
+}

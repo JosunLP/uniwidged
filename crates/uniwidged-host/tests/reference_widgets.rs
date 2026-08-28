@@ -249,6 +249,7 @@ fn every_reference_widget_declares_only_what_it_uses() {
         ("clock", vec!["timer", "locale"]),
         ("system-load", vec!["timer", "metrics"]),
         ("counter", vec!["fs:state"]),
+        ("uptime", vec!["timer", "command:uptime"]),
     ] {
         let declared: Vec<String> = manifest(name)
             .capabilities
@@ -257,4 +258,54 @@ fn every_reference_widget_declares_only_what_it_uses() {
             .collect();
         assert_eq!(declared, expected, "{name}");
     }
+}
+
+#[test]
+fn the_uptime_widget_runs_a_command_and_shows_what_it_said() {
+    // The asynchronous capability, from the outside: the widget's first frame
+    // says it is waiting, an answer arrives on a later turn, and the frame
+    // after that has the machine's real uptime in it.
+    //
+    // Skipped where `uptime` is not installed, because the widget's job here is
+    // to demonstrate the *mechanism* and a missing binary would only be
+    // demonstrating the failure path — which its own unit tests already cover.
+    if std::process::Command::new("uptime")
+        .arg("-p")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no `uptime` on this machine");
+        return;
+    }
+
+    let scratch = Scratch::new("uptime");
+    let mut host = desktop(&scratch.0);
+    let id = install(&mut host, "uptime");
+    tick(&mut host);
+    assert_eq!(
+        text_of(&host, id, "reading"),
+        "…",
+        "the first frame is drawn before the answer exists, and says so"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        tick(&mut host);
+        if text_of(&host, id, "reading") != "…" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let reading = text_of(&host, id, "reading");
+    assert!(
+        reading.starts_with("up "),
+        "`uptime -p` says how long it has been up, got {reading:?}"
+    );
+    assert!(
+        host.widget(id)
+            .and_then(|w| w.last_view())
+            .is_some_and(|v| !format!("{v:?}").contains("trouble")),
+        "nothing went wrong"
+    );
 }

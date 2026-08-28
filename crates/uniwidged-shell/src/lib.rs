@@ -39,8 +39,55 @@
 #![allow(dead_code)]
 
 pub mod platform;
+pub mod wake;
+
+pub use wake::WakePipe;
 
 use uniwidged_core::geom::PhysicalRect;
+
+/// Something the user did, in terms the host can act on.
+///
+/// One vocabulary for every platform, because the host has one interaction
+/// model — `uniwidged_host::interaction` decides what a press means, and it
+/// must decide the same thing on X11 and on Wayland or a widget behaves
+/// differently depending on which session it was started in.
+///
+/// Presses and releases are reported separately rather than as a click,
+/// because on a desktop widget the two are not the same event: a press that
+/// travels is a drag, and only the release knows which it was. Which *node* a
+/// press landed on remains the host's business — it did the layout.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    /// The primary button went down.
+    Pressed {
+        window: u32,
+        /// In the window's own physical pixels. Used to find the node and the
+        /// resize edge.
+        local: (i32, i32),
+        /// In the desktop's coordinates. A drag is measured in these: a
+        /// window-relative delta feeds the window's own movement back into its
+        /// input, and the widget shivers instead of moving.
+        root: (i32, i32),
+    },
+    /// The primary button came up.
+    Released {
+        window: u32,
+        root: (i32, i32),
+    },
+    /// The pointer moved with the primary button down.
+    Motion {
+        window: u32,
+        root: (i32, i32),
+    },
+    /// The window's contents were lost and have to be put back. An X11 window
+    /// has no backing store by default, so this is not optional.
+    Exposed {
+        window: u32,
+    },
+    Closed {
+        window: u32,
+    },
+}
 
 /// One monitor, as the platform reports it.
 ///
