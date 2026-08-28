@@ -247,6 +247,55 @@ what a widget writes is on disk in its own directory, that a fresh instance
 finds it there, and that the same host which serves `cache/…` still refuses
 `../../.ssh`.
 
+### `net` — **done, 2026-08-28**
+
+The capability every document in this repository has been using as its example
+since M0, and the last one that needed building rather than binding to a
+platform API. The token machinery was already there, so this is a transport —
+which is what the previous section predicted, and it is worth saying that it
+turned out to be true.
+
+**The whole of it is one rule: a grant for a host is a grant for that host.**
+If `api.example.com` answers `302 Location: https://evil.test/`, following it
+would turn the grant into "anywhere `api.example.com` cares to point", and the
+user who approved one hostname would have approved all of them — without the
+widget being complicit, because the *server* decides. So redirects are followed
+by `uniwidged-runtime::net` rather than by the client library, and every hop
+goes back through the same `Policy` the first request did. A hop off the granted
+host stops the chain and says where it was being sent.
+
+The same reading of a URL is used for the check and for the fetch, in one
+function, because two parsers disagreeing is exactly the hole this closes.
+`https://granted.example@evil.test/` is a URL whose host is `evil.test`; a
+reader takes the part before the `@`, and so does a naive parser.
+
+Also refused: plain HTTP, including *via* redirect — a downgrade is carried
+through to the check rather than dropped quietly, so the widget is told rather
+than seeing a `302` as its answer. There are no cookies, no credentials, no
+headers and no method: the interface is a URL, and there is nothing a widget
+could be tracked by across other widgets' requests. A response is capped and a
+request has a deadline, and both are the desktop's.
+
+**Measured against a real server.** `net/tests` starts a TLS server of its own,
+with a certificate chain it generates — a CA and a leaf it signed, because
+webpki refuses a CA certificate used as an end-entity and `openssl req -x509`
+produces exactly that by default. Sixteen tests: the ordinary fetch, a redirect
+within the granted host being followed, a redirect off it being refused, a
+downgrade being refused, a loop ending, the body cap, and a `404` arriving as
+an answer rather than an error.
+
+**What it cost.** Twenty-six crates, all `Apache-2.0`, `MIT` or `ISC`; `cargo
+deny` passes without an exception, which was the condition for taking the
+dependency. One licence had to be added to the allow-list — `webpki-roots`,
+the Mozilla root bundle, under `CDLA-Permissive-2.0`, which is a *data* licence
+for a list of certificates and is permissive. Allowed explicitly rather than by
+loosening the policy.
+
+Two things `cargo deny` caught that a person would not have: that licence, and
+`rustls-pemfile` being unmaintained since August 2025 — a thin wrapper over PEM
+parsing that `rustls-pki-types` has included since 1.9. The tests use the real
+thing now.
+
 ### Asynchronous capabilities, and `command` — **done, 2026-08-28**
 
 The mechanism `fetch` was designed around in M3 had never once run. `Event::
@@ -452,11 +501,9 @@ there.
 
 **Not done, and named rather than glossed over:**
 
-* **The keychain namespace, and the network.** `secrets` and `net` still answer
-  `unavailable`. The conformance suite asserts that, so implementing one and
-  forgetting the list fails a test. `net` is now a *transport* rather than a
-  design: the token machinery, the delivery and the wake are all built and
-  tested, and a client slots into `Tasks::start`.
+* **The keychain namespace.** `secrets` is the last capability still answering
+  `unavailable`. The conformance suite asserts that, so implementing it and
+  forgetting the list fails a test.
 * **A disk quota.** The cap is per file, not per widget: a widget granted `fs`
   can still fill a disk one file at a time.
 * **Two monitors, actually tested.** The placement logic is tested against a

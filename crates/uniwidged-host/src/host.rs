@@ -33,6 +33,7 @@ use uniwidged_render::{RenderError, Renderer, SurfaceId};
 use uniwidged_runtime::capability::Policy;
 use uniwidged_runtime::instance::{Runtime, RuntimeError};
 use uniwidged_runtime::manifest::Manifest;
+use uniwidged_runtime::net::Http;
 use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
 use uniwidged_runtime::tasks::{TaskHandle, Tasks, Waker};
 
@@ -128,6 +129,9 @@ pub struct Host {
     /// shared between them.
     tasks: Arc<Tasks>,
     commands: Arc<Commands>,
+    /// One client for the desktop: one connection pool, one set of trusted
+    /// roots, and one place to point at a proxy.
+    http: Arc<Http>,
 }
 
 /// The compositor's fonts, as the sandbox sees them.
@@ -179,6 +183,7 @@ impl Host {
             cpu: Arc::new(CpuSampler::new()),
             tasks: Arc::new(Tasks::new(waker)),
             commands: Arc::new(Commands::new()),
+            http: Arc::new(Http::new()),
         })
     }
 
@@ -235,7 +240,9 @@ impl Host {
             // The handle carries the widget's own id, so no host function can
             // start or collect a task without saying whose it is.
             tasks: Some(
-                TaskHandle::new(id, self.tasks.clone()).with_commands(self.commands.clone()),
+                TaskHandle::new(id, self.tasks.clone())
+                    .with_commands(self.commands.clone())
+                    .with_http(self.http.clone()),
             ),
         }
     }
@@ -492,7 +499,7 @@ impl Host {
             ("measure", services.measure.is_some()),
             ("metrics", services.metrics.is_some()),
             ("fs", services.data.is_some()),
-            ("net", false),
+            ("net", services.tasks.is_some()),
             ("secrets", false),
             ("command", services.tasks.is_some()),
         ]

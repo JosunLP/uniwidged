@@ -35,6 +35,11 @@ jobs:
           # about the layer shell.
           UNIWIDGED_REQUIRE_X11: "1"
           UNIWIDGED_REQUIRE_WAYLAND: "1"
+          # The HTTPS tests make their own certificate with `openssl` and talk
+          # to a server they started. Without this they would skip on a runner
+          # missing it, and the redirect rules are the last place to accept a
+          # green run that proved nothing.
+          UNIWIDGED_REQUIRE_NET: "1"
 
   # Every visual claim in ARCHITECTURE.md §7 is pinned by a golden image, and
   # golden images are only evidence if they run on every change. lavapipe is a
@@ -61,6 +66,11 @@ jobs:
           UNIWIDGED_REQUIRE_GPU: "1"
           UNIWIDGED_REQUIRE_X11: "1"
           UNIWIDGED_REQUIRE_WAYLAND: "1"
+          # The HTTPS tests make their own certificate with `openssl` and talk
+          # to a server they started. Without this they would skip on a runner
+          # missing it, and the redirect rules are the last place to accept a
+          # green run that proved nothing.
+          UNIWIDGED_REQUIRE_NET: "1"
 
   supply-chain:
     name: cargo deny

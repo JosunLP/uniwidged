@@ -617,11 +617,11 @@ fn a_host_can_say_which_capabilities_it_serves() {
         .filter(|(_, served)| !served)
         .map(|(name, _)| name)
         .collect();
-    // `fs` is here too, but for a different reason: this host was given no
-    // data root, so it *could* serve it and has nowhere to. The other two have
-    // nothing behind them at all — `command` left this list when the task
-    // machinery landed, and this assertion is what noticed.
-    assert_eq!(unserved, vec!["fs", "net", "secrets"]);
+    // `fs` is here for a different reason from `secrets`: this host was given
+    // no data root, so it *could* serve it and has nowhere to. `secrets` has
+    // nothing behind it at all. `command` and then `net` left this list as
+    // each landed, and this assertion is what noticed both times.
+    assert_eq!(unserved, vec!["fs", "secrets"]);
 
     // `fs` is the one that depends on how the host was set up rather than on
     // what is implemented — which is the distinction the report exists to

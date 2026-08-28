@@ -177,7 +177,7 @@ memory-mb = 16
 | `measure` | measuring your own text in a named role |
 | `metrics` | CPU counters |
 | `fs:<subpath>` | reading and writing one folder inside your own directory |
-| `net:<host>` | HTTPS to exactly that host (**not served yet**) |
+| `net:<host>` | HTTPS to exactly that host — and *only* that host, redirects included |
 | `secrets` | the OS keychain, namespaced to you |
 | `command:<name>` | running one declared external command |
 
@@ -275,8 +275,11 @@ Three things worth getting right:
   did not run — not installed, timed out. `TaskResult::Command` with a non-zero
   status means it ran and said no. Users can act on the difference.
 
-`cx.fetch(url)` will work exactly this way when `net` lands; nothing above
-changes.
+`cx.fetch(url)` works exactly this way, and gives you a
+`TaskResult::Http { status, body }`. One thing to know: a grant for
+`api.example.com` is a grant for `api.example.com`, so if that server redirects
+you somewhere else the request stops and you get `TaskResult::Failed` saying
+where it was pointing. Declare every host you actually talk to.
 
 ### What `command:` actually grants
 
@@ -367,5 +370,5 @@ Named so nobody has to find out the hard way:
 ---
 
 `ARCHITECTURE.md` has the reasoning behind all of this, and `ROADMAP.md` says
-what is not built yet — `net` and `secrets` currently answer `Unavailable`
-however much is granted.
+what is not built yet — `secrets` currently answers `Unavailable` however much
+is granted.

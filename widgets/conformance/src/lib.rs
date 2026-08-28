@@ -101,7 +101,11 @@ impl Widget for Conformance {
             },
             Attempt {
                 name: "net",
-                outcome: describe(cx.fetch("https://example.com/data.json")),
+                // `.invalid` is reserved by RFC 2606 and never resolves, so a
+                // conformance run makes no meaningful network traffic — what
+                // is under test is the *gate*, and the gate answers before
+                // anything is sent.
+                outcome: describe(cx.fetch("https://conformance.invalid/data.json")),
             },
             Attempt {
                 name: "net-malformed",
@@ -178,7 +182,15 @@ impl Widget for Conformance {
         // The other half of the asynchronous path: an answer arrives as an
         // event carrying the token that started it, and the widget collects it
         // by that token.
-        if let Event::Delivered { token } = event {
+        //
+        // **Only the token this row is waiting for.** This widget has two
+        // requests outstanding — a command and a fetch — and acting on
+        // whichever arrived first would show the network's answer in the
+        // command's place. Every widget with more than one request in flight
+        // has to do this, which is why the conformance widget does it too.
+        if let Event::Delivered { token } = event
+            && self.command == Some(*token)
+        {
             self.command_said = Some(match cx.take_result(*token) {
                 Ok(TaskResult::Command(output)) => {
                     if output.succeeded() {

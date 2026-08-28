@@ -36,9 +36,11 @@ model.
 > it cannot leave even through a symlink; dates and times in the machine's
 > locale; text measured against the host's real fonts in the theme it is about
 > to be drawn in; the machine's CPU load, sampled without ever blocking a
-> widget's deadline; and declared commands, run asynchronously so that a widget
-> never waits. `net` and `secrets` are what is left, and the conformance suite
-> asserts that, so implementing one and forgetting to say so fails a test. The
+> widget's deadline; declared commands, run asynchronously so that a widget
+> never waits; and HTTPS to a granted host — where a redirect off that host is
+> refused, because otherwise a grant for one name is a grant for wherever that
+> name points. `secrets` is what is left, and the conformance suite asserts
+> that, so implementing it and forgetting to say so fails a test. The
 > workspace builds from crates.io alone: no sibling checkout, no private
 > repository, `git clone && cargo test`. Widgets can be dragged, resized and
 > pinned, and they remember which monitor they were on — measured against a
@@ -221,6 +223,7 @@ Some tests need more than a compiler, and say so rather than skipping quietly:
 | the sandbox conformance suite | `rustup target add wasm32-wasip2`. It builds the conformance widget itself, so there is nothing to skip. |
 | the layer-shell tests | `sway`. They start their own headless compositor, so no session is needed; without it they skip, and `UNIWIDGED_REQUIRE_WAYLAND=1` makes that a failure. CI sets it. |
 | the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
+| the HTTPS tests | `openssl`, to make a certificate for the TLS server they start themselves. No internet is used or needed. Without it they skip, and `UNIWIDGED_REQUIRE_NET=1` makes that a failure. |
 | the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
 
 ## Licence

@@ -411,6 +411,9 @@ pub struct TaskHandle {
     /// something behind it in principle and nothing in practice, which the
     /// widget is told as `unavailable`.
     commands: Option<Arc<crate::services::Commands>>,
+    /// What actually speaks HTTPS. Shared by the desktop: one connection pool,
+    /// one set of trusted roots.
+    http: Option<Arc<crate::net::Http>>,
 }
 
 impl std::fmt::Debug for TaskHandle {
@@ -419,6 +422,7 @@ impl std::fmt::Debug for TaskHandle {
             .field("owner", &self.owner)
             .field("in_flight", &self.tasks.in_flight(self.owner))
             .field("commands", &self.commands.is_some())
+            .field("http", &self.http.is_some())
             .finish()
     }
 }
@@ -429,12 +433,33 @@ impl TaskHandle {
             owner,
             tasks,
             commands: None,
+            http: None,
         }
     }
 
     pub fn with_commands(mut self, commands: Arc<crate::services::Commands>) -> Self {
         self.commands = Some(commands);
         self
+    }
+
+    pub fn with_http(mut self, http: Arc<crate::net::Http>) -> Self {
+        self.http = Some(http);
+        self
+    }
+
+    /// Starts an HTTPS request.
+    ///
+    /// The policy travels with the work rather than being checked once here,
+    /// because a redirect has to be checked against it too — see
+    /// [`crate::net`], where that is the point of the whole module.
+    pub fn fetch(&self, url: String, policy: crate::capability::Policy) -> Result<u32, String> {
+        let http = self
+            .http
+            .clone()
+            .ok_or_else(|| "granted, but this host speaks no HTTPS".to_string())?;
+        self.tasks
+            .start(self.owner, Box::new(move || http.get(&url, &policy)))
+            .map_err(|e| e.to_string())
     }
 
     /// Starts a command. The name has already been checked against the policy.

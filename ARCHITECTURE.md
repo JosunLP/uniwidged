@@ -242,15 +242,23 @@ simply absent rather than denied.
 talks to `api.open-meteo.com`" is a sentence a user can consent to, and
 "this widget uses the network" is not.
 
+**Host-scoping only means anything if redirects are re-checked.** A grant for
+`api.example.com` becomes a grant for anywhere that host points the moment a
+`302` is followed blindly — and the widget need not be complicit, because the
+server decides. So `uniwidged-runtime::net` follows redirects itself rather
+than letting the client library do it, and every hop goes back through the same
+policy. The same function reads the host for the check and for the fetch: two
+parsers disagreeing about what `https://granted.example@evil.test/` means is
+the hole this closes.
+
 The gate and what is behind it are separate, and a widget can tell them apart.
 `Policy` decides whether a widget *may*; `Services` decides whether this host
 *can*. An ungranted capability answers `not-granted`, and a granted one with
 nothing behind it answers `unavailable` — which are different facts, and a
 widget told the first when the second is true sends its author to fix a
-manifest that is already right. As of 2026-08-28, `fs`, `locale`, `measure`,
-`metrics` and `command` are served, and `net` and `secrets` answer
-`unavailable`; the conformance suite asserts exactly that, so implementing one
-and forgetting to say so fails a test.
+manifest that is already right. As of 2026-08-28, everything but `secrets` is
+served; the conformance suite asserts exactly that, so implementing it and
+forgetting to say so fails a test.
 
 `measure` is worth a sentence of its own, because it is the one capability that
 hands a widget something the host would otherwise keep. The handle behind it

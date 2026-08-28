@@ -78,6 +78,23 @@ are public domain) — see `DejaVuSans.LICENSE` beside it. It is a **test**
 dependency: nothing that ships to a user contains it, and uniwidged uses the
 desktop's own UI font at runtime.
 
+## The TLS stack
+
+The `net` capability is served through [ureq](https://github.com/algesten/ureq)
+over [rustls](https://github.com/rustls/rustls) — twenty-six crates, all
+`Apache-2.0`, `MIT` or `ISC`, which `cargo deny` accepts without an exception.
+That was the condition for taking the dependency at all.
+
+rustls rather than the system OpenSSL: this process runs other people's code,
+and a memory-safe TLS implementation is worth more here than a smaller binary.
+
+One licence needed adding to `deny.toml` for it: `webpki-roots`, the Mozilla
+root certificate bundle, ships under `CDLA-Permissive-2.0`. That is a *data*
+licence — the crate is a list of certificates rather than code — and it is
+permissive, with no copyleft and no attribution requirement. It is allowed
+explicitly rather than by loosening the policy, so the next licence to appear
+still has to be read by somebody.
+
 ## Third-party dependencies
 
 The Linebender stack (Vello, Parley, kurbo, peniko), taffy, AccessKit, wgpu and

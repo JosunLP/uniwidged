@@ -13,6 +13,8 @@ uniwidged-core.workspace = true
 uniwidged-view.workspace = true
 serde = { workspace = true }
 toml.workspace = true
+# The `net` capability's transport. See the workspace manifest on why rustls.
+ureq.workspace = true
 # Optional so that the capability, manifest and lifecycle logic — which is most
 # of this crate and all of its security boundary — stays testable without a
 # multi-minute Wasmtime compile. On by default since M3.
@@ -22,6 +24,17 @@ wasmtime-wasi = { workspace = true, optional = true }
 # The system's UTC offset, for `services::Locale`. See the workspace manifest.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[dev-dependencies]
+# A TLS server the transport tests point at. `default-features = false` with
+# `ring` because the default provider is `aws-lc-rs`, which needs cmake — and a
+# test nobody can build on a plain machine is a test nobody runs.
+#
+# PEM is parsed through `rustls::pki_types`, which rustls re-exports, rather
+# than through `rustls-pemfile`: that crate has been a thin wrapper over exactly
+# this since pki-types 1.9 and is now unmaintained (RUSTSEC-2025-0134).
+# `cargo deny` is what said so, which is what it is there for.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 [features]
 default = ["wasmtime"]

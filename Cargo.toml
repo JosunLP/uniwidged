@@ -67,6 +67,18 @@ wasmtime = { version = "48.0.1", default-features = false, features = [
 wasmtime-wasi = "48.0.1"
 wit-bindgen = "0.61.1"
 
+# --- HTTPS ----------------------------------------------------------------
+# What the `net` capability is served with. `rustls` rather than the system
+# OpenSSL, because this process runs other people's code and a memory-safe TLS
+# stack is worth more here than a smaller binary. `default-features = false`
+# drops the cookie jar and the JSON support: a widget sends no cookies (it has
+# no session to have one) and parses its own bodies.
+#
+# Twenty-six crates, all `Apache-2.0`, `MIT` or `ISC` — `cargo deny` passes
+# without an exception, which was the condition for taking the dependency at
+# all. See NOTICE.md.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 # --- Utilities ------------------------------------------------------------
 # `localtime_r`, for the one thing no std API exposes: this machine's offset
 # from UTC, daylight saving included. Unix only, and already in the graph

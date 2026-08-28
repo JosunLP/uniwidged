@@ -116,7 +116,8 @@ fn served_with_tasks(scratch: &Scratch, tasks: Arc<Tasks>) -> Services {
         .with_metrics(Arc::new(CpuSampler::new()))
         .with_tasks(
             TaskHandle::new(uniwidged_core::WidgetId(1), tasks)
-                .with_commands(Arc::new(Commands::new())),
+                .with_commands(Arc::new(Commands::new()))
+                .with_http(Arc::new(uniwidged_runtime::net::Http::new())),
         )
 }
 
@@ -144,7 +145,7 @@ fn everything() -> Policy {
     Policy::from_granted([
         Capability::Locale,
         Capability::Measure,
-        Capability::Net("example.com".into()),
+        Capability::Net("conformance.invalid".into()),
         Capability::Fs("cache".into()),
         Capability::Secrets,
         Capability::Metrics,
@@ -191,7 +192,7 @@ const ATTEMPTS: &[&str] = &[
 ];
 
 /// The ones this host still has nothing behind, however much is granted.
-const UNSERVED: &[&str] = &["net", "secrets"];
+const UNSERVED: &[&str] = &["secrets"];
 
 #[test]
 fn a_real_widget_instantiates_and_renders() {
@@ -285,6 +286,10 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     // Asynchronous by design: the first view can only report that the request
     // was *started*. The next test watches it finish.
     assert_eq!(outcome(&view, "command"), "started");
+    // Likewise `net` — a token came back, which is what "allowed" means for
+    // something that has not happened yet. Where it goes and what it refuses
+    // on the way is `net`'s own suite, against a server it starts itself.
+    assert_eq!(outcome(&view, "net"), "allowed");
 
     // Everything still unbuilt says so, in the same view, so this test fails
     // when one of them is implemented and nobody updated the list.
@@ -364,9 +369,9 @@ fn a_widget_granted_storage_it_never_asked_for_still_cannot_use_it() {
 
 #[test]
 fn a_grant_for_one_host_is_not_a_grant_for_another() {
-    // The suffix attack, end to end: the widget asks for `example.com`, and a
-    // policy naming a host that merely contains it must refuse.
-    let policy = Policy::from_granted([Capability::Net("example.com.evil.test".into())]);
+    // The suffix attack, end to end: the widget asks for `conformance.invalid`,
+    // and a policy naming a host that merely contains it must refuse.
+    let policy = Policy::from_granted([Capability::Net("conformance.invalid.evil.test".into())]);
     let (_runtime, mut instance) = start(policy, None);
     let view = instance.view().expect("render");
     assert_eq!(outcome(&view, "net"), "not-granted");
@@ -664,24 +669,32 @@ fn an_asynchronous_request_finishes_and_comes_back_by_its_token() {
         began.elapsed()
     );
 
-    // The host's job: notice, and tell the widget which token it was.
-    let finished = wait_for_a_task(&tasks);
-    assert_eq!(finished.len(), 1);
-    let (owner, token) = finished[0];
-    assert_eq!(owner, uniwidged_core::WidgetId(1));
-    assert!(
-        instance
-            .on_event(Event::Delivered(token))
-            .expect("the event is delivered"),
-        "the widget says the answer changes its view"
-    );
-
-    assert_eq!(
-        outcome(&instance.view().expect("render"), "command"),
-        "conformance",
-        "which is what `echo conformance` says, so the answer really is that \
-         command's output"
-    );
+    // The host's job: notice, and tell the widget which token it was. The
+    // widget has two requests outstanding — this one and a fetch — so tokens
+    // arrive in whatever order they finish, exactly as on a real desktop.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        for (owner, token) in tasks.finished() {
+            assert_eq!(owner, uniwidged_core::WidgetId(1), "somebody else's task");
+            instance
+                .on_event(Event::Delivered(token))
+                .expect("the event is delivered");
+        }
+        let said = outcome(&instance.view().expect("render"), "command");
+        if said != "started" && said != "pending" {
+            assert_eq!(
+                said, "conformance",
+                "which is what `echo conformance` says, so the answer really is \
+                 that command's output"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the command never came back"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
@@ -699,11 +712,13 @@ fn a_command_the_manifest_did_not_declare_is_refused() {
 }
 
 #[test]
-fn a_widget_cannot_collect_a_token_it_did_not_start() {
-    // Tokens come from one counter shared by the desktop, so a widget can
-    // simply try a number. It is told the request does not exist — the same
-    // answer as for one that never did, because distinguishing them would
-    // report how many requests its neighbours have made.
+fn a_widget_ignores_an_answer_it_was_not_waiting_for() {
+    // Two things guard this, and they are different. `Tasks::take` refuses a
+    // token that is not the widget's — covered in `tasks`, where a widget
+    // guessing its neighbour's number is the case. This is the other one: a
+    // token the widget was handed but never asked for must not be acted on,
+    // because a widget with several requests in flight would otherwise show
+    // one answer in another's place.
     let scratch = Scratch::new("stranger");
     let tasks = Arc::new(Tasks::default());
     let (_runtime, mut instance) = start_with(
@@ -712,7 +727,9 @@ fn a_widget_cannot_collect_a_token_it_did_not_start() {
         served_with_tasks(&scratch, tasks.clone()),
     );
 
-    // A task belonging to somebody else entirely.
+    // A task belonging to somebody else entirely. Handed to this widget
+    // directly, which is what a host bug would look like — and which the
+    // ownership check has to survive anyway.
     let stranger = tasks
         .start(
             uniwidged_core::WidgetId(99),
@@ -721,14 +738,20 @@ fn a_widget_cannot_collect_a_token_it_did_not_start() {
         .expect("started");
     wait_for_a_task(&tasks);
 
+    // Twice: the first view *starts* the command and says so, and every one
+    // after it says the request is outstanding. The baseline has to be the
+    // steady state, or this test measures the widget working.
     instance.view().expect("render");
+    let before = outcome(&instance.view().expect("render"), "command");
+    assert_eq!(before, "pending", "a request is outstanding");
+
     instance
         .on_event(Event::Delivered(stranger))
         .expect("the event is delivered");
     assert_eq!(
         outcome(&instance.view().expect("render"), "command"),
-        "malformed",
-        "somebody else's token is not a token this widget has"
+        before,
+        "a token this widget never started must change nothing"
     );
 }
 

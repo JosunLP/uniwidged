@@ -446,10 +446,16 @@ impl uniwidged::widget::host::Host for State {
         // allow is exactly what that exists to prevent.
         let host = host_of(&url).ok_or(Denied::Malformed("not an https URL".into()))?;
         self.check(Request::Net { host })?;
-        // The mechanism is here; the transport is not. See `tasks`: a widget
-        // granted `net` gets a token as soon as there is something to fetch
-        // with, and nothing above this line changes when that lands.
-        Err(Denied::Unavailable(NOT_YET.into()))
+        let tasks =
+            self.services.tasks.as_ref().ok_or_else(|| {
+                Denied::Unavailable("granted, but this host runs no tasks".into())
+            })?;
+        // The policy travels with the request. A grant for one host is a grant
+        // for that host, and a `302` to somewhere else has to be refused —
+        // which means the check happens again, on the worker, at every hop.
+        tasks
+            .fetch(url, self.policy.clone())
+            .map_err(Denied::Unavailable)
     }
 
     fn run_command(&mut self, name: String, args: Vec<String>) -> Result<u32, Denied> {
