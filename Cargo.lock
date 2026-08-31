@@ -2616,6 +2616,7 @@ dependencies = [
  "uniwidged-runtime",
  "uniwidged-shell",
  "uniwidged-view",
+ "x11rb",
 ]
 
 [[package]]

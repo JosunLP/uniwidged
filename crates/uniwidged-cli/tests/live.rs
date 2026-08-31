@@ -43,6 +43,12 @@ struct Server {
     display: String,
     number: u32,
     child: Child,
+    /// A connection held for the server's whole life. An X server resets when
+    /// its last client disconnects — that is what `-noreset` exists to turn
+    /// off — and a desktop whose connection lands mid-reset is refused with
+    /// an error that looks like no server at all. `x11_input.rs` holds one
+    /// for the same reason and gave it the same name.
+    _keepalive: x11rb::xcb_ffi::XCBConnection,
 }
 
 impl Server {
@@ -75,22 +81,24 @@ impl Server {
                 return None;
             };
             // The socket appears before the server is ready to accept, so the
-            // wait is on a connection being *accepted* rather than on the
-            // file. The first version waited on the file and slept 250 ms,
-            // which was enough on every development machine and not on a CI
-            // runner starting four servers under a compiler — where the
-            // desktop's single connection attempt landed early, and the
-            // whole suite failed with "cannot reach the X server".
-            // `x11_input.rs` learned the same lesson and says so.
+            // wait is on a *completed X handshake* rather than on the file —
+            // and the connection is then kept, not closed. Both halves
+            // matter, and each was learned from a red CI run: the first
+            // version waited on the file and slept, which a loaded runner
+            // outran; the second probed with a bare connect and dropped it,
+            // which made the probe the server's last client — and an X
+            // server resets when its last client leaves, so the desktop's
+            // own connection landed mid-reset and was refused.
             let deadline = Instant::now() + Duration::from_secs(10);
             while Instant::now() < deadline {
-                if std::os::unix::net::UnixStream::connect(format!("/tmp/.X11-unix/X{number}"))
-                    .is_ok()
-                {
+                if let Ok((keepalive, _)) = x11rb::xcb_ffi::XCBConnection::connect(Some(
+                    &std::ffi::CString::new(display.clone()).expect("a display name"),
+                )) {
                     return Some(Server {
                         display,
                         number,
                         child,
+                        _keepalive: keepalive,
                     });
                 }
                 std::thread::sleep(Duration::from_millis(50));

@@ -32,6 +32,11 @@ toml.workspace = true
 # Unix only, and already in the graph through Wasmtime, so it costs nothing to
 # compile.
 [dev-dependencies]
+# `tests/live.rs` probes its own Xvfb the way `uniwidged-shell`'s tests do:
+# with a real X handshake, kept open for the server's life — an X server
+# resets when its last client leaves, and a desktop connecting mid-reset is
+# refused. Dev-only, so nothing of this reaches the shipped binary.
+x11rb.workspace = true
 # The TLS server the registry tests point at. Enabling it here — in
 # `[dev-dependencies]` — is what keeps it out of the shipped binary: a release
 # build never looks at this section, so `test_server` is not compiled into it.
