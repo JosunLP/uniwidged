@@ -12,8 +12,9 @@ url="https://github.com/j-pfalzgraf/uniwidged"
 license=('MIT' 'Apache-2.0')
 # libxcb because the X11 surface is created through it — wgpu needs a real
 # xcb_connection_t*, which a pure-Rust connection has no pointer to give it.
-depends=('libxcb' 'gcc-libs')
-makedepends=('cargo')
+# fontconfig because Parley asks it for the machine's fonts.
+depends=('libxcb' 'fontconfig' 'gcc-libs')
+makedepends=('cargo' 'pkgconf')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 

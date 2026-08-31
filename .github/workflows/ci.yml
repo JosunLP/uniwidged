@@ -26,7 +26,12 @@ jobs:
       # `x11-xserver-utils` is `xrandr`: the two-monitor tests declare virtual
       # RandR monitors over the nested server's screen, and the hotplug test
       # turns its one output off and on again.
-      - run: sudo apt-get update && sudo apt-get install -y xvfb sway x11-xserver-utils
+      # `libfontconfig1-dev` and `pkg-config` because Parley asks fontconfig
+      # for the machine's fonts, and the `-sys` crate finds it through
+      # `pkg-config` at build time; `libxcb1-dev` because the X11 surface is
+      # created through libxcb. Every run before these three were listed died
+      # compiling `yeslogic-fontconfig-sys`, before a single test.
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libxcb1-dev xvfb sway x11-xserver-utils
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets
       # The documentation is most of this codebase, and a doc link that no
@@ -72,7 +77,7 @@ jobs:
         with:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers xvfb sway x11-xserver-utils
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libxcb1-dev mesa-vulkan-drivers xvfb sway x11-xserver-utils
       - run: cargo test --workspace
         env:
           WGPU_BACKEND: vulkan
@@ -164,7 +169,7 @@ jobs:
       # rather than assumed: the script refuses to write a `Depends` it could
       # not derive, so a runner without the tool would fail here anyway, and
       # failing with a missing package is a worse message than not failing.
-      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev groff
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev groff pkg-config libfontconfig1-dev libxcb1-dev
       - run: packaging/deb/build.sh --output "$RUNNER_TEMP/deb"
       - name: the package holds what it promises
         run: |
