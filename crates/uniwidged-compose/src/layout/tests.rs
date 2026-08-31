@@ -268,6 +268,30 @@ fn every_child_stays_inside_its_parent() {
 }
 
 #[test]
+fn a_chart_spans_its_row_and_takes_the_theme_height() {
+    // Like a progress bar: the widget names the series, the theme decides how
+    // much room a chart gets, and it stretches to the width it is given. A
+    // chart sized to its content would be zero wide, having none.
+    let view = panel(NodeId::named("root"))
+        .child(sparkline([0.2, 0.9, 0.4]).id(NodeId::named("chart")))
+        .view();
+    let theme = Theme::default();
+    let root = placed(&view);
+    let chart = &root.children[0];
+    assert!(
+        (chart.rect.height() as f32 - theme.sparkline_height()).abs() < 0.01,
+        "{:?}",
+        chart.rect
+    );
+    assert!(
+        (chart.rect.width() - root.content.width()).abs() < 0.01,
+        "{:?} in {:?}",
+        chart.rect,
+        root.content
+    );
+}
+
+#[test]
 fn a_scaled_base_size_scales_the_layout_and_not_only_the_glyphs() {
     // If sizes were pixel constants here, enlarging the base font would make
     // text overflow boxes that stayed put.

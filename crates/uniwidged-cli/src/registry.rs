@@ -91,7 +91,7 @@ pub fn command(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("add") => add_registry(&args[1..]),
         Some("remove") => remove_registry(&args[1..]),
-        Some("list") | None => list_registries(),
+        Some("list") | None => list_registries(args.iter().any(|a| a == "--names")),
         Some("publish") => publish(&args[1..]),
         Some(other) => Err(format!(
             "`{other}` is not something `uniwidged registry` does. \
@@ -166,8 +166,17 @@ fn remove_registry(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn list_registries() -> Result<(), String> {
+fn list_registries(names_only: bool) -> Result<(), String> {
     let registries = read_registries()?;
+    if names_only {
+        // One name per line, for a shell completion or a script. Nothing to
+        // read is nothing printed — a sentence here would complete to a
+        // sentence.
+        for registry in &registries {
+            println!("{}", registry.name);
+        }
+        return Ok(());
+    }
     if registries.is_empty() {
         println!(
             "  this machine reads no registries.\n  \

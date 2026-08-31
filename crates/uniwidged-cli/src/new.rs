@@ -222,7 +222,7 @@ fn widget_toml(name: &str, capabilities: &[String]) -> String {
          #   timer            ask to be woken\n\
          #   locale           format dates and times\n\
          #   measure          measure your own text\n\
-         #   metrics          CPU counters\n\
+         #   metrics          CPU and memory counters\n\
          #   fs:<subpath>     read and write one folder of your own\n\
          #   net:<host>       HTTPS to exactly that host\n\
          #   secrets          the keychain, namespaced to you\n\

@@ -470,6 +470,38 @@ impl Theme {
         (self.base_font_size * 0.46).round().max(3.0)
     }
 
+    /// How tall a [`uniwidged_view::Content::Sparkline`] is.
+    ///
+    /// Two lines of body text: tall enough that a swing from 20 % to 80 % is
+    /// visible at a glance, short enough that a chart does not become the
+    /// widget. A ratio of the font size, like everything else, so a user who
+    /// scales the text scales the chart with it.
+    pub fn sparkline_height(&self) -> f32 {
+        (self.base_font_size * 2.0).round().max(12.0)
+    }
+
+    /// The width of a sparkline's line, in logical pixels.
+    ///
+    /// Heavier than a hairline on purpose — a one-pixel line over a
+    /// translucent panel disappears against a busy wallpaper — and thicker
+    /// still at high contrast, where weight is what carries the hierarchy.
+    pub fn sparkline_stroke(&self) -> f32 {
+        let stroke = (self.base_font_size * 0.12).max(1.5);
+        if self.is_high_contrast() {
+            stroke + 0.5
+        } else {
+            stroke
+        }
+    }
+
+    /// The opacity of the area under a sparkline's line.
+    ///
+    /// The area is what makes a chart read as a *quantity* rather than a
+    /// squiggle; it is faint so that the line stays the subject.
+    pub fn sparkline_fill_alpha(&self) -> f32 {
+        if self.is_high_contrast() { 0.32 } else { 0.18 }
+    }
+
     /// The rule a [`uniwidged_view::Content::Divider`] is drawn with.
     pub fn divider(&self) -> ((u8, u8, u8, f32), f32) {
         let dark = self.is_dark();

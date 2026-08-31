@@ -132,6 +132,16 @@ pub fn widget_store_dir() -> PathBuf {
     beside_config("store")
 }
 
+/// Where files that belong to a *running* desktop go — the pid file, the log,
+/// what `uniwidged status` reads.
+///
+/// The same directory as the configuration, which is what makes them follow
+/// `UNIWIDGED_CONFIG`: two desktops side by side get two logs and two pid
+/// files, and a test gets neither of the real ones.
+pub fn state_dir() -> PathBuf {
+    keyring_dir()
+}
+
 /// A path in the configuration directory, following `UNIWIDGED_CONFIG` when it
 /// is set.
 ///

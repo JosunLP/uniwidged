@@ -19,9 +19,12 @@
 //! uniwidged move <name> [--x N …]   place a widget without a pointer
 //! uniwidged configure <name>         the knobs a widget declared
 //! uniwidged reload                  tell a running desktop to read it again
+//! uniwidged status                  what is on the screen right now
+//! uniwidged log [-n N]              what the running desktop has been saying
 //! uniwidged autostart enable        start with the session
 //! uniwidged doctor                  what this session can and cannot do
 //! uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG
+//! uniwidged completions <shell>     a completion script for bash, zsh or fish
 //! ```
 //!
 //! `reload` is worth a sentence too. A desktop reads its configuration at
@@ -49,15 +52,19 @@
 
 mod autostart;
 mod check;
+mod completions;
 mod configure;
 #[cfg(unix)]
 mod daemon;
 mod install;
+mod log;
 mod new;
 mod paths;
 mod registry;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod run;
+#[cfg(unix)]
+mod state;
 mod trust;
 
 use std::path::PathBuf;
@@ -90,9 +97,12 @@ fn main() -> ExitCode {
         Some("move") => command_move(&rest),
         Some("configure") => configure::command(&rest),
         Some("reload") => command_reload(&rest),
+        Some("log") => log::command(&rest),
+        Some("status") => command_status(&rest),
         Some("autostart") => autostart::command(&rest),
         Some("doctor") => command_doctor(),
         Some("snapshot") => command_snapshot(&rest),
+        Some("completions") => completions::command(&rest),
         Some("--version" | "-V" | "version") => {
             // The ABI version too, because "which uniwidged is this" is nearly
             // always asked about a widget that will not load, and the answer is
@@ -139,15 +149,18 @@ fn print_usage() {
            uniwidged search [term] [--refresh] [--offline]\n  \
            uniwidged add <name>[@version] [--registry N]\n  \
            uniwidged update [name] [--check]   what is newer, and take it\n  \
-           uniwidged list                    what is installed, and what it was granted\n  \
+           uniwidged list [--names]          what is installed, and what it was granted\n  \
            uniwidged lock <name>             pin a widget where it is\n  \
            uniwidged unlock <name>           let it be dragged again\n  \
            uniwidged move <name> [--x N] [--y N] [--width N] [--height N] [--output NAME]\n  \
            uniwidged configure <name> [--set k=v] [--reset k] [--reset-all]\n  \
            uniwidged reload                  tell a running desktop to read it again\n  \
+           uniwidged status                  what is on the screen right now\n  \
+           uniwidged log [-n N] [-f]         what the running desktop has been saying\n  \
            uniwidged autostart [enable|disable|status]\n  \
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n  \
+           uniwidged completions <shell>     a completion script for bash, zsh or fish\n  \
            uniwidged --version\n"
     );
 }
@@ -209,16 +222,34 @@ fn command_list(args: &[String]) -> Result<(), String> {
 
     let path = config_path(args);
     let config = Config::read(&path).map_err(|e| e.to_string())?;
+    if args.iter().any(|a| a == "--names") {
+        // One name per line and nothing else — what a shell completion or a
+        // script wants, and the one output of this command that is a format
+        // rather than a sentence. Nothing installed is nothing printed.
+        for widget in &config.widgets {
+            println!("{}", widget.name);
+        }
+        return Ok(());
+    }
     if config.widgets.is_empty() {
         println!("nothing installed ({})", path.display());
         return Ok(());
     }
+    // What is *installed* and what is *on the screen* are different questions,
+    // and a widget that is enabled here and missing there is exactly the case
+    // somebody running this is trying to explain. `None` when no desktop is
+    // running, which is most of the time and is not worth a word.
+    #[cfg(unix)]
+    let running = state::current().ok().flatten();
+    #[cfg(not(unix))]
+    let running: Option<()> = None;
     for widget in &config.widgets {
         let placement = &widget.placement;
         println!(
-            "{}{}  {}x{} at {},{}{}",
+            "{}{}{}  {}x{} at {},{}{}",
             widget.name,
             if widget.enabled { "" } else { " (disabled)" },
+            live(running.as_ref(), &widget.name, widget.enabled),
             placement.width,
             placement.height,
             placement.x,
@@ -239,6 +270,89 @@ fn command_list(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// How a widget in `list` is annotated with what the running desktop is doing.
+///
+/// Empty when there is no desktop, because then every line would carry the same
+/// noise. `not running` only for a widget the file says is *enabled*: a
+/// disabled one is already labelled, and saying both would be saying the same
+/// thing twice.
+#[cfg(unix)]
+fn live(running: Option<&state::State>, name: &str, enabled: bool) -> String {
+    let Some(state) = running else {
+        return String::new();
+    };
+    match state.widgets.iter().find(|widget| widget.name == name) {
+        Some(widget) if widget.health == state::Health::Running => " (on screen)".into(),
+        Some(widget) => format!(" ({})", widget.health),
+        // Disabled is why it is not running, and the line already says so.
+        None if enabled => " (not running)".into(),
+        None => String::new(),
+    }
+}
+
+#[cfg(not(unix))]
+fn live(_running: Option<&()>, _name: &str, _enabled: bool) -> String {
+    String::new()
+}
+
+/// `uniwidged status` — what is on the screen right now.
+///
+/// The question `list` cannot answer, because `list` reads a file that says
+/// what somebody asked for. This one reads what a running desktop wrote about
+/// what it managed to do — which widget is drawing, which one it has given up
+/// on, where each of them actually is, and what kind of surface this session
+/// gave it.
+#[cfg(unix)]
+fn command_status(_args: &[String]) -> Result<(), String> {
+    let state = match state::current()? {
+        Some(state) => state,
+        None => {
+            println!("  no desktop is running. `uniwidged run` starts one.");
+            return Ok(());
+        }
+    };
+    let locale = uniwidged_runtime::services::Locale::system();
+    println!(
+        "  desktop {} since {} {}",
+        state.pid,
+        locale.format_date(state.since),
+        locale.format_time(state.since),
+    );
+    if !state.shell.is_empty() {
+        println!("  shell: {}", state.shell);
+    }
+    if state.widgets.is_empty() {
+        println!("  nothing on the screen");
+    }
+    for widget in &state.widgets {
+        println!("\n  {} {}  {}", widget.name, widget.version, widget.health);
+        println!(
+            "    {}x{} at {},{}{}{}",
+            widget.width,
+            widget.height,
+            widget.x,
+            widget.y,
+            widget
+                .output
+                .as_deref()
+                .map(|o| format!(" on {o}"))
+                .unwrap_or_default(),
+            if widget.locked { ", locked" } else { "" },
+        );
+    }
+    println!("\n  what it has been saying: `uniwidged log`");
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn command_status(_args: &[String]) -> Result<(), String> {
+    Err(
+        "a running desktop records itself through a pid file, and this build \
+         has no equivalent yet — see ROADMAP.md"
+            .into(),
+    )
 }
 
 /// Pins a widget where it is, or lets it be dragged again.

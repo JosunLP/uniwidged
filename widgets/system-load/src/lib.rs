@@ -1,4 +1,4 @@
-//! A CPU meter.
+//! A CPU and memory meter, with a minute of history.
 //!
 //! The reference widget for `metrics`, and an example of the thing widget
 //! authors most often get wrong: **how often to ask**. A load average that
@@ -18,11 +18,25 @@
 //! `widget.toml` with a type and a range, so the host refuses anything else
 //! before this code runs — which is why `thresholds` below has no branch for a
 //! value that is not a number, and needs none.
+//!
+//! Since ABI 7 it is also the worked example for a **chart**. The last minute
+//! of readings goes under the meter as a `sparkline` — the widget hands over
+//! the numbers and nothing else; the line, the fill, the height and the marker
+//! are the theme's. That is as far as this framework goes towards a canvas,
+//! and the reason it goes no further is the same reason there are no colours
+//! here: a screen of charts by different authors should be one chart style.
 
 use uniwidged_guest::prelude::*;
 
 /// How often to ask. See the module note.
 const PERIOD: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How many readings the chart keeps: a minute, at [`PERIOD`].
+///
+/// Far below the chart's own cap. A widget that hands over more than that
+/// gets the recent end and nothing else, but a history that is never longer
+/// than it needs to be is one that never costs a `drain`.
+const HISTORY: usize = 30;
 
 /// What the widget falls back to if it is running on a host older than its own
 /// manifest — the only way `cx.setting` can answer `None` for a declared key.
@@ -35,6 +49,12 @@ pub struct SystemLoad {
     /// than as 0 %, because the two mean opposite things to somebody glancing
     /// at a meter.
     load: Option<f32>,
+    /// The readings before it, oldest first, at most [`HISTORY`] of them.
+    history: Vec<f32>,
+    /// How much of the machine's memory is in use. Under the same grant as
+    /// the CPU, and shown the same way — a level rather than a rate, so it
+    /// gets a bar and no history.
+    memory: Option<f32>,
     /// Why there is no reading, when there is not.
     refused: Option<String>,
     /// Where the meter turns amber and where it turns red.
@@ -51,6 +71,8 @@ impl Default for SystemLoad {
     fn default() -> Self {
         Self {
             load: None,
+            history: Vec::new(),
+            memory: None,
             refused: None,
             warn_at: WARN_AT,
             critical_at: CRITICAL_AT,
@@ -72,17 +94,14 @@ impl Widget for SystemLoad {
         // Re-read and say whether it matters: a threshold that moved past the
         // current reading changes the colour of the meter, and one that did
         // not changes nothing worth a frame.
-        let was = self.accent();
+        let was = (self.accent(self.load), self.accent(self.memory));
         self.read_settings(cx);
-        was != self.accent()
+        was != (self.accent(self.load), self.accent(self.memory))
     }
 
     fn view(&mut self, cx: &Cx) -> View {
         match cx.cpu_load() {
-            Ok(load) => {
-                self.load = Some(load.clamp(0.0, 1.0));
-                self.refused = None;
-            }
+            Ok(load) => self.record(load.clamp(0.0, 1.0)),
             Err(denied) => {
                 // The last reading is kept: a meter that blanks the moment a
                 // host hiccups is worse than one showing a number a few
@@ -90,11 +109,14 @@ impl Widget for SystemLoad {
                 self.refused = Some(denied.to_string());
             }
         }
+        // Memory under the same grant. Refused the same way, but not reported
+        // twice: one reason is the reason.
+        if let Ok(memory) = cx.memory_load() {
+            self.memory = Some(memory.clamp(0.0, 1.0));
+        }
 
-        let reading = match self.load {
-            Some(load) => format!("{}%", (load * 100.0).round() as u32),
-            None => "—".to_string(),
-        };
+        let cpu = self.accent(self.load);
+        let memory = self.accent(self.memory);
 
         panel(NodeId::named("system-load"))
             .gap(2)
@@ -104,15 +126,40 @@ impl Widget for SystemLoad {
                     .child(text("CPU").role(Role::Section))
                     .child(spacer())
                     .child(
-                        chip(reading)
-                            .accent(self.accent())
+                        chip(reading(self.load))
+                            .accent(cpu)
                             .id(NodeId::named("reading")),
                     ),
             )
             .child(
                 progress(self.load.unwrap_or(0.0))
-                    .accent(self.accent())
+                    .accent(cpu)
                     .id(NodeId::named("meter")),
+            )
+            .child(
+                // The minute before the meter, oldest first. Labelled, because
+                // a screen reader will otherwise skip it — and what it reads is
+                // the latest value, which is what the chart is about.
+                sparkline(self.history.iter().copied().chain(self.load))
+                    .accent(cpu)
+                    .label("CPU over the last minute")
+                    .id(NodeId::named("history")),
+            )
+            .child(
+                row()
+                    .align(Align::Center)
+                    .child(text("Memory").role(Role::Section))
+                    .child(spacer())
+                    .child(
+                        chip(reading(self.memory))
+                            .accent(memory)
+                            .id(NodeId::named("memory-reading")),
+                    ),
+            )
+            .child(
+                progress(self.memory.unwrap_or(0.0))
+                    .accent(memory)
+                    .id(NodeId::named("memory-meter")),
             )
             .children(self.refused.as_ref().map(|why| {
                 text(format!("stale: {why}"))
@@ -128,7 +175,26 @@ impl Widget for SystemLoad {
     }
 }
 
+/// A percentage, or a dash for a reading that was never taken.
+fn reading(value: Option<f32>) -> String {
+    match value {
+        Some(value) => format!("{}%", (value * 100.0).round() as u32),
+        None => "—".to_string(),
+    }
+}
+
 impl SystemLoad {
+    /// Takes a reading, moving the previous one into the history.
+    fn record(&mut self, load: f32) {
+        if let Some(previous) = self.load.replace(load) {
+            self.history.push(previous);
+            if self.history.len() > HISTORY {
+                self.history.remove(0);
+            }
+        }
+        self.refused = None;
+    }
+
     /// Reads both thresholds.
     ///
     /// The `_ =>` arms are only reachable on a host that does not know this
@@ -149,13 +215,17 @@ impl SystemLoad {
 
     /// Colour by meaning, never by hue — the theme decides what "critical"
     /// looks like against this wallpaper at this contrast setting.
-    fn accent(&self) -> Accent {
-        match self.load {
+    ///
+    /// The same thresholds for both meters. A user who wants memory to go red
+    /// somewhere else is a user this widget has not met yet, and a second pair
+    /// of settings is cheap to add when they turn up.
+    fn accent(&self, value: Option<f32>) -> Accent {
+        match value {
             // Ordered so that the stricter test wins, which is what makes a
             // user who set `critical-at` below `warn-at` get the reading they
             // asked for rather than an argument about it.
-            Some(load) if load >= self.critical_at => Accent::Critical,
-            Some(load) if load >= self.warn_at => Accent::Warning,
+            Some(value) if value >= self.critical_at => Accent::Critical,
+            Some(value) if value >= self.warn_at => Accent::Warning,
             Some(_) => Accent::Positive,
             None => Accent::Neutral,
         }
@@ -176,34 +246,30 @@ mod tests {
         let mut widget = SystemLoad::default();
         let view = widget.view(&Cx::new());
         assert!(widget.load.is_none());
+        assert!(widget.memory.is_none());
         assert!(widget.refused.is_some());
         assert!(format!("{view:?}").contains('—'));
     }
 
     #[test]
     fn the_accent_says_what_the_number_means() {
-        let mut widget = SystemLoad::default();
-        assert_eq!(widget.accent(), Accent::Neutral);
-        widget.load = Some(0.1);
-        assert_eq!(widget.accent(), Accent::Positive);
-        widget.load = Some(0.7);
-        assert_eq!(widget.accent(), Accent::Warning);
-        widget.load = Some(0.95);
-        assert_eq!(widget.accent(), Accent::Critical);
+        let widget = SystemLoad::default();
+        assert_eq!(widget.accent(None), Accent::Neutral);
+        assert_eq!(widget.accent(Some(0.1)), Accent::Positive);
+        assert_eq!(widget.accent(Some(0.7)), Accent::Warning);
+        assert_eq!(widget.accent(Some(0.95)), Accent::Critical);
     }
 
     #[test]
     fn the_thresholds_move_with_the_settings() {
         // The point of the setting: on a build machine 70 % is Tuesday.
-        let mut widget = SystemLoad {
+        let widget = SystemLoad {
             warn_at: 0.9,
             critical_at: 0.99,
             ..Default::default()
         };
-        widget.load = Some(0.7);
-        assert_eq!(widget.accent(), Accent::Positive);
-        widget.load = Some(0.95);
-        assert_eq!(widget.accent(), Accent::Warning);
+        assert_eq!(widget.accent(Some(0.7)), Accent::Positive);
+        assert_eq!(widget.accent(Some(0.95)), Accent::Warning);
     }
 
     #[test]
@@ -247,5 +313,45 @@ mod tests {
         assert!(!widget.on_event(&Event::EnvironmentChanged, &Cx::new()));
         // And a `Configured` that changes nothing is not a frame either.
         assert!(!widget.on_event(&Event::Configured, &Cx::new()));
+    }
+
+    #[test]
+    fn the_history_is_a_minute_and_ends_with_the_reading_before_this_one() {
+        // Oldest first, bounded, and the current reading is not in it — it
+        // is drawn as the chart's last point from `load` instead, so the chart
+        // and the meter can never disagree about *now*.
+        let mut widget = SystemLoad::default();
+        for i in 0..(HISTORY + 10) {
+            widget.record(i as f32 / 100.0);
+        }
+        assert_eq!(widget.history.len(), HISTORY);
+        assert_eq!(widget.load, Some(0.39));
+        assert_eq!(widget.history.last().copied(), Some(0.38));
+        assert_eq!(widget.history.first().copied(), Some(0.09));
+    }
+
+    #[test]
+    fn the_chart_carries_the_history_and_then_the_reading() {
+        let mut widget = SystemLoad::default();
+        widget.record(0.2);
+        widget.record(0.5);
+        let view = widget.view(&Cx::new());
+        // Off-target the read is refused, so the readings above stand.
+        fn find(node: &Node, id: NodeId) -> Option<&Node> {
+            if node.id == id {
+                return Some(node);
+            }
+            node.children.iter().find_map(|c| find(c, id))
+        }
+        let chart = find(&view.root, NodeId::named("history")).expect("the chart");
+        let Content::Sparkline(series) = &chart.content else {
+            panic!("the history should be a sparkline, got {:?}", chart.content);
+        };
+        let points: Vec<f32> = series.0.iter().map(|r| r.get()).collect();
+        assert_eq!(points, vec![0.2, 0.5]);
+        assert_eq!(
+            chart.semantics.label.as_deref(),
+            Some("CPU over the last minute")
+        );
     }
 }

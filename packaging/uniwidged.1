@@ -1,7 +1,7 @@
 .\" Manual page for uniwidged. Written by hand rather than generated: the
 .\" interesting half of this program is what it refuses, and a generator emits
 .\" the flags and none of the reasons.
-.TH UNIWIDGED 1 "2026-08-28" "uniwidged 0.0.1" "User Commands"
+.TH UNIWIDGED 1 "2026-08-31" "uniwidged 0.0.1" "User Commands"
 .SH NAME
 uniwidged \- run sandboxed widgets on the desktop layer
 .SH SYNOPSIS
@@ -29,6 +29,21 @@ desktop submits nothing at all.
 What this session can and cannot do: the window system, the transparency path in
 use, the fonts, and the keychain this machine can offer.
 .TP
+.B status
+What is on the screen right now, which is a different question from what
+\fBlist\fR answers: a widget can be enabled in the file and not on the screen
+because its component was deleted, because its manifest no longer parses, or
+because the desktop gave up on it after three failures. The running desktop
+writes what it managed to do; this reads it, and says which shell the session
+gave it and where each widget actually is.
+.TP
+.B log " [-n \fIN\fR] [-f]"
+What the running desktop has been saying. A desktop started with the session
+has no terminal, so everything it prints goes to a file beside the
+configuration as well; this shows the last \fIN\fR lines (forty by default),
+and with \fB-f\fR keeps showing them as they arrive, until the desktop stops.
+The file is capped at a megabyte and rotated once, so it holds at most two.
+.TP
 .B reload
 Tell a running desktop to read its configuration again. Every command that
 writes the configuration already does this; \fBreload\fR is for a file you
@@ -48,8 +63,11 @@ Install a widget from a file, after showing what it asks for. A widget with a
 signature that does not verify is never installed; one with no signature at all
 needs \fB--allow-unsigned\fR, which says so out loud.
 .TP
-.B list
-What is installed, where it sits, and what it was granted.
+.B list " [--names]"
+What is installed, where it sits, and what it was granted \(em and, while a
+desktop is running, whether each one is actually on the screen. With
+\fB--names\fR, one name per line and nothing else, for a script or a shell
+completion.
 .TP
 .BR enable ", " disable " \fIname\fR"
 Turn a widget off without forgetting it, and on again.
@@ -122,6 +140,12 @@ Render one widget headlessly to a PNG.
 .B autostart " [enable|disable|status]"
 Start with the session. It will not overwrite an autostart entry somebody wrote
 by hand.
+.TP
+.B completions " bash|zsh|fish"
+A completion script for that shell, written by this binary from the commands it
+actually has. Widget names complete from what is installed. The packages install
+these; from a source build, redirect the output to wherever the shell loads
+completions from.
 .SH FILES
 .TP
 .I ~/.config/uniwidged/config.toml
@@ -143,6 +167,15 @@ Widgets downloaded from a registry.
 .TP
 .I ~/.config/uniwidged/widgets/\fIname\fR/
 One widget's own data directory. It cannot leave this, even through a symlink.
+.TP
+.IR ~/.config/uniwidged/uniwidged.log ", " uniwidged.log.1
+What the running desktop said, with a timestamp on each line and \fB!\fR
+before the ones that went wrong. Read with \fBlog\fR.
+.TP
+.IR ~/.config/uniwidged/uniwidged.pid ", " uniwidged.state
+Left by the running desktop: its process id, and what it is showing. Neither
+is believed on its own \(em a desktop killed outright leaves both behind, so
+every reader checks that the process is alive and is this program first.
 .SH ENVIRONMENT
 .TP
 .B UNIWIDGED_CONFIG

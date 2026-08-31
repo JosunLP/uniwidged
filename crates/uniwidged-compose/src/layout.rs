@@ -186,6 +186,14 @@ fn build(
                 .width(Length::FILL)
                 .height(Length::px(theme.progress_thickness())),
         ),
+        // Full width and a theme height, like a progress bar: the widget says
+        // *what* the series is, and how much room a chart gets is the one
+        // decision that has to be the same across every widget on the screen.
+        Content::Sparkline(_) => tree.leaf(
+            style
+                .width(Length::FILL)
+                .height(Length::px(theme.sparkline_height())),
+        ),
         Content::Spacer => tree.leaf(style),
         Content::Image(_) => tree.leaf(style),
         Content::Group => {

@@ -156,6 +156,49 @@ fn a_progress_bar_reports_a_percentage_rather_than_a_fraction() {
 }
 
 #[test]
+fn a_chart_is_an_image_whose_value_is_its_latest_reading() {
+    // A line has no sensible reading aloud; its latest point does. The label
+    // says what is charted, the numeric value says where it is now, and the
+    // same percentage convention as a progress bar applies.
+    let view = panel(NodeId::named("root"))
+        .child(
+            sparkline([0.1, 0.4, 0.62])
+                .id(NodeId::named("history"))
+                .label("CPU over the last minute"),
+        )
+        .view();
+    let nodes = tree(&view);
+    let chart = node(&nodes, access_id(WIDGET, NodeId::named("history")));
+    assert_eq!(chart.role(), AccessRole::Image);
+    assert_eq!(chart.label(), Some("CPU over the last minute"));
+    assert!((chart.numeric_value().unwrap_or_default() - 62.0).abs() < 1.0);
+}
+
+#[test]
+fn an_unlabelled_chart_is_decoration_and_an_empty_one_has_no_value() {
+    // Without a label a screen reader could only say "image", which is worse
+    // than silence. And a chart with no points yet has no latest reading to
+    // report — a zero would be a claim about the machine.
+    let view = panel(NodeId::named("root"))
+        .child(sparkline([0.5]).id(NodeId::named("mute")))
+        .child(
+            sparkline(std::iter::empty())
+                .id(NodeId::named("empty"))
+                .label("Nothing yet"),
+        )
+        .view();
+    let nodes = tree(&view);
+    assert!(
+        !nodes
+            .iter()
+            .any(|(id, _)| *id == access_id(WIDGET, NodeId::named("mute"))),
+        "an unlabelled chart should not be in the tree"
+    );
+    let empty = node(&nodes, access_id(WIDGET, NodeId::named("empty")));
+    assert_eq!(empty.numeric_value(), None);
+}
+
+#[test]
 fn a_tooltip_becomes_a_description() {
     let view = panel(NodeId::named("root"))
         .child(

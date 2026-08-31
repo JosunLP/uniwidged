@@ -34,6 +34,7 @@ fn content(c: uniwidged_view::Content) -> wit::Content {
         C::Divider => wit::Content::Divider,
         C::Spacer => wit::Content::Spacer,
         C::Progress(r) => wit::Content::Progress(r.get()),
+        C::Sparkline(series) => wit::Content::Sparkline(series.0.iter().map(|r| r.get()).collect()),
     }
 }
 

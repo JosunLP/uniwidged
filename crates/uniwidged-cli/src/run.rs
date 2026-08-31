@@ -38,6 +38,8 @@ use uniwidged_shell::platform::linux::{self, DesktopWindow, Session};
 use uniwidged_shell::platform::x11::{AlphaPath, X11Window};
 use uniwidged_shell::{Input, Output, WakePipe};
 
+use crate::log::{problem, say};
+
 /// One widget on the desktop: what it is, where it draws, and whether the user
 /// has pinned it down.
 struct Running {
@@ -134,8 +136,8 @@ fn start_widget(
     let geometry = PhysicalRect::new(placement.x, placement.y, placement.width, placement.height);
     let window = DesktopWindow::open(geometry, &entry.name).map_err(|e| e.to_string())?;
     if !window.has_compositor() {
-        eprintln!(
-            "uniwidged: no compositing manager is running, so `{}` will be \
+        problem!(
+            "no compositing manager is running, so `{}` will be \
              an opaque rectangle rather than a widget",
             entry.name
         );
@@ -149,13 +151,13 @@ fn start_widget(
         .install(&wasm, manifest, policy)
         .map_err(|e| e.to_string())?;
     if let Err(e) = host.configure(id, &values) {
-        eprintln!("uniwidged: could not configure `{}`: {e}", entry.name);
+        problem!("could not configure `{}`: {e}", entry.name);
     }
     for complaint in complaints {
         // A line in somebody's configuration that is being ignored has to be
         // findable. `uniwidged configure <name>` says the same thing without
         // starting a desktop.
-        eprintln!("uniwidged: `{}`: {complaint}", entry.name);
+        problem!("`{}`: {complaint}", entry.name);
     }
     let (display, handle) = window.raw_handles();
     // SAFETY: the window is kept in `desktop.windows` for as long as the
@@ -171,8 +173,8 @@ fn start_widget(
     if host.renderer_mut().alpha_mode(surface)
         == Some(uniwidged_render::wgpu::CompositeAlphaMode::Opaque)
     {
-        eprintln!(
-            "uniwidged: this driver offers no transparent swapchain, so `{}` \
+        problem!(
+            "this driver offers no transparent swapchain, so `{}` \
              will sit on a solid rectangle — see ARCHITECTURE.md §10.1",
             entry.name
         );
@@ -213,7 +215,7 @@ fn stop_widget(host: &mut Host, desktop: &mut Desktop, index: usize) {
         // Only reachable if the host and this list disagree about what is
         // running, which one thread cannot arrange. Said rather than ignored,
         // because if it ever happens the window is about to go anyway.
-        eprintln!("uniwidged: could not stop `{}`: {e}", widget.name);
+        problem!("could not stop `{}`: {e}", widget.name);
     }
     let window = desktop.windows.remove(widget.window);
     desktop.by_window.remove(&window.window_id());
@@ -241,8 +243,8 @@ fn place_widget(
 ) -> Result<(), String> {
     let resolved = placement::resolve(&entry.placement, outputs);
     if resolved.displaced {
-        eprintln!(
-            "uniwidged: `{}` belongs on {}, which is not connected; it is \
+        problem!(
+            "`{}` belongs on {}, which is not connected; it is \
              on {} for now and will go back when that monitor returns",
             entry.name,
             entry
@@ -269,7 +271,7 @@ fn place_widget(
     }
     if announce {
         let at = desktop.windows[window].geometry();
-        println!(
+        say!(
             "  {} at {},{} {}x{}{}",
             entry.name,
             at.x,
@@ -309,8 +311,8 @@ fn open_link(url: &str) {
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        Ok(_child) => println!("  opening {url}"),
-        Err(e) => eprintln!("uniwidged: could not open {url}: {e}"),
+        Ok(_child) => say!("  opening {url}"),
+        Err(e) => problem!("could not open {url}: {e}"),
     }
 }
 
@@ -388,8 +390,8 @@ fn reload(
     let config = match Config::read(config_path) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!(
-                "uniwidged: {} is not readable, so nothing changed: {e}",
+            problem!(
+                "{} is not readable, so nothing changed: {e}",
                 config_path.display()
             );
             return None;
@@ -398,14 +400,14 @@ fn reload(
 
     let applied = uniwidged_host::reload::apply(host, &config);
     for complaint in &applied.complaints {
-        eprintln!("uniwidged: {complaint}");
+        problem!("{complaint}");
     }
     for id in &applied.reconfigured {
         // Named, because "the setting took effect" is the fact somebody
         // changing one is waiting for — and because a widget that answered
         // that its view is unchanged still had its configuration applied.
         if let Some(widget) = host.widget(*id) {
-            println!("  `{}` reconfigured", widget.name);
+            say!("  `{}` reconfigured", widget.name);
         }
     }
 
@@ -418,7 +420,7 @@ fn reload(
             continue;
         };
         stop_widget(host, desktop, index);
-        println!("  `{name}` stopped");
+        say!("  `{name}` stopped");
     }
 
     // Still in the file under the same name, and no longer the same widget.
@@ -438,16 +440,16 @@ fn reload(
         match start_widget(host, desktop, &entry) {
             Ok(fresh) => {
                 if let Err(e) = place_widget(host, desktop, fresh, &entry, outputs, false) {
-                    eprintln!("uniwidged: could not place `{}`: {e}", entry.name);
+                    problem!("could not place `{}`: {e}", entry.name);
                 }
-                println!("  `{}` replaced with a new version", entry.name);
+                say!("  `{}` replaced with a new version", entry.name);
             }
             // The old one is already gone — it had to be, or two instances
             // would be writing the same data directory. Saying so is all that
             // is left, and it is better than a desktop that refuses to apply
             // any of the reload because one widget's new version is broken.
-            Err(e) => eprintln!(
-                "uniwidged: `{}` was replaced by a version that does not \
+            Err(e) => problem!(
+                "`{}` was replaced by a version that does not \
                  start, and is now stopped: {e}",
                 entry.name
             ),
@@ -463,19 +465,22 @@ fn reload(
         match start_widget(host, desktop, entry) {
             Ok(index) => {
                 if let Err(e) = place_widget(host, desktop, index, entry, outputs, false) {
-                    eprintln!("uniwidged: could not place `{name}`: {e}");
+                    problem!("could not place `{name}`: {e}");
                 }
                 let at = desktop.windows[desktop.running[index].window].geometry();
-                println!(
+                say!(
                     "  `{name}` started at {},{} {}x{}",
-                    at.x, at.y, at.width, at.height
+                    at.x,
+                    at.y,
+                    at.width,
+                    at.height
                 );
             }
             // The desktop keeps running. A widget whose component has gone
             // missing, whose manifest no longer parses or which asks for a
             // capability the file does not grant is a widget that does not
             // start, and the others are none of its business.
-            Err(e) => eprintln!("uniwidged: `{name}` did not start: {e}"),
+            Err(e) => problem!("`{name}` did not start: {e}"),
         }
     }
 
@@ -493,12 +498,15 @@ fn reload(
         if resolved.rect != desktop.windows[window].geometry() {
             let name = desktop.running[index].name.clone();
             if let Err(e) = apply_geometry(host, desktop, index, resolved.rect) {
-                eprintln!("uniwidged: could not move `{name}`: {e}");
+                problem!("could not move `{name}`: {e}");
                 continue;
             }
-            println!(
+            say!(
                 "  `{name}` moved to {},{} {}x{}",
-                resolved.rect.x, resolved.rect.y, resolved.rect.width, resolved.rect.height
+                resolved.rect.x,
+                resolved.rect.y,
+                resolved.rect.width,
+                resolved.rect.height
             );
             moved += 1;
         }
@@ -511,7 +519,7 @@ fn reload(
             && entry.locked != widget.placement.locked
         {
             entry.locked = widget.placement.locked;
-            println!(
+            say!(
                 "  `{}` is {}",
                 entry.name,
                 if entry.locked {
@@ -525,7 +533,7 @@ fn reload(
     }
 
     if applied.is_quiet() && replaced == 0 && moved == 0 && relocked == 0 {
-        println!("  configuration read again; nothing changed");
+        say!("  configuration read again; nothing changed");
     }
     // Handed back so the loop keeps *this* as the configuration it works from.
     // It is the one the widgets on the screen now match, and two other things
@@ -705,6 +713,16 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         ));
     }
 
+    // Opened before anything else says anything, so that the first line a
+    // desktop writes is in the file too. Every `say!` and `problem!` below goes
+    // to the terminal *and* here — and the terminal is the half that usually
+    // does not exist, because a widget host is normally started with the
+    // session. See `crate::log`.
+    match crate::log::open() {
+        Ok(path) => println!("  log: {}", path.display()),
+        Err(e) => eprintln!("uniwidged: nothing will be logged to a file: {e}"),
+    }
+
     // The loop blocks on its window system's socket with no timer at all when
     // nothing is scheduled. A widget's asynchronous work finishes on a worker
     // thread, and this is what lets it end that block — see
@@ -719,13 +737,11 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // told, which is a smaller loss than refusing to start.
     let _pid_file = match crate::daemon::listen(std::os::fd::AsRawFd::as_raw_fd(&wake.as_fd())) {
         Ok(guard) => {
-            println!("  pid file: {}", guard.path().display());
+            say!("  pid file: {}", guard.path().display());
             Some(guard)
         }
         Err(e) => {
-            eprintln!(
-                "uniwidged: no pid file, so `uniwidged reload` will not find this desktop: {e}"
-            );
+            problem!("no pid file, so `uniwidged reload` will not find this desktop: {e}");
             None
         }
     };
@@ -758,29 +774,78 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 
     let mut desktop = Desktop::new();
 
+    // One widget that will not start must not take the others with it, and
+    // that is a bug this loop had: a `?` here meant a deleted `.wasm`, a
+    // manifest somebody had broken while editing, or a component built for the
+    // wrong target emptied the whole screen and printed one line about one
+    // widget. Which is the worst moment for a desktop to refuse to appear —
+    // the user cannot see what else they had, and the thing they are missing
+    // is the thing that would have told them.
+    //
+    // So each failure is named and the rest start. Only a desktop where
+    // *nothing* started is an error, because then there is nothing to show and
+    // saying so is all that is left.
+    let mut refused: Vec<String> = Vec::new();
     for widget in &enabled {
-        start_widget(&mut host, &mut desktop, widget)?;
-        if desktop.windows.len() == 1 {
-            println!("  shell: {}", desktop.windows[0].describe());
-            // Wayland reports its outputs through a connection, and a
-            // connection here means a surface — so the monitors are not known
-            // until the first window exists, which is why placement is a
-            // second pass rather than part of opening one.
-            if outputs.is_empty() {
-                outputs = desktop.windows[0].outputs();
+        match start_widget(&mut host, &mut desktop, widget) {
+            Ok(_) => {
+                if desktop.windows.len() == 1 {
+                    say!("  shell: {}", desktop.windows[0].describe());
+                    // Wayland reports its outputs through a connection, and a
+                    // connection here means a surface — so the monitors are not
+                    // known until the first window exists, which is why
+                    // placement is a second pass rather than part of opening
+                    // one.
+                    if outputs.is_empty() {
+                        outputs = desktop.windows[0].outputs();
+                    }
+                }
+            }
+            Err(e) => {
+                problem!("`{}` did not start: {e}", widget.name);
+                refused.push(widget.name.clone());
             }
         }
+    }
+    if desktop.running.is_empty() {
+        return Err(format!(
+            "nothing started: {}. Every enabled widget in {} failed above.",
+            refused.join(", "),
+            config_path.display()
+        ));
     }
 
     // Now that the monitors are known, put every widget where it belongs.
     // Stored relative to a named one, resolved against the ones that are
     // actually here: a widget whose monitor is unplugged appears on the primary
     // and keeps its name, so docking again puts it back.
-    for (index, widget) in enabled.iter().enumerate() {
-        place_widget(&mut host, &mut desktop, index, widget, &outputs, true)?;
+    //
+    // By name rather than by position in `enabled`: a widget that did not start
+    // is not in `desktop.running`, and an index into one list used against the
+    // other would place every later widget where its neighbour belongs.
+    for index in 0..desktop.running.len() {
+        let name = desktop.running[index].name.clone();
+        let Some(entry) = enabled.iter().find(|w| w.name == name) else {
+            continue;
+        };
+        // Not fatal either, and for the same reason: a widget that is on the
+        // screen in the wrong place is better than a desktop that is not.
+        if let Err(e) = place_widget(&mut host, &mut desktop, index, entry, &outputs, true) {
+            problem!("could not place `{name}`: {e}");
+        }
     }
 
-    println!("  {} widget(s) running\n", desktop.windows.len());
+    say!("  {} widget(s) running\n", desktop.windows.len());
+
+    // What `uniwidged status` reads. From here on it is rewritten whenever the
+    // answer changes; the guard removes it when this function returns, so a
+    // desktop that stopped cleanly leaves nothing claiming to be running.
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let _state_file = crate::state::Written;
+    record_state(&host, &desktop, &outputs, since);
 
     // Moving and resizing. The rule for what a press means lives in
     // `uniwidged-host`, tested there against every ambiguity; this is only the
@@ -796,7 +861,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
 
     loop {
         if until.is_some_and(|deadline| Instant::now() > deadline) {
-            println!("  exiting cleanly");
+            say!("  exiting cleanly");
             return Ok(());
         }
         // Before anything else in the turn: a configuration that changed
@@ -806,6 +871,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             if let Some(fresh) = reload(&mut host, config_path, &mut desktop, &outputs) {
                 config = fresh;
             }
+            record_state(&host, &desktop, &outputs, since);
             // A widget that arrived brought a window with it, and the pointer's
             // idea of the desktop's extent came from whichever window existed
             // first. On a desktop that had none, it had nothing to take it
@@ -903,10 +969,10 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                                     // available outcome: its author cannot see
                                     // the grant is missing and its user cannot
                                     // see anything at all.
-                                    eprintln!("uniwidged: that link was not opened — {why}");
+                                    problem!("that link was not opened — {why}");
                                 }
                                 Ok(_) => {}
-                                Err(e) => eprintln!("uniwidged: {e}"),
+                                Err(e) => problem!("{e}"),
                             }
                         }
                         Release::Placed { widget, rect } => {
@@ -919,6 +985,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                                     rect,
                                     &outputs,
                                 );
+                                record_state(&host, &desktop, &outputs, since);
                             }
                         }
                         Release::Nothing => {}
@@ -938,13 +1005,14 @@ pub fn run(config_path: &Path) -> Result<(), String> {
                 // otherwise re-resolve six times over one docking station.
                 Input::OutputsChanged => monitors_changed = true,
                 Input::Closed { .. } => {
-                    println!("  closed");
+                    say!("  closed");
                     return Ok(());
                 }
             }
         }
         if monitors_changed {
             relocate(&mut host, &mut desktop, &config, &mut outputs, &mut pointer)?;
+            record_state(&host, &desktop, &outputs, since);
         }
 
         if let Some(root) = latest_motion
@@ -959,16 +1027,89 @@ pub fn run(config_path: &Path) -> Result<(), String> {
             .tick(Instant::now(), SystemTime::now())
             .map_err(|e| e.to_string())?;
         for line in host.take_log() {
-            println!("  {line}");
+            say!("  {line}");
         }
         for id in &report.suspended {
-            eprintln!(
-                "uniwidged: giving up on `{}` after repeated failures; its last \
+            problem!(
+                "giving up on `{}` after repeated failures; its last \
                  frame stays on screen",
                 host.widget(*id).map(|w| w.name.as_str()).unwrap_or("?")
             );
         }
+        // A widget given up on is the single most useful thing `status` can
+        // say, and the only way it changes without anybody touching the
+        // configuration.
+        if !report.suspended.is_empty() || !report.restarting.is_empty() {
+            record_state(&host, &desktop, &outputs, since);
+        }
     }
+}
+
+/// Writes what is on the screen where `uniwidged status` will find it.
+///
+/// Called whenever the answer changes — a widget started or stopped, a
+/// placement moved, the monitors re-resolved, a widget given up on — and never
+/// on a plain frame. That is the whole of its cost model: a desktop drawing a
+/// clock every minute writes nothing here, and one where somebody is dragging a
+/// widget writes once, on release, beside the configuration write that already
+/// happens there.
+///
+/// It is built from the host and the window list together, because neither
+/// knows the whole answer: the host knows what a widget *is* and whether its
+/// supervisor has given up on it, and only this layer knows where its window
+/// ended up and which monitor that is.
+fn record_state(host: &Host, desktop: &Desktop, outputs: &[Output], since: i64) {
+    use crate::state::{Health, State, WidgetState};
+    use uniwidged_host::supervisor::State as Supervised;
+
+    let widgets = desktop
+        .running
+        .iter()
+        .map(|widget| {
+            let rect = desktop.windows[widget.window].geometry();
+            let (output, _) = placement::locate(rect, outputs);
+            let (version, health) = match host.widget(widget.id) {
+                Some(supervised) => (
+                    supervised.manifest().version.clone(),
+                    match supervised.state() {
+                        Supervised::Running => Health::Running,
+                        Supervised::Restarting => Health::Restarting,
+                        // `Disabled` cannot be reached from here: a widget
+                        // switched off in the file is stopped and removed, so
+                        // it is not in this list to be described.
+                        Supervised::Suspended(_) | Supervised::Disabled => Health::GivenUp,
+                    },
+                ),
+                // Unreachable while one thread owns both lists, and answered
+                // rather than skipped: a widget missing from `status` because
+                // of a bookkeeping slip would look exactly like one that never
+                // started.
+                None => (String::new(), Health::GivenUp),
+            };
+            WidgetState {
+                name: widget.name.clone(),
+                version,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                output,
+                locked: widget.locked,
+                health,
+            }
+        })
+        .collect();
+    State {
+        pid: std::process::id() as i32,
+        since,
+        shell: desktop
+            .windows
+            .first()
+            .map(|window| window.describe())
+            .unwrap_or_default(),
+        widgets,
+    }
+    .write();
 }
 
 /// Asks the session what the monitors are now, and puts every widget back where
@@ -1008,11 +1149,15 @@ fn relocate(
     if fresh == *outputs {
         return Ok(());
     }
-    println!("  the monitors changed:");
+    say!("  the monitors changed:");
     for output in &fresh {
-        println!(
+        say!(
             "    {} {}x{} at {},{}",
-            output.name, output.rect.width, output.rect.height, output.rect.x, output.rect.y
+            output.name,
+            output.rect.width,
+            output.rect.height,
+            output.rect.x,
+            output.rect.y
         );
     }
     *outputs = fresh;
@@ -1025,7 +1170,7 @@ fn relocate(
             continue;
         };
         if let Err(e) = place_widget(host, desktop, index, &entry, outputs, false) {
-            eprintln!("uniwidged: could not place `{}`: {e}", entry.name);
+            problem!("could not place `{}`: {e}", entry.name);
         }
     }
     Ok(())
@@ -1087,6 +1232,6 @@ fn save_placement(
     widget.placement.width = relative.width;
     widget.placement.height = relative.height;
     if let Err(e) = config.write(path) {
-        eprintln!("uniwidged: could not save where `{name}` was put: {e}");
+        problem!("could not save where `{name}` was put: {e}");
     }
 }

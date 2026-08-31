@@ -166,6 +166,10 @@ impl Cx {
         Err(Denied::NotGranted)
     }
 
+    pub fn memory_load(&self) -> Result<f32, Denied> {
+        Err(Denied::NotGranted)
+    }
+
     /// Goes nowhere off-target, which is what a test wants.
     pub fn log(&self, _message: &str) {}
 }

@@ -1179,11 +1179,14 @@ depends on, and what once rendered "live" as "li…".
 
 `NOTICE.md` records what came from where. Every dependency is now on crates.io.
 
-## M8 · Shipping — **partly done, 2026-08-28**
+## M8 · Shipping — **partly done, 2026-08-31**
 
 * Packaging: a `.deb` and an AUR package are **done** — see below; MSI/MSIX and
   a signed and notarised `.app` wait on the platforms they package, which are
   M5 and M6.
+* Running without a terminal: a log, `uniwidged status`, and shell completions
+  — **done**, see below. And the vocabulary's one chart node, `sparkline`,
+  with `metrics` answering for memory as well — ABI 7.
 * A widget registry format — **done**, see below. Signature verification on
   install was already done; what was missing was somewhere to find widgets, and
   now is not.
@@ -1352,6 +1355,98 @@ that has to be opened up for each of those is a sandbox holding nothing. The
 interesting sandbox in this project is the one inside the process, around each
 widget.
 
+### Saying what it is doing, a chart, and the shell — **done, 2026-08-31**
+
+Three things a program that runs without a terminal needs and this one did not
+have, and one thing the view vocabulary was missing.
+
+#### A log, and `status`
+
+`uniwidged run` prints sixty different lines somebody needs at the moment they
+are wondering why their desktop looks wrong, and the normal way a widget host
+runs is started with the session — no terminal, standard output to the journal
+if the user is lucky. So the desktop keeps a log beside its configuration:
+append-only, timestamped to the second, `!` on the lines that went wrong, a
+megabyte and one rotation so the disk holds at most two. `uniwidged log` reads
+the tail, and reaches into the rotated file when the current one is shorter
+than asked for, because the interesting line is usually the one just before a
+rotation. `-f` follows. Nothing in it can fail loudly: a log that stops a
+desktop is worse than no log.
+
+`tracing` had been in the workspace manifest since the first commit and was
+used by nothing. It is gone; what replaced it is a hundred lines, which is the
+size of the problem.
+
+`uniwidged status` answers the question `list` reads a file to avoid: what is
+on the screen. The desktop writes a state file whenever the answer changes — a
+widget started, stopped, moved, given up on, the monitors re-resolved — and
+never on a plain frame, so an idle desktop writes nothing. It is written to a
+temporary file and renamed, like everything else here, because `status` is
+most likely to be run at exactly the moment something is changing. And it is
+**never believed on its own**: a desktop killed with `SIGKILL` leaves it behind
+beside the pid file, so every reader checks the pid first, and a state file
+naming a different desktop than the pid file is refused as stale rather than
+read. `list` uses the same file to say `(on screen)`, `(given up on)` or `(not
+running)` beside a widget the configuration enables.
+
+Writing this found a bug worth its own paragraph. The start-up loop had a `?`
+on each widget: a deleted `.wasm`, a manifest somebody had broken while
+editing it, or a component built for the wrong target emptied the *whole*
+screen and printed one line about one widget — at the moment the user could
+least see what else they had. Each failure is now named and the rest start;
+only a desktop where nothing started is an error. Which exposed a second bug
+the first had been hiding: placement indexed `enabled` and `running` with the
+same number, so a widget that did not start would have put every later widget
+where its neighbour belongs. Placement is by name now.
+
+Measured in `crates/uniwidged-cli/tests/live.rs`, against the real binary on
+a real X server: `status` names the widget and the shell while it runs, loses
+the widget when it is disabled, and refuses the stale files after the desktop
+is killed. The rotation and the timestamp format are unit tests against a
+path each test owns — the first draft set `UNIWIDGED_CONFIG` on the process,
+which is a variable every other test in the binary reads, and would have been
+a flake with a comment claiming otherwise.
+
+#### `sparkline`, and memory — ABI 7
+
+"A `Canvas` node for charts is a *maybe*, and would still be host-drawn from a
+declarative series." It is a yes, and it is still that. `sparkline(values)`
+carries a series of `Ratio`s across the boundary — oldest first, each clamped,
+at most 256 — and the host draws a line, a faint area under it and a marker on
+the latest point, in the theme's stroke and the node's accent. The widget names
+no pixel. That is the whole of the vocabulary's argument applied to the one
+node that could have been an escape hatch, and the reason it goes no further.
+
+The cap is the view validator's rather than the SDK's, and refused rather than
+truncated there: a Rust widget cannot send more, because `build::sparkline`
+keeps the recent end, but a hand-built arena from a widget in another language
+can, and 100 000 points is a request for the host to draw 100 000 segments
+inside a frame budget. The SDK's truncation is a courtesy to authors; the
+validator's refusal is the security boundary. Four golden images, one of them
+mirrored — time runs right to left in a right-to-left layout, and that is a
+claim a picture has to make.
+
+`memory-load` joins `cpu-load` under the one `metrics` grant, from
+`MemAvailable` rather than `MemFree`, because the second counts the page cache
+and reads 95 % on any machine that has been up for an hour; a kernel without
+`MemAvailable` (before 3.14) is answered with a refusal rather than an
+estimate. The conformance widget tries it as its own row, so a host that serves
+one counter and forgets the other fails a test; and it draws a sparkline, so a
+host that cannot decode the variant fails at the boundary with the ABI number
+in the sentence rather than in whichever widget first uses it.
+`widgets/system-load` keeps a minute of readings and shows both.
+
+#### The shell
+
+`uniwidged completions bash|zsh|fish` writes a completion script from a table
+in the binary, and widget names complete from `uniwidged list --names` — one
+name per line, the one output of that command that is a format rather than a
+sentence. The table is checked against the commands `main` dispatches, so a
+command added without a row fails a test; the bash script is parsed by bash
+in the test, and the other two where their shells are installed. The `.deb`
+asks the binary for all three and installs them where each shell's Debian
+packaging looks, and CI checks they are in the package.
+
 ### Reference widgets, one per served capability
 
 | | |
@@ -1378,7 +1473,8 @@ Named so that nobody has to ask twice:
   rendering techniques from and which remains the place for one.
 * **An HTML/CSS/JS runtime.** The point of §6 of `ARCHITECTURE.md` is that
   widgets do not bring their own renderer.
-* **Widgets that draw their own pixels.** Same reason. A `Canvas` node for
-  charts is a *maybe*, and would still be host-drawn from a declarative series.
+* **Widgets that draw their own pixels.** Same reason. `sparkline` is as far
+  as that goes: a declarative series, host-drawn, and the argument for stopping
+  there is above.
 * **A panel or status-bar replacement.** The shell layer would serve one; it is
   somebody else's project.

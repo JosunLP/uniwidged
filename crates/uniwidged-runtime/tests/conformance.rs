@@ -19,7 +19,7 @@ use uniwidged_runtime::instance::{Event, Instance, Runtime, RuntimeError};
 use uniwidged_runtime::keyring::{FileKeyring, Keyring};
 use uniwidged_runtime::limits::Limits;
 use uniwidged_runtime::manifest::Manifest;
-use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::services::{Commands, Counters, DataDir, Locale, Services, TextMetrics};
 use uniwidged_runtime::settings::{SettingValue, Settings};
 use uniwidged_runtime::tasks::{TaskHandle, Tasks};
 use uniwidged_view::{Content, Node, View};
@@ -141,7 +141,7 @@ fn served_with_tasks(scratch: &Scratch, tasks: Arc<Tasks>) -> Services {
         .with_data_dir(DataDir::new(scratch.widget_dir()))
         .with_locale(Locale::default())
         .with_text_metrics(Arc::new(Ruler))
-        .with_metrics(Arc::new(CpuSampler::new()))
+        .with_metrics(Arc::new(Counters::new()))
         .with_tasks(
             TaskHandle::new(uniwidged_core::WidgetId(1), tasks)
                 .with_commands(Arc::new(Commands::new()))
@@ -219,6 +219,7 @@ const ATTEMPTS: &[&str] = &[
     "secrets",
     "secrets-key",
     "metrics",
+    "metrics-memory",
     "command",
 ];
 
@@ -259,6 +260,28 @@ fn a_real_widget_instantiates_and_renders() {
         "`start` should have run"
     );
     assert!(!view.root.children.is_empty());
+}
+
+#[test]
+fn a_chart_crosses_the_boundary_as_the_series_the_widget_built() {
+    // The one content variant that carries a list rather than a value. What
+    // is asserted is the round trip through `wit-bindgen`, the component
+    // model's canonical ABI and `wasmtime`'s bindings — five numbers in, the
+    // same five out, in order, as `Ratio`s that compare exactly.
+    use uniwidged_view::{Content, Ratio, Series};
+    let (_runtime, mut instance) = start(Policy::deny_all(), None);
+    let view = instance.view().expect("render");
+    let chart = find(&view.root, NodeId::named("chart")).expect("the chart");
+    assert_eq!(
+        chart.content,
+        Content::Sparkline(Series(
+            [0.0, 0.25, 0.5, 0.75, 1.0]
+                .into_iter()
+                .map(Ratio::new)
+                .collect()
+        ))
+    );
+    assert_eq!(chart.semantics.label.as_deref(), Some("a chart"));
 }
 
 #[test]
@@ -337,6 +360,7 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     // and the relationship does not.
     assert_eq!(outcome(&view, "measure"), "measured");
     assert_eq!(outcome(&view, "metrics"), "allowed");
+    assert_eq!(outcome(&view, "metrics-memory"), "allowed");
     // Asynchronous by design: the first view can only report that the request
     // was *started*. The next test watches it finish.
     assert_eq!(outcome(&view, "command"), "started");
@@ -811,6 +835,12 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
         answer == "allowed" || answer == "unavailable",
         "cpu_load answered {answer:?}"
     );
+    // Memory is under the same grant and the same rule: one read, no sleep.
+    let answer = outcome(&view, "metrics-memory");
+    assert!(
+        answer == "allowed" || answer == "unavailable",
+        "memory_load answered {answer:?}"
+    );
     assert!(
         took < Duration::from_millis(100),
         "reading a counter took {took:?}; a host function may not block"
@@ -819,12 +849,13 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
 
 #[test]
 fn the_abi_version_is_checked_before_anything_else_runs() {
-    // The ABI has moved five times while the framework was pre-release:
+    // The ABI has moved six times while the framework was pre-release:
     // `read-file` answering `ok(none)`, `measure-text` taking a role rather
     // than a `u8`, one asynchronous mechanism replacing one per capability,
     // `get-secret` answering `ok(none)` — the first of those made again, in
-    // the one other place where absence was being reported as an error — and
-    // `setting`, which is a widget reading its own configuration. The check is
+    // the one other place where absence was being reported as an error —
+    // `setting`, which is a widget reading its own configuration, and a
+    // `sparkline` variant in `content` beside `memory-load`. The check is
     // what makes all of that safe: a widget built against an older world is
     // refused at instantiation, in a sentence naming both numbers, rather than
     // failing somewhere confusing later.
@@ -836,7 +867,7 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 6);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 7);
 }
 
 #[test]

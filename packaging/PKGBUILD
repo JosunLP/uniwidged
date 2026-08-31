@@ -45,4 +45,9 @@ package() {
         "$pkgdir/usr/share/applications/uniwidged.desktop"
     install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
     install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+    # Asked of the binary, so they cannot be older than it.
+    local bin="target/release/uniwidged"
+    install -Dm644 <("$bin" completions bash) "$pkgdir/usr/share/bash-completion/completions/uniwidged"
+    install -Dm644 <("$bin" completions zsh) "$pkgdir/usr/share/zsh/site-functions/_uniwidged"
+    install -Dm644 <("$bin" completions fish) "$pkgdir/usr/share/fish/vendor_completions.d/uniwidged.fish"
 }

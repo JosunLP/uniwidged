@@ -133,6 +133,10 @@ fn describe(placed: &Placed<'_>, disabled: bool) -> Option<Node> {
         (Interaction::None, Content::Text(_)) => AccessRole::Label,
         (Interaction::None, Content::Progress(_)) => AccessRole::ProgressIndicator,
         (Interaction::None, Content::Image(_)) => AccessRole::Image,
+        // A chart is an image with a number in it. The label says what is
+        // charted; the numeric value below carries the latest reading, which
+        // is the one thing a screen reader can usefully say about a line.
+        (Interaction::None, Content::Sparkline(_)) => AccessRole::Image,
         // Scaffolding. A screen reader reading out "group, group, separator"
         // is describing the layout rather than the content.
         (Interaction::None, _) => return None,
@@ -178,10 +182,15 @@ fn describe(placed: &Placed<'_>, disabled: bool) -> Option<Node> {
     if semantics.state.selected {
         built.set_selected(true);
     }
-    if let Content::Progress(ratio) = &node.content {
+    let reading = match &node.content {
+        Content::Progress(ratio) => Some(ratio.get()),
+        Content::Sparkline(series) => series.latest().map(|ratio| ratio.get()),
+        _ => None,
+    };
+    if let Some(reading) = reading {
         // As a percentage, because that is what a screen reader reads out and
         // "0.62" is not what anybody wants to hear.
-        built.set_numeric_value((ratio.get() * 100.0) as f64);
+        built.set_numeric_value((reading * 100.0) as f64);
         built.set_min_numeric_value(0.0);
         built.set_max_numeric_value(100.0);
     }

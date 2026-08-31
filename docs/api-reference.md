@@ -10,7 +10,7 @@ makes of it. A widget written in another language that targets the component
 model implements the same world and gets the same guarantees; the names change
 and nothing else does.
 
-**ABI 6.** Checked at instantiation, before anything else runs — see
+**ABI 7.** Checked at instantiation, before anything else runs — see
 [ABI history](#abi-history).
 
 ---
@@ -106,6 +106,7 @@ panel(NodeId::named("weather"))
 | `icon(Icon)` | One of `Refresh`, `Settings`, `Close`, `Chevron`, `Check`, `Alert`, `Offline`. The set is closed: a widget cannot ship a glyph. |
 | `image(ImageHandle)` | An image the host holds. |
 | `progress(f32)` | A bar, `0.0` to `1.0`, clamped. |
+| `sparkline(values)` | A small chart of a series, oldest first, each `0.0` to `1.0` and clamped. The host draws the line, the area under it and a marker on the latest value, in the node's accent; the widget supplies numbers and nothing else. Keeps the most recent 256 points and drops the rest. Give it a `.label()` — a screen reader announces the latest value as a percentage, and an unlabelled chart is decoration. |
 | `divider()` | A rule. |
 | `spacer()` | Takes the space nothing else wanted. What pushes a row's contents apart. |
 
@@ -263,11 +264,22 @@ deciding against a guess.
 
 ```rust
 cx.cpu_load() -> Result<f32, Denied>
+cx.memory_load() -> Result<f32, Denied>
 ```
 
-`0.0` to `1.0` across all cores. Never blocks: the first call answers with the
-average since boot, and each one after it with the window since the last
-sample. Two calls inside 250 ms get the same answer rather than noise.
+`cpu_load` is `0.0` to `1.0` across all cores. Never blocks: the first call
+answers with the average since boot, and each one after it with the window
+since the last sample. Two calls inside 250 ms get the same answer rather than
+noise.
+
+`memory_load` is the fraction of physical memory in use, where "in use" is what
+the kernel could *not* hand to a new allocation without evicting something —
+not "not free", which counts the page cache and reads 95 % on any machine that
+has been up for an hour. A level rather than a rate, so one read is a
+measurement and there is no window.
+
+One grant for both. "This widget reads how busy the machine is" is one sentence
+to a user.
 
 ### `fs:<subpath>`
 
@@ -536,7 +548,7 @@ domain-separated.
 | Call deadline | 16 ms, then the instance is interrupted |
 | Memory | `memory-mb`, enforced by the runtime's resource limiter |
 | Restarts | three failures, then the widget is suspended |
-| View tree | bounded node count, bounded string length, no cycles — indices must increase, which makes a cycle inexpressible rather than merely detected |
+| View tree | 1024 nodes, 4096 bytes per string, 256 points per sparkline, no cycles — indices must increase, which makes a cycle inexpressible rather than merely detected |
 | Storage | 4 MB per file, 32 MB per widget |
 | Secrets | 64 keys per widget, 64 KiB each, 64-character key names |
 | Tasks | 16 outstanding per widget, 8 running per desktop |
@@ -558,3 +570,4 @@ refused in a sentence naming both numbers.
 | **3 → 4** | One asynchronous mechanism instead of one per capability. `take-response` is gone; `take-result` collects any request by token and says what kind of answer it is. `run-command` joins `fetch` as the second thing that can start one. |
 | **4 → 5** | `get-secret` answers `ok(none)` for a key that was never set — the 1 → 2 change made again, in the other place where absence was being reported as an error. `remove-secret` is new: a widget that cannot forget a credential is one that keeps it forever. |
 | **5 → 6** | `setting` — a widget can read its own configuration. `Event::Configured` had been in the file since the first version with nothing to produce it, because until settings existed there was nothing to be configured by. |
+| **6 → 7** | `sparkline` joins `content`, and `memory_load` joins `cpu_load` under `metrics`. A variant added to `content` is a view an older host cannot decode at all, which is exactly the mismatch the version number exists to turn into a sentence naming both numbers. |

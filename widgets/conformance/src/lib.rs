@@ -162,6 +162,13 @@ impl Widget for Conformance {
                 outcome: describe(cx.cpu_load()),
             },
             Attempt {
+                // The same grant, the other counter. Listed separately so a
+                // host that serves one and forgets the other fails a row
+                // rather than a sentence in a document.
+                name: "metrics-memory",
+                outcome: describe(cx.memory_load()),
+            },
+            Attempt {
                 name: "settings-values",
                 outcome: setting_values(&read_settings),
             },
@@ -229,6 +236,15 @@ impl Widget for Conformance {
                     .child(text(attempt.outcome).role(Role::Caption)),
             );
         }
+        // Every kind of content the vocabulary has, so that a variant the host
+        // cannot decode fails here — at the boundary, with the ABI number in
+        // the sentence — rather than in whichever widget first uses it. The
+        // series is one a test can recognise on the other side.
+        root = root.child(
+            sparkline([0.0, 0.25, 0.5, 0.75, 1.0])
+                .id(NodeId::named("chart"))
+                .label("a chart"),
+        );
         root.view()
     }
 

@@ -121,6 +121,31 @@ model.
 > because packaging a binary that prints "this build has no shell for the
 > current platform" would be packaging nothing.
 >
+> **And it says what it is doing, after the terminal has gone.** A desktop
+> started with the session has no terminal, so everything it prints goes to a
+> log beside the configuration as well — a megabyte, rotated once — and
+> `uniwidged log` reads it, `-f` follows it. `uniwidged status` answers the
+> question `list` never could: not what the file asks for, but what is on the
+> screen — which widget is drawing, which one the desktop gave up on after
+> three failures, where each actually is and which shell the session gave it.
+> A desktop killed outright leaves both files behind, and neither is believed
+> until the pid beside them is checked to be alive and to be this program. And
+> one widget that will not start — a deleted component, a manifest somebody was
+> halfway through editing — no longer empties the whole screen: it is named,
+> and the rest start.
+>
+> **And a widget can draw a chart.** `sparkline(values)` is the one node that
+> carries a series rather than a value, and it is as far as this framework goes
+> towards a canvas: the widget hands over numbers, the host draws the line, the
+> area and the marker on the latest point, in the theme's stroke and the node's
+> accent — so a screen of charts by different authors is still one chart style.
+> Two hundred and fifty-six points at most, refused past that at the boundary
+> like everything else. `metrics` now answers for memory as well as the CPU,
+> under the one grant, and `widgets/system-load` shows a minute of history under
+> its meter. Four more golden images, and the shell completes widget names:
+> `uniwidged completions bash|zsh|fish` is written by the binary from the
+> commands it actually has, and the packages install it.
+>
 > **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
 > surface on the bottom layer; an X11 session gets a 32-bit
 > `_NET_WM_STATE_BELOW` window; the binary picks at start-up and says which. A
@@ -256,6 +281,22 @@ network" is not. `link:open-meteo.com` is a *different* line, because "talks to
 a server" and "can send you to a web page" are different things happening to a
 user.
 
+## Running it
+
+```sh
+uniwidged install my_widget.wasm     # tells a running desktop, if there is one
+uniwidged run                        # or start one; `uniwidged autostart enable` for next time
+uniwidged status                     # what is on the screen right now
+uniwidged log -f                     # what the desktop is saying, terminal or not
+uniwidged configure system-load --set warn-at=0.8
+```
+
+`status` and `list` answer different questions — what is on the screen, and what
+the file asks for — and a widget that is in the second and not the first is
+exactly the case somebody running either is trying to explain, so `list` says
+so beside the name. `uniwidged completions bash` (or `zsh`, `fish`) makes the
+shell complete all of it, widget names included.
+
 ## Finding a widget
 
 ```sh
@@ -287,7 +328,7 @@ crates/
   uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
   uniwidged-guest      the SDK widget authors compile against
   uniwidged-host       the daemon: scheduler, configuration, policy
-  uniwidged-cli        `uniwidged run · new · check · install · sign · trust · …`
+  uniwidged-cli        `uniwidged run · status · log · new · check · install · …`
 wit/uniwidged.wit      the host/guest contract
 widgets/clock          the reference widget for `locale`
 widgets/system-load    the reference widget for `metrics`, and for settings

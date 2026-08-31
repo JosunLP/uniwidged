@@ -331,11 +331,11 @@ fn anything_that_is_not_the_aggregate_line_is_refused() {
 
 #[test]
 fn a_load_is_a_fraction_and_a_second_reading_is_stable() {
-    let sampler = CpuSampler::new();
-    let Ok(first) = sampler.load() else {
+    let sampler = Counters::new();
+    let Ok(first) = sampler.cpu_load() else {
         // Not Linux. The refusal is the documented answer, and it carries a
         // reason rather than a zero a widget would draw as an idle machine.
-        assert!(sampler.load().is_err());
+        assert!(sampler.cpu_load().is_err());
         return;
     };
     assert!(
@@ -344,7 +344,7 @@ fn a_load_is_a_fraction_and_a_second_reading_is_stable() {
     );
     // Immediately again: inside the minimum window, so the same answer rather
     // than one computed over a few microseconds.
-    assert_eq!(sampler.load().expect("second"), first);
+    assert_eq!(sampler.cpu_load().expect("second"), first);
 }
 
 #[test]
@@ -353,10 +353,10 @@ fn the_sampler_never_blocks() {
     // inside `view()` is holding its deadline open. An implementation that
     // slept between two reads — which is the obvious way to measure a load —
     // would take a tenth of a second here.
-    let sampler = CpuSampler::new();
+    let sampler = Counters::new();
     let began = std::time::Instant::now();
     for _ in 0..10 {
-        let _ = sampler.load();
+        let _ = sampler.cpu_load();
     }
     assert!(
         began.elapsed() < Duration::from_millis(50),
@@ -733,4 +733,55 @@ fn a_clone_of_the_handle_shares_the_count() {
         restarted.write("b", &[0u8; 600]),
         Err(StoreError::Full { .. })
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------
+
+#[test]
+fn memory_in_use_is_what_the_kernel_could_not_hand_out() {
+    // `MemTotal - MemAvailable`, not `MemTotal - MemFree`. The page cache is
+    // in the difference between the two, and counting it is how a monitor
+    // reads 95 % on an idle machine.
+    let (used, total) = parse_meminfo(
+        "MemTotal:       16000000 kB\nMemFree:         1000000 kB\nMemAvailable:    9000000 kB\nBuffers:          500000 kB\n",
+    )
+    .expect("parsed");
+    assert_eq!(total, 16_000_000);
+    assert_eq!(used, 7_000_000);
+}
+
+#[test]
+fn a_kernel_without_mem_available_is_refused_rather_than_guessed() {
+    // Before 3.14 there was no `MemAvailable` and every tool estimated its
+    // own from `Cached` and `Buffers`, each wrongly in its own way. A refusal
+    // is honest; an estimate is a number a widget would draw.
+    assert_eq!(
+        parse_meminfo("MemTotal:       16000000 kB\nMemFree:         1000000 kB\n"),
+        None
+    );
+    assert_eq!(parse_meminfo(""), None);
+    assert_eq!(
+        parse_meminfo("MemTotal: banana kB\nMemAvailable: 1 kB\n"),
+        None
+    );
+}
+
+#[test]
+fn the_memory_reading_is_a_fraction_and_does_not_block() {
+    // The same two properties `cpu_load` promises. On a platform with no
+    // `/proc/meminfo` the honest answer is a refusal, which is also accepted.
+    let counters = Counters::new();
+    let began = Instant::now();
+    let answer = counters.memory_load();
+    assert!(
+        began.elapsed() < Duration::from_millis(50),
+        "memory_load blocked"
+    );
+    if let Ok(load) = answer {
+        assert!((0.0..=1.0).contains(&load), "{load}");
+        // No machine running this test has *nothing* in use.
+        assert!(load > 0.0, "{load}");
+    }
 }

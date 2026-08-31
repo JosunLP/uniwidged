@@ -2,6 +2,7 @@
 //! **refused**. A validator tested only for what it accepts is not tested.
 
 use super::*;
+use crate::Ratio;
 use crate::build::*;
 use uniwidged_core::NodeId;
 
@@ -16,6 +17,7 @@ fn sample() -> View {
                 .child(chip("now").on_click(NodeId::named("go"))),
         )
         .child(progress(0.4))
+        .child(sparkline([0.1, 0.5, 0.25, 1.0]))
         .view()
 }
 
@@ -190,6 +192,28 @@ fn an_enormous_string_is_refused() {
 }
 
 #[test]
+fn a_series_past_the_cap_is_refused_rather_than_drawn() {
+    // `build::sparkline` keeps the recent end, so a Rust widget cannot send
+    // this. A hand-built arena — a widget in another language, or a hostile
+    // one — can, and it is a request for the host to allocate and then to
+    // draw 100 000 line segments inside somebody's frame budget.
+    let mut tree = pair();
+    tree.nodes[1].content = Content::Sparkline(Series(vec![Ratio::new(0.5); 100_000]));
+    assert_eq!(
+        tree.into_view(),
+        Err(TreeError::SeriesTooLong {
+            node: 1,
+            points: 100_000
+        })
+    );
+    // And exactly at the cap is fine — the limit is a limit, not a limit
+    // minus one.
+    let mut tree = pair();
+    tree.nodes[1].content = Content::Sparkline(Series(vec![Ratio::new(0.5); Series::MAX_POINTS]));
+    assert!(tree.into_view().is_ok());
+}
+
+#[test]
 fn an_enormous_accessibility_label_is_refused_too() {
     // The label is a second string on every node, and a validator that
     // checked only the visible one would leave the obvious way round it.
@@ -234,6 +258,11 @@ fn every_refusal_says_which_node_and_why() {
         TreeError::TextTooLong {
             node: 3,
             length: 99999,
+        }
+        .to_string(),
+        TreeError::SeriesTooLong {
+            node: 7,
+            points: 100_000,
         }
         .to_string(),
         TreeError::ChildOutOfRange { node: 1, child: 9 }.to_string(),
@@ -378,6 +407,7 @@ fn every_refusal_names_a_node_that_exists() {
         let node = match error {
             TreeError::TooLarge { .. } => continue,
             TreeError::TextTooLong { node, .. }
+            | TreeError::SeriesTooLong { node, .. }
             | TreeError::ChildOutOfRange { node, .. }
             | TreeError::ChildNotAfterParent { node, .. }
             | TreeError::SharedChild { node, .. }

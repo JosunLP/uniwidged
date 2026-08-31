@@ -67,6 +67,22 @@ install -Dm644 "$root/LICENSE-MIT" "$staging/usr/share/doc/uniwidged/LICENSE-MIT
 install -Dm644 "$root/LICENSE-APACHE" "$staging/usr/share/doc/uniwidged/LICENSE-APACHE"
 gzip -9n "$staging/usr/share/man/man1/uniwidged.1"
 
+# The completion scripts are asked of the binary rather than kept as files:
+# three shells is three copies of the command list, and the binary is the one
+# copy that cannot be out of date. The paths are where each shell's packaging
+# on Debian looks — `vendor-completions` for zsh, because `site-functions` is
+# the administrator's directory and a package that writes there is rude.
+for shell in bash zsh fish; do
+    case "$shell" in
+        bash) into="$staging/usr/share/bash-completion/completions/uniwidged" ;;
+        zsh)  into="$staging/usr/share/zsh/vendor-completions/_uniwidged" ;;
+        fish) into="$staging/usr/share/fish/vendor_completions.d/uniwidged.fish" ;;
+    esac
+    mkdir -p "$(dirname "$into")"
+    "$binary" completions "$shell" > "$into"
+    chmod 644 "$into"
+done
+
 # The shared libraries the binary actually needs, asked of the binary rather
 # than listed by hand — and with the *versions* they need, which is the half a
 # hand-written list always gets wrong. `libxcb1 (>= 1.12)` rather than

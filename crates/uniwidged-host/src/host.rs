@@ -35,7 +35,7 @@ use uniwidged_runtime::instance::{Runtime, RuntimeError};
 use uniwidged_runtime::keyring::{Keyring, SecretStore};
 use uniwidged_runtime::manifest::Manifest;
 use uniwidged_runtime::net::Http;
-use uniwidged_runtime::services::{Commands, CpuSampler, DataDir, Locale, Services, TextMetrics};
+use uniwidged_runtime::services::{Commands, Counters, DataDir, Locale, Services, TextMetrics};
 use uniwidged_runtime::settings::{Setting, SettingValue, Settings};
 use uniwidged_runtime::tasks::{TaskHandle, Tasks, Waker};
 
@@ -170,7 +170,7 @@ pub struct Host {
     locale: Locale,
     /// One sampler for the whole desktop. It is one machine, and two widgets
     /// sampling separately would each see half the window and report noise.
-    cpu: Arc<CpuSampler>,
+    cpu: Arc<Counters>,
     /// Every widget's outstanding asynchronous work, and one concurrency budget
     /// shared between them.
     tasks: Arc<Tasks>,
@@ -227,7 +227,7 @@ impl Host {
             data_root: None,
             keyring: None,
             locale: Locale::system(),
-            cpu: Arc::new(CpuSampler::new()),
+            cpu: Arc::new(Counters::new()),
             tasks: Arc::new(Tasks::new(waker)),
             commands: Arc::new(Commands::new()),
             http: Arc::new(Http::new()),

@@ -209,6 +209,51 @@ fn meter(name: &str, value: f32, accent: Accent) -> Node {
         .child(progress(value).accent(accent))
 }
 
+/// Charts: a history in every state a widget can hand over.
+///
+/// A full series in the brand accent, one that has just begun, one point, none
+/// at all, and the categorical palette — so that a change to the stroke, the
+/// fill, the marker or the baseline is visible in one image.
+fn charts() -> View {
+    // Deterministic and busy enough to have a shape: a slow wave with a fast
+    // one on top, which is what a load history tends to look like.
+    let wave = |n: usize| {
+        (0..n).map(|i| {
+            let t = i as f32 / 8.0;
+            0.5 + 0.3 * (t * 0.7).sin() + 0.12 * (t * 3.1).cos()
+        })
+    };
+    panel(NodeId::named("root"))
+        .gap(2)
+        .child(
+            row()
+                .child(text("CPU").role(Role::Caption))
+                .child(spacer())
+                .child(chip("64%").accent(Accent::Brand)),
+        )
+        .child(sparkline(wave(48)).accent(Accent::Brand).label("CPU"))
+        .child(
+            row()
+                .child(text("Memory").role(Role::Caption))
+                .child(spacer())
+                .child(chip("91%").accent(Accent::Critical)),
+        )
+        .child(
+            sparkline([0.7, 0.72, 0.8, 0.86, 0.91])
+                .accent(Accent::Critical)
+                .label("Memory"),
+        )
+        .child(text("Just started").role(Role::Caption))
+        .child(
+            sparkline([0.35])
+                .accent(Accent::Series(2))
+                .label("One point"),
+        )
+        .child(text("Nothing yet").role(Role::Caption).muted())
+        .child(sparkline(std::iter::empty()).label("Empty"))
+        .view()
+}
+
 fn truncation() -> View {
     panel(NodeId::named("root"))
         .gap(1)
@@ -252,6 +297,12 @@ fn cases() -> Vec<Case> {
         Case::new("widget-high-contrast", system_load(), theme(Dark, High)),
         Case::new("widget-scale-150", system_load(), theme(Dark, Standard)).scale(1.5),
         Case::new("widget-scale-200", system_load(), theme(Dark, Standard)).scale(2.0),
+        Case::new("charts-dark", charts(), theme(Dark, Standard)).size(220.0, 230.0),
+        Case::new("charts-light", charts(), theme(Light, Standard)).size(220.0, 230.0),
+        Case::new("charts-high-contrast", charts(), theme(Dark, High)).size(220.0, 230.0),
+        Case::new("charts-rtl", charts(), theme(Dark, Standard))
+            .rtl()
+            .size(220.0, 230.0),
         Case::new("text-truncation", truncation(), theme(Dark, Standard)).size(220.0, 140.0),
         Case::new("rtl-arabic", arabic(), theme(Dark, Standard))
             .rtl()

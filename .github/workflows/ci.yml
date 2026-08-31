@@ -176,7 +176,10 @@ jobs:
           echo "::endgroup::"
           contents=$(dpkg-deb --contents "$package")
           for path in ./usr/bin/uniwidged ./usr/share/man/man1/uniwidged.1.gz \
-                      ./usr/share/applications/uniwidged.desktop; do
+                      ./usr/share/applications/uniwidged.desktop \
+                      ./usr/share/bash-completion/completions/uniwidged \
+                      ./usr/share/zsh/vendor-completions/_uniwidged \
+                      ./usr/share/fish/vendor_completions.d/uniwidged.fish; do
             echo "$contents" | grep -q " $path\$" || {
               echo "the package is missing $path" >&2
               exit 1

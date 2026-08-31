@@ -24,13 +24,13 @@
 //!   would duplicate a subtree, including its ids.
 //! * **An unreachable node** — the widget built something it did not attach.
 //!   Silently dropping it hides a bug that will look like a rendering fault.
-//! * **Too many nodes, or a string too long** — a widget with a memory cap can
-//!   still ask the host to allocate on its behalf.
+//! * **Too many nodes, a string too long, or a series too long** — a widget
+//!   with a memory cap can still ask the host to allocate on its behalf.
 //!
 //! Depth needs no separate limit: the ordering rule means depth cannot exceed
 //! the node count, and the node count is capped.
 
-use crate::{Content, Node, Semantics, Style, View};
+use crate::{Content, Node, Semantics, Series, Style, View};
 use uniwidged_core::NodeId;
 
 /// The most nodes one widget may describe.
@@ -77,6 +77,8 @@ pub enum TreeError {
     TooLarge { nodes: usize },
     /// A string longer than [`MAX_TEXT`].
     TextTooLong { node: usize, length: usize },
+    /// A sparkline with more points than [`Series::MAX_POINTS`].
+    SeriesTooLong { node: usize, points: usize },
     /// A child index past the end of the arena.
     ChildOutOfRange { node: usize, child: u32 },
     /// A child index that does not come after its parent. This is what a cycle
@@ -97,6 +99,11 @@ impl std::fmt::Display for TreeError {
             TreeError::TextTooLong { node, length } => write!(
                 f,
                 "node {node} carries {length} bytes of text; the limit is {MAX_TEXT}"
+            ),
+            TreeError::SeriesTooLong { node, points } => write!(
+                f,
+                "node {node} charts {points} points; the limit is {}",
+                Series::MAX_POINTS
             ),
             TreeError::ChildOutOfRange { node, child } => {
                 write!(f, "node {node} names child {child}, which does not exist")
@@ -184,6 +191,14 @@ impl Tree {
                 return Err(TreeError::TextTooLong {
                     node: index,
                     length: label.len(),
+                });
+            }
+            if let Content::Sparkline(series) = &node.content
+                && series.len() > Series::MAX_POINTS
+            {
+                return Err(TreeError::SeriesTooLong {
+                    node: index,
+                    points: series.len(),
                 });
             }
             for &child in &node.children {

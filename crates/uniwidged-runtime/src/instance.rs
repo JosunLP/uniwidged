@@ -404,6 +404,14 @@ impl State {
     /// Returns `()` rather than a value so that every host function below
     /// begins with the same line — `self.check(...)?` — and a function that
     /// forgot to check is visible by its absence.
+    /// The machine's counters, or the refusal a granted-but-unserved
+    /// `metrics` answers.
+    fn counters(&self) -> Result<&crate::services::Counters, Denied> {
+        self.services.metrics.as_deref().ok_or_else(|| {
+            Denied::Unavailable("granted, but this host reads no machine counters".into())
+        })
+    }
+
     fn check(&self, request: Request) -> Result<(), Denied> {
         match self.policy.check(&request) {
             Ok(()) => Ok(()),
@@ -577,10 +585,15 @@ impl uniwidged::widget::host::Host for State {
 
     fn cpu_load(&mut self) -> Result<f32, Denied> {
         self.check(Request::Metrics)?;
-        let sampler = self.services.metrics.as_ref().ok_or_else(|| {
-            Denied::Unavailable("granted, but this host reads no machine counters".into())
-        })?;
-        sampler.load().map_err(Denied::Unavailable)
+        self.counters()?.cpu_load().map_err(Denied::Unavailable)
+    }
+
+    fn memory_load(&mut self) -> Result<f32, Denied> {
+        // The same grant as `cpu_load`: "this widget reads how busy the
+        // machine is" is one sentence to a user, and a manifest line per
+        // counter would be a list nobody reads.
+        self.check(Request::Metrics)?;
+        self.counters()?.memory_load().map_err(Denied::Unavailable)
     }
 
     fn log(&mut self, message: String) {
@@ -701,6 +714,13 @@ fn content_from_wire(content: wit::Content) -> uniwidged_view::Content {
         wit::Content::Divider => C::Divider,
         wit::Content::Spacer => C::Spacer,
         wit::Content::Progress(value) => C::Progress(uniwidged_view::Ratio::new(value)),
+        // Not truncated here: the cap is the view validator's, which names the
+        // node and the count in its refusal. Clamping each value *is* done
+        // here, because a `NaN` that reached the tree would make every frame
+        // differ from itself — see `Ratio`.
+        wit::Content::Sparkline(values) => C::Sparkline(uniwidged_view::Series(
+            values.into_iter().map(uniwidged_view::Ratio::new).collect(),
+        )),
     }
 }
 

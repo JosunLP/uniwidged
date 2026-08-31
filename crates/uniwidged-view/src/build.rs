@@ -24,7 +24,7 @@ use uniwidged_core::NodeId;
 // `use uniwidged_view::build::*` is the only import a widget file needs: a
 // builder chain reads badly with a module path in the middle of it.
 pub use crate::{
-    Accent, Align, Content, Icon, ImageHandle, Interaction, Justify, Node, Role, View,
+    Accent, Align, Content, Icon, ImageHandle, Interaction, Justify, Node, Role, Series, View,
 };
 
 impl Node {
@@ -217,6 +217,19 @@ pub fn progress(value: f32) -> Node {
     node(Content::Progress(Ratio::new(value)))
 }
 
+/// A small chart of `values`, oldest first, each clamped to `0.0..=1.0`.
+///
+/// Keeps the most recent [`Series::MAX_POINTS`] and drops the rest, so a
+/// widget may hand over whatever history it has and let the chart decide —
+/// the alternative is every widget author writing the same `skip`.
+pub fn sparkline(values: impl IntoIterator<Item = f32>) -> Node {
+    let mut points: Vec<Ratio> = values.into_iter().map(Ratio::new).collect();
+    if points.len() > Series::MAX_POINTS {
+        points.drain(..points.len() - Series::MAX_POINTS);
+    }
+    node(Content::Sparkline(Series(points)))
+}
+
 /// A small pill: a count, a tag, a status.
 pub fn chip(s: impl Into<String>) -> Node {
     node(Content::Text(s.into())).role(Role::Chip)
@@ -265,6 +278,21 @@ mod tests {
         assert!(n.semantics.state.disabled);
         assert!(n.style.muted);
         assert_eq!(n.content, Content::Text("Done".into()));
+    }
+
+    #[test]
+    fn a_sparkline_keeps_the_most_recent_points_and_clamps_each() {
+        // A widget hands over its whole history; the chart keeps what it can
+        // show, which is the recent end. And a value off the scale is clamped
+        // rather than refused, exactly as `progress` treats one.
+        let n = sparkline((0..300).map(|i| i as f32 / 100.0));
+        let Content::Sparkline(series) = &n.content else {
+            panic!("not a sparkline");
+        };
+        assert_eq!(series.len(), Series::MAX_POINTS);
+        assert_eq!(series.0[0].get(), 0.44);
+        assert_eq!(series.latest().map(Ratio::get), Some(1.0));
+        assert!(sparkline(std::iter::empty()).content == Content::Sparkline(Series::default()));
     }
 
     #[test]

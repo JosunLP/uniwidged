@@ -66,7 +66,8 @@ toolkits, and it is why a widget written today still looks right after the user
 switches to dark mode, turns on high contrast, or scales their fonts.
 
 **The vocabulary.** Containers: `panel`, `card`, `row`, `column`, `group`.
-Content: `text`, `chip`, `icon`, `divider`, `spacer`, `progress`, `image`.
+Content: `text`, `chip`, `icon`, `divider`, `spacer`, `progress`, `sparkline`,
+`image`.
 Modifiers chain: `.role()`, `.accent()`, `.muted()`, `.gap(n)`, `.padding(n)`,
 `.align()`, `.justify()`, `.grow(n)`, `.wrap()`.
 
@@ -93,6 +94,21 @@ settings rather than fighting them.
 
 **Accents** are named by meaning, never by hue: `Neutral`, `Brand`, `Positive`,
 `Warning`, `Critical`, and `Series(n)` for a categorical palette.
+
+**A chart** is the same bargain. `sparkline(values)` takes a series of numbers
+in `0.0..=1.0`, oldest first, and the host draws it — the line, the faint area
+under it, a marker on the latest value, in whatever accent you gave the node.
+You do not choose the stroke, the height or the colour, for the same reason you
+do not choose a font: a screen of charts by different authors should be one
+chart style. Give it a label, because a screen reader announces the latest
+value and skips an unlabelled chart as decoration. It keeps the most recent 256
+points and drops the rest, so hand it whatever history you have.
+
+```rust
+sparkline(self.history.iter().copied())
+    .accent(Accent::Brand)
+    .label("CPU over the last minute")
+```
 
 ## 3. Ids, clicks and accessibility
 
@@ -175,7 +191,7 @@ memory-mb = 16
 | `timer` | returning a `Wake` other than `Never` |
 | `locale` | formatting dates and times for the user's locale |
 | `measure` | measuring your own text in a named role |
-| `metrics` | CPU counters |
+| `metrics` | CPU and memory counters |
 | `fs:<subpath>` | reading and writing one folder inside your own directory |
 | `net:<host>` | HTTPS to exactly that host — and *only* that host, redirects included |
 | `link:<host>` | opening that host in the user's browser, when they click a link you drew |
@@ -553,9 +569,9 @@ actually does.
 
 Named so nobody has to find out the hard way:
 
-* **You cannot draw.** No canvas, no shaders, no pixels. A `Canvas` node for
-  charts is a maybe, and it would still be host-drawn from a declarative
-  series.
+* **You cannot draw.** No canvas, no shaders, no pixels. The nearest thing is
+  `sparkline`, and it is a series rather than a picture: you hand over numbers,
+  the host draws them.
 * **You cannot choose a font, a colour or a size.** See §2.
 * **You cannot see the pointer.** You are told which node was activated.
 * **You cannot block.** There is no synchronous `fetch` and no synchronous

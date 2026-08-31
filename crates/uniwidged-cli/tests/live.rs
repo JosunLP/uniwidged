@@ -14,6 +14,10 @@
 //! or wgpu is presenting into something the X server has already forgotten.
 //! Getting that wrong does not fail a type check. It fails on a screen.
 //!
+//! It is also where `uniwidged status` and `uniwidged log` are measured,
+//! because both read what a running desktop wrote, and the only way to have one
+//! of those is to run one.
+//!
 //! Without `Xvfb` or without a Vulkan device it skips, and `UNIWIDGED_REQUIRE_X11`
 //! or `UNIWIDGED_REQUIRE_GPU` turn either skip into a failure — the same
 //! bargain the golden images and the X11 pointer tests make.
@@ -158,6 +162,20 @@ impl Machine {
 
     fn config(&self) -> PathBuf {
         self.0.join("config.toml")
+    }
+
+    /// Runs a command until what it prints satisfies `done`, or `PATIENCE`
+    /// runs out — for the answers a desktop writes a moment after it says
+    /// something, such as its state file.
+    fn run_until(&self, args: &[&str], done: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let said = self.run(args);
+            if done(&said) || Instant::now() > deadline {
+                return said;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Runs one CLI command to completion and returns what it printed.
@@ -378,4 +396,68 @@ fn a_desktop_whose_last_widget_is_removed_keeps_running_and_can_be_refilled() {
     machine.run(&["install", clock.to_str().unwrap(), "--allow-unsigned"]);
     desktop.wait_for("`clock` started");
     desktop.never_said("panicked");
+}
+
+#[test]
+fn status_and_log_report_what_a_running_desktop_is_doing() {
+    // `list` reads a file that says what somebody asked for; `status` reads
+    // what the desktop managed to do. The second is only worth anything if it
+    // follows the desktop — a widget that leaves the screen has to leave the
+    // answer — and if it is refused once the desktop is gone.
+    if !have_a_device() {
+        return;
+    }
+    let Some(server) = server() else { return };
+    let machine = Machine::new("status");
+    let clock = build_widget(&machine.0, "clock");
+    machine.run(&["install", clock.to_str().unwrap(), "--allow-unsigned"]);
+
+    // Nothing running: a sentence, not an error, and `list` says nothing
+    // about the screen because there is no screen to say anything about.
+    assert!(machine.run(&["status"]).contains("no desktop is running"));
+    assert!(!machine.run(&["list"]).contains("on screen"));
+
+    let desktop = Running::start(&machine, &server.display);
+    desktop.wait_for("1 widget(s) running");
+
+    // The state file is written just after that line, so the answer is polled
+    // for rather than asserted on the first read.
+    let said = machine.run_until(&["status"], |s| s.contains("clock"));
+    assert!(said.contains("clock 1.0.0  running"), "{said}");
+    assert!(said.contains("shell:"), "{said}");
+    assert!(said.contains(" at "), "{said}");
+    let listed = machine.run(&["list"]);
+    assert!(listed.contains("clock (on screen)"), "{listed}");
+
+    // Everything the desktop printed is in the log too, with a timestamp in
+    // front of it — the terminal being the half that usually does not exist.
+    let log = machine.run(&["log"]);
+    assert!(log.contains("widget(s) running"), "{log}");
+    assert!(log.contains("shell:"), "{log}");
+    let stamped = log
+        .lines()
+        .find(|line| line.contains("widget(s) running"))
+        .expect("the line");
+    assert!(
+        stamped.len() > 19 && stamped.as_bytes()[4] == b'-' && stamped.as_bytes()[13] == b':',
+        "no timestamp on {stamped:?}"
+    );
+
+    // A widget that leaves the screen leaves the answer.
+    machine.run(&["disable", "clock"]);
+    desktop.wait_for("`clock` stopped");
+    let said = machine.run_until(&["status"], |s| s.contains("nothing on the screen"));
+    assert!(!said.contains("clock 1.0.0"), "{said}");
+    let listed = machine.run(&["list"]);
+    assert!(listed.contains("clock (disabled)"), "{listed}");
+    assert!(
+        !listed.contains("not running"),
+        "a disabled widget is not also `not running`: {listed}"
+    );
+
+    // And a desktop killed outright — `Drop` sends SIGKILL — leaves its pid
+    // file and its state file behind, and neither is believed.
+    drop(desktop);
+    let said = machine.run_until(&["status"], |s| s.contains("no desktop is running"));
+    assert!(!said.contains("shell:"), "{said}");
 }

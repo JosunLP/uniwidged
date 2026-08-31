@@ -47,6 +47,12 @@ interface types {
         divider,
         spacer,
         progress(f32),
+        /// A small chart, drawn by the host from the values alone — the
+        /// widget names no pixel, no colour and no stroke. Oldest first, each
+        /// clamped to `0.0..=1.0`, and at most 256 of them: past that the
+        /// view is refused, because a chart is the one node that asks the
+        /// host to do work proportional to what the widget sent.
+        sparkline(list<f32>),
     }
 
     enum icon { refresh, settings, close, chevron, check, alert, offline }
@@ -266,8 +272,16 @@ interface host {
     /// widget ever sees it.
     setting: func(key: string) -> option<setting-value>;
 
-    /// Machine counters — needs `metrics`.
+    /// Machine counters — both need `metrics`.
+    ///
+    /// `cpu-load` is the busy fraction of every processor over the window
+    /// since it was last asked; `memory-load` is the fraction of physical
+    /// memory that is *not available* — what the kernel says it could not
+    /// hand to a new allocation without evicting something — rather than
+    /// "not free", which on any machine that has been up for an hour is
+    /// nearly everything and means nothing.
     cpu-load: func() -> result<f32, denied>;
+    memory-load: func() -> result<f32, denied>;
 
     /// Goes to the host's log, prefixed with the widget's name. Always
     /// available: a widget that cannot say what went wrong is one nobody can
@@ -303,6 +317,11 @@ interface guest {
     /// 5 → 6: `setting` — a widget can read its own configuration. The
     /// `configured` event has been in this file since the first version and
     /// nothing produced it, because there was nothing to configure.
+    ///
+    /// 6 → 7: `sparkline` joins `content`, and `memory-load` joins
+    /// `cpu-load`. A variant added to `content` is a widget an older host
+    /// would refuse to decode at all — which is the mismatch this number
+    /// exists to turn into a sentence rather than an error about a variant.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

@@ -21,7 +21,9 @@
 //! resample.
 
 use uniwidged_render::Scene;
-use uniwidged_render::kurbo::{Affine, Cap, Join, Point, Rect, RoundedRect, Stroke};
+use uniwidged_render::kurbo::{
+    Affine, BezPath, Cap, Circle, Join, Point, Rect, RoundedRect, Stroke,
+};
 use uniwidged_render::peniko::{
     Brush, Color, ColorStop, Extend, Fill, Gradient, color::AlphaColor,
 };
@@ -80,6 +82,7 @@ impl Painter<'_> {
             Content::Icon(icon) => self.paint_icon(scene, placed, *icon),
             Content::Divider => self.paint_divider(scene, rect),
             Content::Progress(ratio) => self.paint_progress(scene, placed, ratio.get()),
+            Content::Sparkline(series) => self.paint_sparkline(scene, placed, &series.0),
             Content::Group | Content::Spacer | Content::Image(_) => {}
         }
 
@@ -301,6 +304,118 @@ impl Painter<'_> {
             ),
             None,
             &RoundedRect::from_rect(bar, radius),
+        );
+    }
+}
+
+impl Painter<'_> {
+    /// A line over a faint area, oldest point at the leading edge and the most
+    /// recent at the trailing one, with a dot on the latest value.
+    ///
+    /// The series is drawn on the theme's terms and nothing else: the widget
+    /// chose an accent, and the stroke, the fill, the marker and the height are
+    /// all resolved here. Two charts by two authors are therefore the same
+    /// chart, which is the whole argument of `ARCHITECTURE.md` §6 applied to
+    /// the one node that could have been a canvas.
+    fn paint_sparkline(
+        &self,
+        scene: &mut Scene,
+        placed: &Placed<'_>,
+        points: &[uniwidged_view::Ratio],
+    ) {
+        let rect = self.mirror(placed.rect);
+        let stroke = self.theme.sparkline_stroke() as f64;
+        let colour = rgba(self.theme.foreground(
+            placed.node.style.accent,
+            Role::Body,
+            placed.node.style.muted,
+        ));
+
+        // The baseline is drawn whatever the series holds, so an empty chart —
+        // a widget's first run, before it has a history — still shows where
+        // the chart will be rather than an unexplained gap.
+        let (track, thickness) = (self.theme.track(), 1.0);
+        scene.fill(
+            Fill::NonZero,
+            self.transform(),
+            rgba(track),
+            None,
+            &Rect::new(rect.x0, rect.y1 - thickness, rect.x1, rect.y1),
+        );
+        if points.is_empty() {
+            return;
+        }
+
+        // Inset by the marker's radius on every side, so a value of 1.0 is a
+        // dot inside the box rather than half a dot clipped by the node above.
+        let radius = stroke * 1.25;
+        let inner = Rect::new(
+            rect.x0 + radius,
+            rect.y0 + radius,
+            rect.x1 - radius,
+            rect.y1 - thickness - radius,
+        );
+        let at = |index: usize, value: f32| -> Point {
+            // One point sits at the trailing edge: the latest value is the one
+            // a glance is after, and a chart of one reading is that reading.
+            let along = if points.len() > 1 {
+                index as f64 / (points.len() - 1) as f64
+            } else {
+                1.0
+            };
+            // Leading edge to trailing edge, which in a mirrored layout runs
+            // right to left. The rectangle was folded above; this folds the
+            // direction of time to match.
+            let x = if self.rtl {
+                inner.x1 - along * inner.width()
+            } else {
+                inner.x0 + along * inner.width()
+            };
+            Point::new(x, inner.y1 - value as f64 * inner.height())
+        };
+
+        let mut line = BezPath::new();
+        for (index, point) in points.iter().enumerate() {
+            let p = at(index, point.get());
+            if index == 0 {
+                line.move_to(p);
+            } else {
+                line.line_to(p);
+            }
+        }
+
+        if points.len() > 1 {
+            // The area first, so the line sits on top of it.
+            let mut area = line.clone();
+            area.line_to(Point::new(at(points.len() - 1, 0.0).x, inner.y1));
+            area.line_to(Point::new(at(0, 0.0).x, inner.y1));
+            area.close_path();
+            scene.fill(
+                Fill::NonZero,
+                self.transform(),
+                colour.multiply_alpha(self.theme.sparkline_fill_alpha()),
+                None,
+                &area,
+            );
+            scene.stroke(
+                &Stroke::new(stroke)
+                    .with_caps(Cap::Round)
+                    .with_join(Join::Round),
+                self.transform(),
+                colour,
+                None,
+                &line,
+            );
+        }
+
+        // The latest value, marked. It is what the chart is about.
+        let last = at(points.len() - 1, points[points.len() - 1].get());
+        scene.fill(
+            Fill::NonZero,
+            self.transform(),
+            colour,
+            None,
+            &Circle::new(last, radius),
         );
     }
 }

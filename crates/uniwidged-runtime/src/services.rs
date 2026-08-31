@@ -40,7 +40,7 @@ pub struct Services {
     /// Machine counters. Shared by every widget on the host, because it is one
     /// machine — and because two widgets sampling separately would each see
     /// half the window and report noise.
-    pub metrics: Option<Arc<CpuSampler>>,
+    pub metrics: Option<Arc<Counters>>,
     /// This widget's access to asynchronous work — `fetch` and `run-command`.
     /// Carries the widget's own id, so no host function can start or collect a
     /// task without saying whose it is.
@@ -101,7 +101,7 @@ impl Services {
         self
     }
 
-    pub fn with_metrics(mut self, sampler: Arc<CpuSampler>) -> Self {
+    pub fn with_metrics(mut self, sampler: Arc<Counters>) -> Self {
         self.metrics = Some(sampler);
         self
     }
@@ -681,7 +681,7 @@ fn wait_with_timeout(
 /// A second call arriving sooner than `MIN_WINDOW` (250 ms) gets the previous answer
 /// rather than a new one computed over three milliseconds, which would be
 /// noise rather than a measurement.
-pub struct CpuSampler {
+pub struct Counters {
     last: Mutex<Option<Sample>>,
 }
 
@@ -702,13 +702,13 @@ struct Sample {
     load: f32,
 }
 
-impl Default for CpuSampler {
+impl Default for Counters {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CpuSampler {
+impl Counters {
     pub fn new() -> Self {
         Self {
             last: Mutex::new(None),
@@ -719,7 +719,7 @@ impl CpuSampler {
     ///
     /// `Err` carries something a user could act on, and is what a platform
     /// with no counters wired up answers.
-    pub fn load(&self) -> Result<f32, String> {
+    pub fn cpu_load(&self) -> Result<f32, String> {
         let (busy, total) = read_cpu_counters()?;
         let now = Instant::now();
         let mut last = self
@@ -808,6 +808,70 @@ fn parse_cpu_line(line: &str) -> Option<(u64, u64)> {
     let total: u64 = values.iter().sum();
     let idle = values[3] + values.get(4).copied().unwrap_or(0);
     Some((total.saturating_sub(idle), total))
+}
+
+impl Counters {
+    /// The fraction of physical memory in use, from 0.0 to 1.0.
+    ///
+    /// No window and no sample kept: memory is a level rather than a rate, so
+    /// one read *is* a measurement, where one read of the CPU counters is a
+    /// number since boot. "In use" is `MemTotal - MemAvailable` — what the
+    /// kernel could not hand to a new allocation without evicting something.
+    /// Not `MemTotal - MemFree`, which counts the page cache and on any
+    /// machine that has been up for an hour reads 95 % whatever is running.
+    pub fn memory_load(&self) -> Result<f32, String> {
+        let (used, total) = read_memory_counters()?;
+        if total == 0 {
+            return Err("this machine reports no memory at all".into());
+        }
+        Ok((used as f32 / total as f32).clamp(0.0, 1.0))
+    }
+}
+
+/// `(used, total)` in kilobytes.
+#[cfg(target_os = "linux")]
+fn read_memory_counters() -> Result<(u64, u64), String> {
+    let meminfo =
+        std::fs::read_to_string("/proc/meminfo").map_err(|e| format!("/proc/meminfo: {e}"))?;
+    parse_meminfo(&meminfo).ok_or_else(|| "/proc/meminfo has no MemTotal and MemAvailable".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_memory_counters() -> Result<(u64, u64), String> {
+    Err(format!(
+        "this host reads no memory counters on {}",
+        std::env::consts::OS
+    ))
+}
+
+/// `MemTotal` and `MemAvailable` out of `/proc/meminfo`, as `(used, total)`.
+///
+/// ```text
+/// MemTotal:       16274596 kB
+/// MemFree:         1212244 kB
+/// MemAvailable:    9021876 kB
+/// ```
+///
+/// `MemAvailable` has been there since Linux 3.14 (2014) and is the kernel's
+/// own estimate; before it existed every tool computed its own from `Cached`
+/// and `Buffers` and every one of them was wrong in a different way. A kernel
+/// without it is answered with a refusal rather than a guess.
+fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
+    let mut total = None;
+    let mut available = None;
+    for line in text.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        match fields.next()? {
+            "MemTotal:" => total = fields.next()?.parse::<u64>().ok(),
+            "MemAvailable:" => available = fields.next()?.parse::<u64>().ok(),
+            _ => {}
+        }
+        if total.is_some() && available.is_some() {
+            break;
+        }
+    }
+    let (total, available) = (total?, available?);
+    Some((total.saturating_sub(available), total))
 }
 
 // ---------------------------------------------------------------------------

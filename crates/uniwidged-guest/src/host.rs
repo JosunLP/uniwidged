@@ -281,8 +281,20 @@ impl Cx {
         raw::setting(key).map(Into::into)
     }
 
+    /// How busy the machine's processors are, `0.0` to `1.0`, over the window
+    /// since this was last asked. Never blocks; two calls within 250 ms get
+    /// the same answer rather than noise.
     pub fn cpu_load(&self) -> Result<f32, Denied> {
         raw::cpu_load().map_err(Into::into)
+    }
+
+    /// How much of the machine's memory is in use, `0.0` to `1.0`.
+    ///
+    /// "In use" is what the kernel could *not* hand to a new allocation
+    /// without evicting something — not "not free", which on a machine that
+    /// has been up for an hour is nearly all of it and means nothing.
+    pub fn memory_load(&self) -> Result<f32, Denied> {
+        raw::memory_load().map_err(Into::into)
     }
 
     /// Goes to the host's log, prefixed with your widget's name.

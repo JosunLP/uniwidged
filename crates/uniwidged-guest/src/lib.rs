@@ -65,7 +65,7 @@ use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
 /// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 /// Something that happened to your widget.
 #[derive(Debug, Clone, PartialEq, Eq)]

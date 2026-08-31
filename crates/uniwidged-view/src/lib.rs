@@ -85,6 +85,49 @@ pub enum Content {
     Spacer,
     /// A determinate progress bar, `0.0..=1.0`.
     Progress(Ratio),
+    /// A small chart of a series — a load history, a day of temperatures —
+    /// drawn by the host from the values alone: a line, a faint area under
+    /// it, and the most recent value at the trailing edge. The widget supplies
+    /// numbers in `0.0..=1.0`; the accent, the stroke, the fill and the
+    /// height are the theme's.
+    ///
+    /// This is as far as this framework goes towards a canvas, and it is
+    /// deliberately declarative: the *series* crosses the boundary, not the
+    /// pixels, so a screen of charts by different authors is still one chart
+    /// style. See `ARCHITECTURE.md` §6.
+    Sparkline(Series),
+}
+
+/// A series of readings for a [`Content::Sparkline`], oldest first.
+///
+/// Each value is a [`Ratio`], so equality is exact and total — which is what
+/// lets a widget return the same history twice and have the host draw nothing
+/// the second time. At most [`Series::MAX_POINTS`]: more is refused at the
+/// boundary, and [`build::sparkline`] keeps the most recent ones rather than
+/// asking an author to count.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Series(pub Vec<Ratio>);
+
+impl Series {
+    /// The most points one chart may carry.
+    ///
+    /// A widget is a small panel, and 256 points is one per pixel across a
+    /// wide one. Past that a chart is a table nobody can read, and the cap is
+    /// what keeps a runaway history from being a host allocation.
+    pub const MAX_POINTS: usize = 256;
+
+    /// The most recent value, which is the one a chart is usually about.
+    pub fn latest(&self) -> Option<Ratio> {
+        self.0.last().copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// A fraction in `0.0..=1.0`, clamped on construction.
