@@ -168,8 +168,32 @@ pub enum Icon {
 }
 
 /// A bitmap registered with the host.
+///
+/// Handed out by `Cx::register_image` and named by an [`Content::Image`]
+/// node. Opaque: the pixels live host-side, and the handle is only meaningful
+/// to the widget that registered it — a handle from another widget, or from an
+/// instance that has since been restarted, draws nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ImageHandle(pub u32);
+
+/// Decoded pixels, as the host keeps them for an [`ImageHandle`].
+///
+/// Straight-alpha RGBA, eight bits a channel, row-major with no padding — the
+/// one layout every decoder can produce and every renderer can take. Behind
+/// an `Arc` so that the host can hand a renderer the same allocation frame
+/// after frame; a renderer that caches uploads by pointer sees the same
+/// pointer.
+///
+/// Not part of the view tree, so not compared by it: a widget that registers
+/// an image and names it draws the same tree whether or not the pixels
+/// changed, and it is the *handle* that changing pixels have to change.
+#[derive(Debug, Clone)]
+pub struct Bitmap {
+    pub width: u32,
+    pub height: u32,
+    /// `width * height * 4` bytes.
+    pub rgba: std::sync::Arc<Vec<u8>>,
+}
 
 /// How a node is styled and laid out.
 #[derive(Debug, Clone, PartialEq, Default)]

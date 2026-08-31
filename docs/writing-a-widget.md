@@ -110,6 +110,23 @@ sparkline(self.history.iter().copied())
     .label("CPU over the last minute")
 ```
 
+**A picture** is a PNG you register once and name by handle. It needs no
+capability — the bytes are yours and they go on your own surface — and it is
+bounded instead: 1 MiB, 1024 pixels a side, sixteen at once. Register in
+`start`, because a handle belongs to the instance that made it and a restarted
+widget starts again:
+
+```rust
+fn start(&mut self, cx: &Cx) -> Result<(), String> {
+    self.icon = cx.register_image(include_bytes!("sun.png")).ok();
+    Ok(())
+}
+
+// …and in `view`, only when there is one — a handle that failed to register
+// is a gap, not an error:
+row().children(self.icon.map(|icon| image(icon).label("Sunny")))
+```
+
 ## 3. Ids, clicks and accessibility
 
 Give a node an id and it becomes addressable:
@@ -569,9 +586,11 @@ actually does.
 
 Named so nobody has to find out the hard way:
 
-* **You cannot draw.** No canvas, no shaders, no pixels. The nearest thing is
-  `sparkline`, and it is a series rather than a picture: you hand over numbers,
-  the host draws them.
+* **You cannot draw.** No canvas, no shaders, no pixels. The nearest things
+  are `sparkline`, which is a series rather than a picture — you hand over
+  numbers, the host draws them — and `image`, which is a picture you hand over
+  whole as a PNG and the host draws at its own size. Neither lets you put a
+  pixel where you want one.
 * **You cannot choose a font, a colour or a size.** See §2.
 * **You cannot see the pointer.** You are told which node was activated.
 * **You cannot block.** There is no synchronous `fetch` and no synchronous

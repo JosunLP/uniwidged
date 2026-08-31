@@ -287,6 +287,26 @@ interface host {
     /// available: a widget that cannot say what went wrong is one nobody can
     /// help.
     log: func(message: string);
+
+    /// Hands the host a PNG to draw, and gets back the handle an `image`
+    /// node names.
+    ///
+    /// **Needs no capability.** Nothing here reaches outside the sandbox:
+    /// the bytes came from the widget, and they go to the widget's own
+    /// surface. What is bounded instead is the host's memory — a PNG is at
+    /// most 1 MiB encoded and 1024 pixels a side, a widget may hold sixteen
+    /// at once, and one that has hit either answers `malformed` for the
+    /// first and `unavailable` for the second, exactly as `fs` does for a
+    /// file too large and a directory too full.
+    ///
+    /// The pixels are decoded once, here, and never cross the boundary
+    /// again: a widget that shows the same icon for a month registers it in
+    /// `start` and names the handle in every view. A handle belongs to the
+    /// instance that registered it; a restarted widget registers again.
+    register-image: func(png: list<u8>) -> result<u32, denied>;
+
+    /// Forgets an image. Answers whether there was one to forget.
+    release-image: func(handle: u32) -> bool;
 }
 
 /// What a widget must provide.
@@ -322,6 +342,10 @@ interface guest {
     /// `cpu-load`. A variant added to `content` is a widget an older host
     /// would refuse to decode at all — which is the mismatch this number
     /// exists to turn into a sentence rather than an error about a variant.
+    ///
+    /// 7 → 8: `register-image` and `release-image`. `image(u32)` had been in
+    /// `content` since the first version with no way to obtain a handle, so
+    /// every `image` node ever built drew nothing.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

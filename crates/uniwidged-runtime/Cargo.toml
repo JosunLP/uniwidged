@@ -20,6 +20,10 @@ ed25519-dalek.workspace = true
 sha2.workspace = true
 getrandom.workspace = true
 chacha20poly1305.workspace = true
+# `register-image` decodes a widget's PNG on the host, once, so the pixels
+# never cross the boundary again. Already in the graph through the renderer's
+# readback, so it costs nothing to compile here.
+png.workspace = true
 # Optional so that the capability, manifest and lifecycle logic — which is most
 # of this crate and all of its security boundary — stays testable without a
 # multi-minute Wasmtime compile. On by default since M3.

@@ -9,9 +9,11 @@ not floating in a grey rectangle. They are WASM components: sandboxed,
 installable at runtime, and written in any language that targets the component
 model.
 
-> **Status: scaffold, with the load-bearing assumption proven.** The
-> architecture is settled and written down, the vocabulary crates are real and
-> tested, and the platform layers are documented skeletons.
+> **Status: 0.1.0 — a working Linux desktop, on the road to 1.0.** The
+> architecture is settled and written down, every crate is real and tested, and
+> what 1.0 still needs is listed in [`ROADMAP.md`](ROADMAP.md#towards-100)
+> rather than implied. [`CHANGELOG.md`](CHANGELOG.md) is where a release says
+> what changed.
 >
 > **Milestones M0 through M4 are done, M7 in full and M8 in part.** A
 > `wlr-layer-shell` surface on the bottom layer really does back a wgpu
@@ -145,6 +147,17 @@ model.
 > its meter. Four more golden images, and the shell completes widget names:
 > `uniwidged completions bash|zsh|fish` is written by the binary from the
 > commands it actually has, and the packages install it.
+>
+> **And a widget can show a picture.** `image(handle)` had been in the
+> vocabulary since the first commit with no way to get a handle, so every image
+> node ever built drew nothing. `register_image` is the other half: a PNG in,
+> decoded once on the host, a handle out, drawn at its own size in logical
+> pixels. No capability — the bytes are the widget's and go on its own surface
+> — and bounded instead: a megabyte, 1024 pixels a side, sixteen at once, PNG
+> only because one format is one parser running on bytes a widget chose. An
+> unregistered handle takes no room, a right-to-left layout moves the picture
+> and never mirrors it, and the conformance widget registers one and offers the
+> host bytes that are not a PNG, so both answers are measured. ABI 8.
 >
 > **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
 > surface on the bottom layer; an X11 session gets a 32-bit

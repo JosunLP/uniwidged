@@ -285,6 +285,37 @@ fn a_chart_crosses_the_boundary_as_the_series_the_widget_built() {
 }
 
 #[test]
+fn an_image_is_decoded_once_on_the_host_and_named_by_its_handle() {
+    // The half of `content.image(u32)` that had been missing since the first
+    // version: a way to get a handle. No capability is needed, so this runs
+    // under deny-all; the widget registers a 2x2 PNG in `start`, and what is
+    // asserted is that the pixels are on the host, decoded, in the order the
+    // file holds them — and that the node names the handle they are under.
+    use uniwidged_view::{Content, ImageHandle};
+    let (_runtime, mut instance) = start(Policy::deny_all(), None);
+    let view = instance.view().expect("render");
+    assert_eq!(
+        outcome(&view, "image"),
+        "allowed",
+        "the host should take a PNG and refuse bytes that are not one"
+    );
+    let node = find(&view.root, NodeId::named("picture")).expect("the picture");
+    let Content::Image(handle) = node.content else {
+        panic!("not an image: {:?}", node.content);
+    };
+    assert_ne!(handle, ImageHandle::default(), "zero is the null handle");
+    let images = instance.images();
+    assert_eq!(images.len(), 1, "one image, the bad one refused");
+    let bitmap = images.get(handle.0).expect("the pixels under that handle");
+    assert_eq!((bitmap.width, bitmap.height), (2, 2));
+    assert_eq!(
+        &bitmap.rgba[..],
+        &[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 0, 0],
+        "red, green, blue, transparent"
+    );
+}
+
+#[test]
 fn every_capability_is_refused_under_deny_all() {
     // The assertion the sandbox exists for. If any of these ever reads
     // anything but `not-granted`, there is a hole.
@@ -867,7 +898,7 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 7);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 8);
 }
 
 #[test]

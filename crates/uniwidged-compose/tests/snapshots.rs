@@ -76,6 +76,7 @@ struct Case {
     size: Size,
     scale: f64,
     rtl: bool,
+    images: uniwidged_compose::Images,
 }
 
 impl Case {
@@ -87,7 +88,13 @@ impl Case {
             size: Size::new(320.0, 200.0),
             scale: 1.0,
             rtl: false,
+            images: uniwidged_compose::Images::new(),
         }
+    }
+
+    fn images(mut self, images: uniwidged_compose::Images) -> Self {
+        self.images = images;
+        self
     }
 
     fn size(mut self, w: f64, h: f64) -> Self {
@@ -254,6 +261,50 @@ fn charts() -> View {
         .view()
 }
 
+/// A picture beside text, and one that was never registered.
+///
+/// The bitmap is built in code rather than loaded, so the reference cannot
+/// drift with a file: a 24x24 diagonal gradient from red to blue with a
+/// transparent triangle cut out of one corner — which is what shows whether
+/// straight alpha is being composited as straight alpha.
+fn pictures() -> (View, uniwidged_compose::Images) {
+    use uniwidged_view::{Bitmap, ImageHandle};
+    let side = 24u32;
+    let mut rgba = Vec::with_capacity((side * side * 4) as usize);
+    for y in 0..side {
+        for x in 0..side {
+            let t = (x + y) as f32 / (2 * side - 2) as f32;
+            let alpha = if x + y < side / 2 { 0 } else { 255 };
+            rgba.extend_from_slice(&[(255.0 * (1.0 - t)) as u8, 40, (255.0 * t) as u8, alpha]);
+        }
+    }
+    let bitmap = Bitmap {
+        width: side,
+        height: side,
+        rgba: std::sync::Arc::new(rgba),
+    };
+    let mut images = uniwidged_compose::Images::new();
+    images.insert(ImageHandle(1), uniwidged_compose::image_data(&bitmap));
+    let view = panel(NodeId::named("root"))
+        .gap(2)
+        .child(
+            row()
+                .gap(2)
+                .child(image(ImageHandle(1)).label("a gradient"))
+                .child(text("Beside a picture").role(Role::Body)),
+        )
+        .child(
+            row()
+                .gap(2)
+                // Never registered: takes no room, so the text sits where the
+                // picture would have started.
+                .child(image(ImageHandle(7)).label("missing"))
+                .child(text("Beside a missing one").role(Role::Caption).muted()),
+        )
+        .view();
+    (view, images)
+}
+
 fn truncation() -> View {
     panel(NodeId::named("root"))
         .gap(1)
@@ -303,6 +354,19 @@ fn cases() -> Vec<Case> {
         Case::new("charts-rtl", charts(), theme(Dark, Standard))
             .rtl()
             .size(220.0, 230.0),
+        {
+            let (view, images) = pictures();
+            Case::new("images-dark", view, theme(Dark, Standard))
+                .size(220.0, 100.0)
+                .images(images)
+        },
+        {
+            let (view, images) = pictures();
+            Case::new("images-rtl", view, theme(Light, Standard))
+                .size(220.0, 100.0)
+                .rtl()
+                .images(images)
+        },
         Case::new("text-truncation", truncation(), theme(Dark, Standard)).size(220.0, 140.0),
         Case::new("rtl-arabic", arabic(), theme(Dark, Standard))
             .rtl()
@@ -340,7 +404,8 @@ fn golden_images() {
         let composed = compositor.compose(
             Compose::new(&case.view, WidgetId(1), case.name, case.size)
                 .scale(case.scale)
-                .rtl(case.rtl),
+                .rtl(case.rtl)
+                .images(&case.images),
         );
         renderer
             .render(&[(surface, &composed.scene)])

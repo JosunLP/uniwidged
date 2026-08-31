@@ -10,7 +10,7 @@ makes of it. A widget written in another language that targets the component
 model implements the same world and gets the same guarantees; the names change
 and nothing else does.
 
-**ABI 7.** Checked at instantiation, before anything else runs — see
+**ABI 8.** Checked at instantiation, before anything else runs — see
 [ABI history](#abi-history).
 
 ---
@@ -28,6 +28,7 @@ and nothing else does.
 * [Host functions](#host-functions) — one section per capability
 * [Links](#links--linkhost)
 * [Settings](#settings-no-capability)
+* [Images](#images-no-capability)
 * [Refusals](#refusals)
 * [The manifest](#the-manifest)
 * [Limits](#limits)
@@ -104,7 +105,7 @@ panel(NodeId::named("weather"))
 | `text(s)` | A string. Shaped, wrapped and truncated by the host. |
 | `chip(s)` | Text in a pill — what a small button is made of. |
 | `icon(Icon)` | One of `Refresh`, `Settings`, `Close`, `Chevron`, `Check`, `Alert`, `Offline`. The set is closed: a widget cannot ship a glyph. |
-| `image(ImageHandle)` | An image the host holds. |
+| `image(ImageHandle)` | A picture the host holds, at its own size in logical pixels. The handle comes from [`register_image`](#images-no-capability); one that was never registered takes no room and draws nothing. Give it a `.label()`, or a screen reader skips it. |
 | `progress(f32)` | A bar, `0.0` to `1.0`, clamped. |
 | `sparkline(values)` | A small chart of a series, oldest first, each `0.0` to `1.0` and clamped. The host draws the line, the area under it and a marker on the latest value, in the node's accent; the widget supplies numbers and nothing else. Keeps the most recent 256 points and drops the rest. Give it a `.label()` — a screen reader announces the latest value as a percentage, and an unlabelled chart is decoration. |
 | `divider()` | A rule. |
@@ -423,6 +424,31 @@ somebody changes it and at no other time.
 See [declaring settings](#declaring-settings) for the manifest side, and
 `uniwidged configure <name>` for how a user changes them.
 
+### Images (no capability)
+
+```rust
+cx.register_image(png: &[u8]) -> Result<ImageHandle, Denied>
+cx.release_image(handle: ImageHandle) -> bool
+```
+
+A PNG in, a handle out, and an `image(handle)` node draws it. **Not a
+capability**, for the same reason `log` and `setting` are not: nothing here
+reaches outside the sandbox — the bytes came from the widget and go to the
+widget's own surface, and a user asked to approve "may draw pictures on itself"
+would rightly ask what the alternative was.
+
+What is bounded instead is the host's memory. A PNG is at most 1 MiB encoded
+and 1024 pixels a side (`Malformed` — the request can be fixed), and a widget
+may hold sixteen at once (`Unavailable` — release one first). Only PNG: one
+format is one decoder, and a decoder is a parser running on bytes a widget
+chose. Greyscale, palette, RGB and 16-bit are all accepted and become RGBA.
+
+Decoded once, on the host; the pixels never cross the boundary again. Register
+in `start` and name the handle in every view. A handle belongs to the instance
+that registered it — a restarted widget registers again, and one that names a
+stale handle draws a gap rather than somebody else's later picture.
+`release_image` answers `false` when there was nothing to forget.
+
 ### Collecting an answer
 
 ```rust
@@ -555,6 +581,7 @@ domain-separated.
 | Command | 64 arguments, 16 KiB total |
 | Log | 256 lines per call, 512 bytes per line |
 | Settings | 32 per widget, 32-character keys, 1024-byte text values |
+| Images | 16 per widget, 1 MiB encoded, 1024 pixels a side, PNG only |
 
 ---
 
@@ -571,3 +598,4 @@ refused in a sentence naming both numbers.
 | **4 → 5** | `get-secret` answers `ok(none)` for a key that was never set — the 1 → 2 change made again, in the other place where absence was being reported as an error. `remove-secret` is new: a widget that cannot forget a credential is one that keeps it forever. |
 | **5 → 6** | `setting` — a widget can read its own configuration. `Event::Configured` had been in the file since the first version with nothing to produce it, because until settings existed there was nothing to be configured by. |
 | **6 → 7** | `sparkline` joins `content`, and `memory_load` joins `cpu_load` under `metrics`. A variant added to `content` is a view an older host cannot decode at all, which is exactly the mismatch the version number exists to turn into a sentence naming both numbers. |
+| **7 → 8** | `register_image` and `release_image`. `image(u32)` had been in `content` since the first version with no way to obtain a handle, so every `image` node ever built drew nothing. |

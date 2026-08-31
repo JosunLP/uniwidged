@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
@@ -116,14 +116,14 @@ toml = "0.9"
 # from elsewhere and how.
 
 # --- Internal crates ------------------------------------------------------
-uniwidged-core = { path = "crates/uniwidged-core", version = "0.0.1" }
-uniwidged-view = { path = "crates/uniwidged-view", version = "0.0.1" }
-uniwidged-compose = { path = "crates/uniwidged-compose", version = "0.0.1" }
-uniwidged-render = { path = "crates/uniwidged-render", version = "0.0.1" }
-uniwidged-shell = { path = "crates/uniwidged-shell", version = "0.0.1" }
-uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "0.0.1" }
-uniwidged-guest = { path = "crates/uniwidged-guest", version = "0.0.1" }
-uniwidged-host = { path = "crates/uniwidged-host", version = "0.0.1" }
+uniwidged-core = { path = "crates/uniwidged-core", version = "0.1.0" }
+uniwidged-view = { path = "crates/uniwidged-view", version = "0.1.0" }
+uniwidged-compose = { path = "crates/uniwidged-compose", version = "0.1.0" }
+uniwidged-render = { path = "crates/uniwidged-render", version = "0.1.0" }
+uniwidged-shell = { path = "crates/uniwidged-shell", version = "0.1.0" }
+uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "0.1.0" }
+uniwidged-guest = { path = "crates/uniwidged-guest", version = "0.1.0" }
+uniwidged-host = { path = "crates/uniwidged-host", version = "0.1.0" }
 
 # The host is an always-on desktop process. Size and steady-state cost matter
 # more than throughput, but not at the price of the render path — hence `s`

@@ -268,6 +268,48 @@ fn every_child_stays_inside_its_parent() {
 }
 
 #[test]
+fn an_image_is_its_own_size_and_an_unregistered_one_takes_no_room() {
+    // One image pixel per logical pixel, so an icon is the size its author
+    // drew it on every display; and a handle with nothing behind it is a gap
+    // of zero rather than a hole the size of a picture that is not there.
+    use uniwidged_view::{Bitmap, ImageHandle};
+    let bitmap = Bitmap {
+        width: 32,
+        height: 20,
+        rgba: std::sync::Arc::new(vec![0; 32 * 20 * 4]),
+    };
+    let mut images = crate::Images::new();
+    images.insert(ImageHandle(1), crate::image_data(&bitmap));
+    let view = panel(NodeId::named("root"))
+        .child(
+            row()
+                .child(image(ImageHandle(1)).id(NodeId::named("real")))
+                .child(image(ImageHandle(2)).id(NodeId::named("missing")))
+                .child(text("after").id(NodeId::named("after"))),
+        )
+        .view();
+    let theme = Theme::default();
+    let mut engine = TextEngine::new();
+    let root = compute_with_images(&view, &theme, &mut engine, (320.0, 200.0), Some(&images));
+    let row = &root.children[0];
+    let real = &row.children[0];
+    let missing = &row.children[1];
+    let after = &row.children[2];
+    assert!((real.rect.width() - 32.0).abs() < 0.01, "{:?}", real.rect);
+    assert!((real.rect.height() - 20.0).abs() < 0.01, "{:?}", real.rect);
+    assert_eq!(missing.rect.width(), 0.0, "{:?}", missing.rect);
+    assert!(
+        (after.rect.x0 - real.rect.x1).abs() < 0.01,
+        "{:?} after {:?}",
+        after.rect,
+        real.rect
+    );
+    // And with no images at all, the real one is a gap too.
+    let root = compute(&view, &theme, &mut engine, (320.0, 200.0));
+    assert_eq!(root.children[0].children[0].rect.width(), 0.0);
+}
+
+#[test]
 fn a_chart_spans_its_row_and_takes_the_theme_height() {
     // Like a progress bar: the widget names the series, the theme decides how
     // much room a chart gets, and it stretches to the width it is given. A

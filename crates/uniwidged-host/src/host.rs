@@ -144,6 +144,13 @@ pub struct Host {
     /// accessibility tree. The scene inside it is dropped after presenting;
     /// what stays is small.
     composed: HashMap<WidgetId, Composed>,
+    /// Each widget's bitmaps as the renderer takes them, by handle.
+    ///
+    /// Rebuilt from the sandbox's decoded images before every compose, but
+    /// only the entries whose pixels changed: a renderer caches uploads by
+    /// the blob's identity, and handing it a fresh blob for the same icon on
+    /// every frame would upload the icon on every frame.
+    images: HashMap<WidgetId, uniwidged_compose::Images>,
     next_id: u64,
     /// Device pixels per logical pixel, and whether to mirror. Per host rather
     /// than per widget: they come from the desktop, and a widget that
@@ -221,6 +228,7 @@ impl Host {
             scheduler: Scheduler::new(frame),
             widgets: Vec::new(),
             composed: HashMap::new(),
+            images: HashMap::new(),
             next_id: 1,
             scale: 1.0,
             rtl: false,
@@ -413,6 +421,7 @@ impl Host {
         self.scheduler.remove(id);
         self.tasks.forget(id);
         self.composed.remove(&id);
+        self.images.remove(&id);
         self.widgets.remove(index);
         Ok(surface)
     }
@@ -550,10 +559,12 @@ impl Host {
             let logical = Size::new(width as f64 / self.scale, height as f64 / self.scale);
             let widget = &self.widgets[index];
             let view = widget.last_view().expect("a view was just produced");
+            let images = sync_images(self.images.entry(id).or_default(), widget.images());
             let composed = self.compositor.compose(
                 Compose::new(view, id, &widget.name, logical)
                     .scale(self.scale)
-                    .rtl(self.rtl),
+                    .rtl(self.rtl)
+                    .images(images),
             );
             self.renderer.mark_dirty(surface);
             scenes.push((surface, composed.scene));
@@ -817,6 +828,37 @@ impl Host {
             None => Deadline::never(),
         }
     }
+}
+
+/// Brings a widget's renderer-side images up to date with what its instance
+/// holds, touching only what changed.
+///
+/// A handle the instance no longer has is dropped; a handle it has that this
+/// map does not — or whose pixels are a different allocation — is converted.
+/// An unchanged one keeps its blob, and with it the renderer's cached upload.
+fn sync_images<'a>(
+    cache: &'a mut uniwidged_compose::Images,
+    current: Option<&uniwidged_runtime::images::Images>,
+) -> &'a uniwidged_compose::Images {
+    use uniwidged_view::ImageHandle;
+    let Some(current) = current else {
+        cache.clear();
+        return cache;
+    };
+    cache.retain(|handle, _| current.get(handle.0).is_some());
+    for (handle, bitmap) in current.iter() {
+        let handle = ImageHandle(handle);
+        let stale = match cache.get(&handle) {
+            // The blob wraps the same `Arc` the sandbox holds, so pointer
+            // equality is "these are the same pixels" and costs nothing.
+            Some(existing) => existing.data.data().as_ptr() != bitmap.rgba.as_ptr(),
+            None => true,
+        };
+        if stale {
+            cache.insert(handle, uniwidged_compose::image_data(bitmap));
+        }
+    }
+    cache
 }
 
 #[cfg(test)]

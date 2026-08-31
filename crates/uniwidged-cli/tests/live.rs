@@ -74,12 +74,19 @@ impl Server {
             else {
                 return None;
             };
-            // The socket appears before the server accepts, so the wait is on
-            // the file *and* a moment after it.
+            // The socket appears before the server is ready to accept, so the
+            // wait is on a connection being *accepted* rather than on the
+            // file. The first version waited on the file and slept 250 ms,
+            // which was enough on every development machine and not on a CI
+            // runner starting four servers under a compiler — where the
+            // desktop's single connection attempt landed early, and the
+            // whole suite failed with "cannot reach the X server".
+            // `x11_input.rs` learned the same lesson and says so.
             let deadline = Instant::now() + Duration::from_secs(10);
             while Instant::now() < deadline {
-                if Path::new(&format!("/tmp/.X11-unix/X{number}")).exists() {
-                    std::thread::sleep(Duration::from_millis(250));
+                if std::os::unix::net::UnixStream::connect(format!("/tmp/.X11-unix/X{number}"))
+                    .is_ok()
+                {
                     return Some(Server {
                         display,
                         number,

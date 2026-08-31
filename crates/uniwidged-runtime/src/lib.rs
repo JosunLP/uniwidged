@@ -39,6 +39,7 @@
 #![allow(dead_code)]
 
 pub mod capability;
+pub mod images;
 pub mod keyring;
 pub mod limits;
 pub mod manifest;

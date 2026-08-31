@@ -46,11 +46,36 @@ pub struct Conformance {
     /// be measuring the host's disk rather than its sandbox — and would churn
     /// a real keychain, since this widget runs beside real widgets.
     secrets_said: Option<String>,
+    /// The handle the host gave for `pixels.png`, registered once in `start`
+    /// — the shape every widget with an icon should take, and the reason the
+    /// row reports `allowed` from the first view rather than re-registering
+    /// on every one.
+    image: Option<ImageHandle>,
+    image_said: Option<String>,
 }
 
+/// A 2x2 PNG: red, green, blue, transparent. Small enough to read as bytes,
+/// and every channel a different value, so a host that swapped two of them
+/// would draw something a test can tell from the right answer.
+const PIXELS: &[u8] = include_bytes!("pixels.png");
+
 impl Widget for Conformance {
-    fn start(&mut self, _cx: &Cx) -> Result<(), String> {
+    fn start(&mut self, cx: &Cx) -> Result<(), String> {
         self.started = true;
+        // Not a capability, so there is no refusal to report — what is
+        // reported is whether the host took the image, and then a hand-made
+        // bad one is offered so the malformed answer is exercised too.
+        match cx.register_image(PIXELS) {
+            Ok(handle) => {
+                self.image = Some(handle);
+                self.image_said = Some(match cx.register_image(b"not a png") {
+                    Err(uniwidged_guest::Denied::Malformed(_)) => "allowed".to_string(),
+                    Err(other) => format!("bad-png-{}", refusal(&other)),
+                    Ok(_) => "bad-png-accepted".to_string(),
+                });
+            }
+            Err(denied) => self.image_said = Some(refusal(&denied)),
+        }
         Ok(())
     }
 
@@ -176,6 +201,10 @@ impl Widget for Conformance {
                 name: "command",
                 outcome: self.command_row(cx),
             },
+            Attempt {
+                name: "image",
+                outcome: self.image_said.clone().unwrap_or_default(),
+            },
         ];
 
         // Logging is the one thing that is always available, so it is used to
@@ -245,6 +274,15 @@ impl Widget for Conformance {
                 .id(NodeId::named("chart"))
                 .label("a chart"),
         );
+        // And the picture, by the handle `start` was given. An `image` node
+        // with no handle behind it draws nothing, so the node is only built
+        // when there is one — a widget whose icon failed to register should
+        // show its layout without a gap where the icon would have been.
+        root = root.children(self.image.map(|handle| {
+            image(handle)
+                .id(NodeId::named("picture"))
+                .label("four pixels")
+        }));
         root.view()
     }
 

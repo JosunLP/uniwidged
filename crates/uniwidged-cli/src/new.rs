@@ -79,12 +79,18 @@ impl Sdk {
                     relative("uniwidged-view"),
                 )
             }
+            // The version this binary was built from, so a scaffold written by
+            // 0.3 asks for 0.3 rather than for whatever was typed here once.
             Sdk::Unpublished => concat!(
                 "# uniwidged is not on crates.io yet. Until it is, point these at a\n",
                 "# checkout:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n",
-                "uniwidged-guest = \"0.0.1\"\n",
-                "uniwidged-core = \"0.0.1\"\n",
-                "uniwidged-view = \"0.0.1\"\n",
+                "uniwidged-guest = \"",
+                env!("CARGO_PKG_VERSION"),
+                "\"\nuniwidged-core = \"",
+                env!("CARGO_PKG_VERSION"),
+                "\"\nuniwidged-view = \"",
+                env!("CARGO_PKG_VERSION"),
+                "\"\n",
             )
             .to_string(),
         }
@@ -93,10 +99,12 @@ impl Sdk {
     fn describe(&self) -> String {
         match self {
             Sdk::Checkout(crates) => format!("the SDK at {}", crates.display()),
-            Sdk::Unpublished => {
-                "uniwidged-guest 0.0.1 — unpublished, so edit Cargo.toml to point at a checkout"
-                    .to_string()
-            }
+            Sdk::Unpublished => concat!(
+                "uniwidged-guest ",
+                env!("CARGO_PKG_VERSION"),
+                " — unpublished, so edit Cargo.toml to point at a checkout"
+            )
+            .to_string(),
         }
     }
 }

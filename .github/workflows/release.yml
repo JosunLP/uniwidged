@@ -1,0 +1,68 @@
+# A release is a tag.
+#
+# Pushing `v<version>` builds the `.deb` the way `ci.yml` builds it, checks
+# that the tag agrees with the workspace about the version — two places to
+# write one is one place to forget it — and attaches the package and its
+# checksum to a GitHub release. The tests are not run again here: the commit
+# a tag points at has already been through `ci.yml` on `main`, and a release
+# workflow that re-ran them would be a second, slower copy of the first.
+#
+# It is deliberately nothing else. No changelog is generated — `CHANGELOG.md`
+# is written by hand, and the release notes point at it — and no version is
+# bumped by a robot.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    name: the .deb, attached to the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev groff pkg-config libfontconfig1-dev libxcb1-dev
+      - name: the tag is the version
+        run: |
+          set -eu
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tag=${GITHUB_REF_NAME#v}
+          [ "$tag" = "$version" ] || {
+            echo "the tag says $tag and Cargo.toml says $version" >&2
+            exit 1
+          }
+          grep -q "^## $version " CHANGELOG.md || {
+            echo "CHANGELOG.md has no entry for $version" >&2
+            exit 1
+          }
+      - run: packaging/deb/build.sh --output "$RUNNER_TEMP/deb"
+      - name: the package holds what it promises
+        run: |
+          set -eu
+          package=$(ls "$RUNNER_TEMP"/deb/uniwidged_*.deb)
+          contents=$(dpkg-deb --contents "$package")
+          for path in ./usr/bin/uniwidged ./usr/share/man/man1/uniwidged.1.gz \
+                      ./usr/share/applications/uniwidged.desktop \
+                      ./usr/share/bash-completion/completions/uniwidged; do
+            echo "$contents" | grep -q " $path\$" || { echo "missing $path" >&2; exit 1; }
+          done
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
+          "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version
+          cd "$RUNNER_TEMP/deb" && sha256sum uniwidged_*.deb > SHA256SUMS
+      - name: the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ runner.temp }}/deb/uniwidged_*.deb
+            ${{ runner.temp }}/deb/SHA256SUMS
+          body: |
+            See `CHANGELOG.md` for what changed, and `ROADMAP.md` for what is
+            still to come. The `.deb` is built by `packaging/deb/build.sh` and
+            checked the way CI checks it; `SHA256SUMS` is its checksum.

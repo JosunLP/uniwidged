@@ -1186,7 +1186,11 @@ depends on, and what once rendered "live" as "li…".
   M5 and M6.
 * Running without a terminal: a log, `uniwidged status`, and shell completions
   — **done**, see below. And the vocabulary's one chart node, `sparkline`,
-  with `metrics` answering for memory as well — ABI 7.
+  with `metrics` answering for memory as well — ABI 7. And a picture behind
+  the `image` node that had never had one — ABI 8.
+* A release: a version that is not `0.0.1`, a changelog, and a workflow that
+  builds the `.deb` for a tag and attaches it — **done**, see
+  [Towards 1.0.0](#towards-100).
 * A widget registry format — **done**, see below. Signature verification on
   install was already done; what was missing was somewhere to find widgets, and
   now is not.
@@ -1447,6 +1451,32 @@ in the test, and the other two where their shells are installed. The `.deb`
 asks the binary for all three and installs them where each shell's Debian
 packaging looks, and CI checks they are in the package.
 
+### A picture — ABI 8 — **done, 2026-08-31**
+
+`content.image(u32)` had been in the interface since the first version, and
+there was no way to obtain a `u32` that meant anything. `register-image` is
+the other half: a PNG crosses the boundary once, the host decodes it — after
+checking the header, so a file claiming 100 000 pixels a side is refused by
+its dimensions rather than by an allocation that succeeds or fails depending on
+the machine — and keeps the pixels behind a handle. The renderer is handed the
+same `Arc` every frame, so a renderer that caches uploads by identity uploads
+an icon once rather than sixty times a second; the host's cache is brought up
+to date by pointer comparison before each compose.
+
+No capability, and the argument is in `crates/uniwidged-runtime/src/images.rs`:
+the bytes came from the widget and go to the widget's own surface, so there is
+nothing for a user to consent to, and what is bounded instead is the host's
+memory — a megabyte, 1024 pixels a side, sixteen at once. PNG only, because one
+format is one decoder, and a decoder is a parser running on bytes a widget
+chose. A handle belongs to the instance that made it: a restarted widget
+registers again, which is the same rule as everything else about a restart.
+
+Two golden images, one mirrored — a right-to-left layout moves the picture to
+the leading edge and does not flip it, for the reason glyphs are not flipped.
+The conformance widget registers its four pixels in `start`, offers the host
+bytes that are not a PNG, and the test reads the decoded pixels back off the
+instance in the order the file holds them.
+
 ### Reference widgets, one per served capability
 
 | | |
@@ -1464,6 +1494,39 @@ waiting to happen. `widgets/conformance` exercises the gate; `net`'s own suite
 exercises the transport against a server it starts itself.
 
 ---
+
+## Towards 1.0.0
+
+**0.1.0** is the first version with a number that means something: the Linux
+desktop works on both window systems, every capability is served, widgets can
+be found, checked, installed, configured, moved and watched, and the whole of
+it is measured in CI. `CHANGELOG.md` starts here, and
+`.github/workflows/release.yml` builds the `.deb` for a `v*` tag, checks it the
+way CI does, and attaches it to a GitHub release with its checksum — so a
+release is a tag, and the artefact is the one the tests ran against.
+
+What `1.0.0` means, so that the number is not reached by counting:
+
+* **The ABI stops moving.** Eight versions in four days is a pre-release
+  interface. 1.0 freezes `wit/uniwidged.wit` at the version it ships with and
+  promises that a widget built against it keeps working through every 1.x —
+  additions only, and a widget that does not use them does not notice them.
+  Until then the number moves whenever the interface does, and the check at
+  instantiation is what makes that safe.
+* **M5 and M6.** A framework whose README says "cross-platform" is not 1.0 on
+  one platform. Windows and macOS each need their shell, their keychain, their
+  packaging and their own measured tests — see the milestones above. Each is a
+  minor version on its own.
+* **A year of somebody else's widget.** The exit criterion of M8 — a widget
+  written from the guide alone, by somebody who has never seen the repository
+  — has to have happened, and the widget has to have survived a host upgrade.
+* **What is not there is said.** Every `Unavailable` a widget can be answered
+  with is documented beside the function that answers it, and `uniwidged
+  doctor` names the ones this machine will produce.
+
+Between here and there, minor versions: `0.2` for the next platform, and a
+patch for anything that is a fix. The `.deb` and the AUR package follow the
+workspace version, and nothing else has one.
 
 ## Not planned
 

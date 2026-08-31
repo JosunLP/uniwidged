@@ -96,8 +96,19 @@ fn desktop(data_root: &Path) -> Host {
 }
 
 /// Installs a widget with **exactly** what its manifest asks for.
+///
+/// Under a generous call deadline, as `desktop.rs` does and for the same
+/// reason: these tests run in parallel threads and each begins by building a
+/// widget for `wasm32-wasip2`, so a `view` that reads a file can land under a
+/// compiler and overrun 16 ms on a machine that is merely busy. The counter
+/// test lost a click that way once — the instance was restarted between the
+/// click and the tick — and what it is for is the widget, not the machine.
 fn install(host: &mut Host, name: &str) -> WidgetId {
-    let manifest = manifest(name);
+    let mut manifest = manifest(name);
+    manifest.limits = uniwidged_runtime::limits::Limits {
+        call_deadline: Duration::from_secs(2),
+        ..manifest.limits
+    };
     let policy = Policy::from_granted(manifest.capabilities.clone());
     let id = host
         .install(&component(name), manifest, policy)

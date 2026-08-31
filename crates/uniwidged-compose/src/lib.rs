@@ -218,11 +218,12 @@ impl Compositor {
     pub fn compose(&mut self, request: Compose<'_>) -> Composed {
         let theme = self.theme();
         let mut text = self.text();
-        let placed = layout::compute(
+        let placed = layout::compute_with_images(
             request.view,
             &theme,
             &mut text,
             (request.size.width as f32, request.size.height as f32),
+            request.images,
         );
 
         let mut scene = Scene::new();
@@ -231,6 +232,7 @@ impl Compositor {
             width: request.size.width,
             rtl: request.rtl,
             scale: request.scale,
+            images: request.images,
         };
         painter.paint(&mut scene, &placed, &mut text);
 
@@ -338,6 +340,35 @@ pub struct Compose<'a> {
     pub scale: f64,
     /// Mirror the layout for a right-to-left locale.
     pub rtl: bool,
+    /// The bitmaps this widget has registered, by the handle an
+    /// [`uniwidged_view::Content::Image`] node names. A handle with nothing
+    /// here draws nothing and takes no room: a widget naming an image it never
+    /// registered, or one from an instance that has since been restarted, gets
+    /// a gap rather than somebody else's picture.
+    pub images: Option<&'a Images>,
+}
+
+/// A widget's decoded images, ready for the renderer.
+///
+/// Built by the host from what the sandbox decoded — see
+/// `uniwidged_runtime::images` — and kept across frames, so that a renderer
+/// which caches uploads by the blob's identity sees the same blob for the same
+/// picture rather than re-uploading an icon sixty times a second.
+pub type Images = HashMap<uniwidged_view::ImageHandle, uniwidged_render::peniko::ImageData>;
+
+/// Turns a decoded bitmap into what the renderer draws.
+///
+/// The one place the two types meet. Straight alpha, because that is what a
+/// PNG holds and what `Bitmap` promises; Vello premultiplies on the way in.
+pub fn image_data(bitmap: &uniwidged_view::Bitmap) -> uniwidged_render::peniko::ImageData {
+    use uniwidged_render::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
+    ImageData {
+        data: Blob::new(bitmap.rgba.clone()),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: bitmap.width,
+        height: bitmap.height,
+    }
 }
 
 impl<'a> Compose<'a> {
@@ -349,7 +380,14 @@ impl<'a> Compose<'a> {
             size,
             scale: 1.0,
             rtl: false,
+            images: None,
         }
+    }
+
+    /// The bitmaps the widget's `image` nodes name.
+    pub fn images(mut self, images: &'a Images) -> Self {
+        self.images = Some(images);
+        self
     }
 
     pub fn scale(mut self, scale: f64) -> Self {

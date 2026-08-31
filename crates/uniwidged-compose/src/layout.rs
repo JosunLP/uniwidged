@@ -81,9 +81,28 @@ pub fn compute<'a>(
     text: &mut TextEngine,
     available: (f32, f32),
 ) -> Placed<'a> {
+    compute_with_images(view, theme, text, available, None)
+}
+
+/// [`compute`], with the widget's images — which is what gives an `image`
+/// node a size. Without them it has none.
+pub fn compute_with_images<'a>(
+    view: &'a View,
+    theme: &Theme,
+    text: &mut TextEngine,
+    available: (f32, f32),
+    images: Option<&crate::Images>,
+) -> Placed<'a> {
     let mut tree = LayoutTree::new();
     let mut leaves: Vec<TextLeaf> = Vec::new();
-    let root = build(&view.root, theme, text, &mut tree, &mut leaves);
+    let mut context = Build {
+        theme,
+        engine: text,
+        tree: &mut tree,
+        leaves: &mut leaves,
+        images,
+    };
+    let root = context.build(&view.root);
 
     tree.compute(root, available.0, available.1, |m| {
         // Key 0 means "not a measured leaf"; `boxes` never calls us with it —
@@ -117,92 +136,118 @@ pub fn compute<'a>(
     read_back(&view.root, root, &tree, theme, (0.0, 0.0))
 }
 
-fn build(
-    node: &Node,
-    theme: &Theme,
-    engine: &mut TextEngine,
-    tree: &mut LayoutTree,
-    leaves: &mut Vec<TextLeaf>,
-) -> boxes::NodeId {
-    let style = box_style(node, theme);
-    match &node.content {
-        Content::Text(string) => {
-            let shaping =
-                Shaping::from_style(theme.text(node.style.role), is_numeric(node.style.role));
-            if node.style.role == Role::Chip {
-                // A chip is a pill around its text, so it has to hug it. An
-                // explicit width overrides the parent's stretch, exactly as in
-                // CSS — and measuring it here rather than through the measure
-                // callback is what makes the width explicit at all.
-                let (width, _) = engine.measure(string, shaping);
-                let (pad_x, _) = theme.chip_padding();
+/// Everything the tree-building pass carries down the tree.
+struct Build<'t> {
+    theme: &'t Theme,
+    engine: &'t mut TextEngine,
+    tree: &'t mut LayoutTree,
+    leaves: &'t mut Vec<TextLeaf>,
+    images: Option<&'t crate::Images>,
+}
+
+impl Build<'_> {
+    fn build(&mut self, node: &Node) -> boxes::NodeId {
+        let Build {
+            theme,
+            engine,
+            tree,
+            leaves,
+            images,
+        } = self;
+        let theme: &Theme = theme;
+        let style = box_style(node, theme);
+        match &node.content {
+            Content::Text(string) => {
+                let shaping =
+                    Shaping::from_style(theme.text(node.style.role), is_numeric(node.style.role));
+                if node.style.role == Role::Chip {
+                    // A chip is a pill around its text, so it has to hug it. An
+                    // explicit width overrides the parent's stretch, exactly as in
+                    // CSS — and measuring it here rather than through the measure
+                    // callback is what makes the width explicit at all.
+                    let (width, _) = engine.measure(string, shaping);
+                    let (pad_x, _) = theme.chip_padding();
+                    leaves.push(TextLeaf {
+                        text: string.clone(),
+                        shaping,
+                        wrap: false,
+                    });
+                    return tree.measured_leaf(
+                        // `shrink(0)` as well as an explicit width: without it a
+                        // row that overflows makes taffy shrink whatever it can,
+                        // and a chip narrower than its text is a chip reading
+                        // "li…". Text *should* shrink — that is how it comes to be
+                        // ellipsised — but a pill that hugs its content has
+                        // nothing to give.
+                        // The *whole box* is rounded up, not just the text.
+                        // Taffy rounds a computed box down to whole pixels, and a
+                        // chip's padding is a fraction of its font size — so
+                        // ceiling only the text still leaves 32.44 becoming 32,
+                        // and the text a third of a pixel too wide for its own
+                        // content box. That rendered "live" as "li…", and only on
+                        // a display whose font made the arithmetic land badly.
+                        style
+                            .width(Length::px((width + pad_x * 2.0).ceil()))
+                            .shrink(0.0),
+                        leaves.len() as u64,
+                    );
+                }
                 leaves.push(TextLeaf {
                     text: string.clone(),
                     shaping,
-                    wrap: false,
+                    wrap: node.style.layout.wrap,
                 });
-                return tree.measured_leaf(
-                    // `shrink(0)` as well as an explicit width: without it a
-                    // row that overflows makes taffy shrink whatever it can,
-                    // and a chip narrower than its text is a chip reading
-                    // "li…". Text *should* shrink — that is how it comes to be
-                    // ellipsised — but a pill that hugs its content has
-                    // nothing to give.
-                    // The *whole box* is rounded up, not just the text.
-                    // Taffy rounds a computed box down to whole pixels, and a
-                    // chip's padding is a fraction of its font size — so
-                    // ceiling only the text still leaves 32.44 becoming 32,
-                    // and the text a third of a pixel too wide for its own
-                    // content box. That rendered "live" as "li…", and only on
-                    // a display whose font made the arithmetic land badly.
-                    style
-                        .width(Length::px((width + pad_x * 2.0).ceil()))
-                        .shrink(0.0),
-                    leaves.len() as u64,
-                );
+                tree.measured_leaf(style, leaves.len() as u64)
             }
-            leaves.push(TextLeaf {
-                text: string.clone(),
-                shaping,
-                wrap: node.style.layout.wrap,
-            });
-            tree.measured_leaf(style, leaves.len() as u64)
-        }
-        Content::Icon(_) => {
-            // Square, and not shrinkable for the same reason as a chip: an
-            // icon squeezed narrower than it is tall stops being the icon it
-            // was drawn as.
-            let size = theme.text(node.style.role).size * 1.15;
-            tree.leaf(style.size(Length::px(size), Length::px(size)).shrink(0.0))
-        }
-        Content::Divider => {
-            // Explicitly full width: the default cross-axis alignment sizes a
-            // child to its content, and a rule with no content is invisible.
-            let (_, thickness) = theme.divider();
-            tree.leaf(style.width(Length::FILL).height(Length::px(thickness)))
-        }
-        Content::Progress(_) => tree.leaf(
-            style
-                .width(Length::FILL)
-                .height(Length::px(theme.progress_thickness())),
-        ),
-        // Full width and a theme height, like a progress bar: the widget says
-        // *what* the series is, and how much room a chart gets is the one
-        // decision that has to be the same across every widget on the screen.
-        Content::Sparkline(_) => tree.leaf(
-            style
-                .width(Length::FILL)
-                .height(Length::px(theme.sparkline_height())),
-        ),
-        Content::Spacer => tree.leaf(style),
-        Content::Image(_) => tree.leaf(style),
-        Content::Group => {
-            let children: Vec<_> = node
-                .children
-                .iter()
-                .map(|c| build(c, theme, engine, tree, leaves))
-                .collect();
-            tree.container(style, &children)
+            Content::Icon(_) => {
+                // Square, and not shrinkable for the same reason as a chip: an
+                // icon squeezed narrower than it is tall stops being the icon it
+                // was drawn as.
+                let size = theme.text(node.style.role).size * 1.15;
+                tree.leaf(style.size(Length::px(size), Length::px(size)).shrink(0.0))
+            }
+            Content::Divider => {
+                // Explicitly full width: the default cross-axis alignment sizes a
+                // child to its content, and a rule with no content is invisible.
+                let (_, thickness) = theme.divider();
+                tree.leaf(style.width(Length::FILL).height(Length::px(thickness)))
+            }
+            Content::Progress(_) => tree.leaf(
+                style
+                    .width(Length::FILL)
+                    .height(Length::px(theme.progress_thickness())),
+            ),
+            // Full width and a theme height, like a progress bar: the widget says
+            // *what* the series is, and how much room a chart gets is the one
+            // decision that has to be the same across every widget on the screen.
+            Content::Sparkline(_) => tree.leaf(
+                style
+                    .width(Length::FILL)
+                    .height(Length::px(theme.sparkline_height())),
+            ),
+            Content::Spacer => tree.leaf(style),
+            // At its own size, in logical pixels — one image pixel per logical
+            // pixel, so a 32-pixel icon is a 32-pixel icon on every display and
+            // the scale factor makes it crisp rather than large. Not shrinkable:
+            // an icon squeezed narrower than it is tall is a different picture.
+            // A handle with no image behind it takes no room, so a widget whose
+            // icon failed to register shows a layout with a gap rather than a
+            // layout with a hole the size of a picture that is not there.
+            Content::Image(handle) => match images.and_then(|images| images.get(handle)) {
+                Some(image) => tree.leaf(
+                    style
+                        .size(
+                            Length::px(image.width as f32),
+                            Length::px(image.height as f32),
+                        )
+                        .shrink(0.0),
+                ),
+                None => tree.leaf(style.size(Length::px(0.0), Length::px(0.0))),
+            },
+            Content::Group => {
+                let children: Vec<_> = node.children.iter().map(|c| self.build(c)).collect();
+                self.tree.container(style, &children)
+            }
         }
     }
 }

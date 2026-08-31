@@ -42,6 +42,9 @@ pub struct Painter<'a> {
     pub rtl: bool,
     /// Device pixels per logical pixel, applied once to the whole scene.
     pub scale: f64,
+    /// The widget's bitmaps, by handle. `None` draws every `image` node as
+    /// nothing.
+    pub images: Option<&'a crate::Images>,
 }
 
 impl Painter<'_> {
@@ -83,7 +86,8 @@ impl Painter<'_> {
             Content::Divider => self.paint_divider(scene, rect),
             Content::Progress(ratio) => self.paint_progress(scene, placed, ratio.get()),
             Content::Sparkline(series) => self.paint_sparkline(scene, placed, &series.0),
-            Content::Group | Content::Spacer | Content::Image(_) => {}
+            Content::Image(handle) => self.paint_image(scene, rect, *handle),
+            Content::Group | Content::Spacer => {}
         }
 
         for child in &placed.children {
@@ -309,6 +313,28 @@ impl Painter<'_> {
 }
 
 impl Painter<'_> {
+    /// A bitmap, stretched to the box the layout gave it — which is its own
+    /// size unless a parent constrained it.
+    ///
+    /// Never mirrored. A right-to-left layout folds *where* the picture goes,
+    /// and the rectangle arriving here is already folded; the pixels inside it
+    /// are a picture, and a mirrored photograph is wrong in the same way
+    /// mirrored glyphs are.
+    fn paint_image(&self, scene: &mut Scene, rect: Rect, handle: uniwidged_view::ImageHandle) {
+        let Some(image) = self.images.and_then(|images| images.get(&handle)) else {
+            return;
+        };
+        if image.width == 0 || image.height == 0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        let fit = Affine::translate((rect.x0, rect.y0))
+            * Affine::scale_non_uniform(
+                rect.width() / image.width as f64,
+                rect.height() / image.height as f64,
+            );
+        scene.draw_image(image, self.transform() * fit);
+    }
+
     /// A line over a faint area, oldest point at the leading edge and the most
     /// recent at the trailing one, with a dot on the latest value.
     ///

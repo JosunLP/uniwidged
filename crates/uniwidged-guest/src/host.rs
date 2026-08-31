@@ -5,7 +5,7 @@
 //! error type is one they can match on.
 
 use crate::bindings::uniwidged::widget::host as raw;
-use uniwidged_view::Role;
+use uniwidged_view::{ImageHandle, Role};
 
 /// What a finished command left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,5 +303,26 @@ impl Cx {
     /// nobody can help.
     pub fn log(&self, message: &str) {
         raw::log(message);
+    }
+
+    /// Hands the host a PNG and gets back the handle an `image` node names.
+    ///
+    /// **No capability needed** — the bytes came from you and go to your own
+    /// surface. What is bounded is the host's memory: at most 1 MiB encoded
+    /// and 1024 pixels a side ([`Denied::Malformed`]), and at most sixteen
+    /// held at once ([`Denied::Unavailable`] — release one first).
+    ///
+    /// Decoded once, here. Register in `start` and name the handle in every
+    /// view; a restarted widget registers again, because a handle belongs to
+    /// the instance that made it.
+    pub fn register_image(&self, png: &[u8]) -> Result<ImageHandle, Denied> {
+        raw::register_image(png)
+            .map(ImageHandle)
+            .map_err(Into::into)
+    }
+
+    /// Forgets an image. `false` when there was nothing to forget.
+    pub fn release_image(&self, handle: ImageHandle) -> bool {
+        raw::release_image(handle.0)
     }
 }

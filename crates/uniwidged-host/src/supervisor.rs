@@ -308,6 +308,13 @@ impl Supervised {
         }
     }
 
+    /// The bitmaps the running instance has registered, or none where there
+    /// is no instance — a suspended widget's last frame still shows, and it
+    /// was composed while the pixels were there.
+    pub fn images(&self) -> Option<&uniwidged_runtime::images::Images> {
+        self.instance.as_ref().map(|instance| instance.images())
+    }
+
     /// Anything the widget logged, prefixed with its name.
     pub fn take_log(&mut self) -> Vec<String> {
         self.instance

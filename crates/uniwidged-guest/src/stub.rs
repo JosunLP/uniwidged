@@ -172,4 +172,15 @@ impl Cx {
 
     /// Goes nowhere off-target, which is what a test wants.
     pub fn log(&self, _message: &str) {}
+
+    /// Off-target there is nothing to draw on, which reads to a widget as a
+    /// host that could not take the image — the same branch a widget needs
+    /// for a PNG it fetched that turned out not to be one.
+    pub fn register_image(&self, _png: &[u8]) -> Result<uniwidged_view::ImageHandle, Denied> {
+        Err(Denied::Unavailable("no host off-target".into()))
+    }
+
+    pub fn release_image(&self, _handle: uniwidged_view::ImageHandle) -> bool {
+        false
+    }
 }

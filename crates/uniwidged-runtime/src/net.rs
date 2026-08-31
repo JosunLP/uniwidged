@@ -60,7 +60,7 @@ pub const MAX_REDIRECTS: usize = 5;
 /// Named rather than anonymous, and deliberately carrying no version of the
 /// widget or of the machine: a server should be able to see what is calling it
 /// and nothing about who.
-const USER_AGENT: &str = "uniwidged/0.0.1";
+const USER_AGENT: &str = concat!("uniwidged/", env!("CARGO_PKG_VERSION"));
 
 /// The client behind the `net` capability.
 pub struct Http {

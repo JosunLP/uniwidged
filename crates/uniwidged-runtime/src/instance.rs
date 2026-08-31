@@ -201,6 +201,7 @@ impl Runtime {
             services,
             manifest: manifest.clone(),
             log: Vec::new(),
+            images: crate::images::Images::default(),
         };
 
         let mut store = Store::new(&self.engine, state);
@@ -296,6 +297,11 @@ impl Instance {
         std::mem::take(&mut self.store.data_mut().log)
     }
 
+    /// The bitmaps this instance has registered, for the host to draw.
+    pub fn images(&self) -> &crate::images::Images {
+        &self.store.data().images
+    }
+
     /// Runs one call into guest code under a deadline.
     ///
     /// Every entry point goes through here; there is no other way in, which is
@@ -387,6 +393,11 @@ pub struct State {
     services: Services,
     manifest: Arc<Manifest>,
     log: Vec<String>,
+    /// The bitmaps this instance has registered. Per instance rather than per
+    /// widget on purpose: a fresh instance after a trap has none, and its
+    /// `start` registers what it needs — a handle is not a thing a widget's
+    /// state can be derived from, so it is not a thing that survives one.
+    images: crate::images::Images,
 }
 
 impl WasiView for State {
@@ -594,6 +605,22 @@ impl uniwidged::widget::host::Host for State {
         // counter would be a list nobody reads.
         self.check(Request::Metrics)?;
         self.counters()?.memory_load().map_err(Denied::Unavailable)
+    }
+
+    fn register_image(&mut self, png: Vec<u8>) -> Result<u32, Denied> {
+        // No `check`: nothing here reaches outside the sandbox, and what is
+        // bounded is the host's memory rather than the user's consent. See
+        // `crate::images` for the argument, and `setting` and `log` for the
+        // two other functions with the same shape.
+        use crate::images::ImageError;
+        self.images.register(&png).map_err(|e| match e {
+            ImageError::Malformed(why) => Denied::Malformed(why),
+            ImageError::Full => Denied::Unavailable(e.to_string()),
+        })
+    }
+
+    fn release_image(&mut self, handle: u32) -> bool {
+        self.images.release(handle)
     }
 
     fn log(&mut self, message: String) {
