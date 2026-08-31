@@ -134,21 +134,51 @@ fn server() -> Option<Server> {
     }
 }
 
-/// Whether this machine has a device the desktop can render on.
+/// Whether this session can put a swapchain on an X11 window — asked by
+/// doing it, against this test's own server, through the same calls the
+/// desktop makes: a desktop-layer window, `Renderer::new`, and a swapchain
+/// surface attached to it.
 ///
-/// Asked before the server is started, and asked of the renderer rather than
-/// guessed from an environment variable: the desktop will fail at exactly this
-/// point if there is nothing, and failing here says why.
-fn have_a_device() -> bool {
-    if uniwidged_render::Renderer::new().is_ok() {
-        return true;
+/// `Renderer::new().is_ok()` was the first version, and it answered the wrong
+/// question: a runner can hold an adapter that renders headlessly and cannot
+/// present, and there the tests ran and every desktop failed with "the
+/// surface supports no format". Failing here says why; failing there said
+/// nothing about whose fault it was.
+fn presentable(server: &Server) -> bool {
+    use uniwidged_core::geom::PhysicalRect;
+    use uniwidged_shell::platform::x11::{WindowKind, X11Window};
+    let probe = (|| {
+        let window = X11Window::open_on(
+            Some(&server.display),
+            PhysicalRect::new(0, 0, 64, 64),
+            "probe",
+            WindowKind::DesktopWidget,
+        )
+        .map_err(|e| e.to_string())?;
+        let mut renderer = uniwidged_render::Renderer::new().map_err(|e| e.to_string())?;
+        let (display, handle) = window.raw_handles();
+        // SAFETY: the window outlives the surface — the surface is removed
+        // two lines down, and the renderer is dropped before the window at
+        // the end of this closure.
+        let surface = unsafe { renderer.add_swapchain_surface(display, handle, 64, 64) }
+            .map_err(|e| e.to_string())?;
+        renderer.remove_surface(surface);
+        Ok::<(), String>(())
+    })();
+    match probe {
+        Ok(()) => true,
+        Err(why) => {
+            assert!(
+                std::env::var("UNIWIDGED_REQUIRE_GPU").is_err(),
+                "UNIWIDGED_REQUIRE_GPU is set and this session cannot present: {why}"
+            );
+            eprintln!(
+                "skipping: this session cannot present ({why}). \
+                 Set UNIWIDGED_REQUIRE_GPU=1 to make this a failure."
+            );
+            false
+        }
     }
-    assert!(
-        std::env::var("UNIWIDGED_REQUIRE_GPU").is_err(),
-        "UNIWIDGED_REQUIRE_GPU is set and no adapter could be found"
-    );
-    eprintln!("skipping: no GPU adapter. Set UNIWIDGED_REQUIRE_GPU=1 to make this a failure.");
-    false
 }
 
 // --- The machine the desktop runs on --------------------------------------
@@ -325,10 +355,10 @@ impl Drop for Running {
 
 #[test]
 fn a_widget_installed_while_the_desktop_runs_appears_without_a_restart() {
-    if !have_a_device() {
+    let Some(server) = server() else { return };
+    if !presentable(&server) {
         return;
     }
-    let Some(server) = server() else { return };
     let machine = Machine::new("install");
     let clock = build_widget(&machine.0, "clock");
     let counter = build_widget(&machine.0, "counter");
@@ -365,10 +395,10 @@ fn disabling_a_widget_takes_it_off_the_screen_and_enabling_puts_it_back() {
     // keeps its placement, its grants and its data — so this is the one that
     // proves a widget can come *back*, over the same configuration entry and
     // into a new window.
-    if !have_a_device() {
+    let Some(server) = server() else { return };
+    if !presentable(&server) {
         return;
     }
-    let Some(server) = server() else { return };
     let machine = Machine::new("disable");
     let clock = build_widget(&machine.0, "clock");
     let counter = build_widget(&machine.0, "counter");
@@ -391,10 +421,10 @@ fn a_desktop_whose_last_widget_is_removed_keeps_running_and_can_be_refilled() {
     // The edge the window list has: with nothing on the screen there is no
     // window to wait on, and the loop still has to block rather than spin.
     // Before `wait_any` took a slice, this was an index into an empty vector.
-    if !have_a_device() {
+    let Some(server) = server() else { return };
+    if !presentable(&server) {
         return;
     }
-    let Some(server) = server() else { return };
     let machine = Machine::new("empty");
     let clock = build_widget(&machine.0, "clock");
 
@@ -419,10 +449,10 @@ fn status_and_log_report_what_a_running_desktop_is_doing() {
     // what the desktop managed to do. The second is only worth anything if it
     // follows the desktop — a widget that leaves the screen has to leave the
     // answer — and if it is refused once the desktop is gone.
-    if !have_a_device() {
+    let Some(server) = server() else { return };
+    if !presentable(&server) {
         return;
     }
-    let Some(server) = server() else { return };
     let machine = Machine::new("status");
     let clock = build_widget(&machine.0, "clock");
     machine.run(&["install", clock.to_str().unwrap(), "--allow-unsigned"]);
