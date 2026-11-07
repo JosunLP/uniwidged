@@ -1,4 +1,4 @@
-//! A CPU and memory meter, with a minute of history.
+//! A CPU, memory and disk meter, with a minute of CPU history.
 //!
 //! The reference widget for `metrics`, and an example of the thing widget
 //! authors most often get wrong: **how often to ask**. A load average that
@@ -55,6 +55,9 @@ pub struct SystemLoad {
     /// the CPU, and shown the same way — a level rather than a rate, so it
     /// gets a bar and no history.
     memory: Option<f32>,
+    /// How full the disk holding the user's home directory is. Since ABI 9,
+    /// under the same grant again, and a level like memory: a bar, no history.
+    disk: Option<f32>,
     /// Why there is no reading, when there is not.
     refused: Option<String>,
     /// Where the meter turns amber and where it turns red.
@@ -73,6 +76,7 @@ impl Default for SystemLoad {
             load: None,
             history: Vec::new(),
             memory: None,
+            disk: None,
             refused: None,
             warn_at: WARN_AT,
             critical_at: CRITICAL_AT,
@@ -94,9 +98,10 @@ impl Widget for SystemLoad {
         // Re-read and say whether it matters: a threshold that moved past the
         // current reading changes the colour of the meter, and one that did
         // not changes nothing worth a frame.
-        let was = (self.accent(self.load), self.accent(self.memory));
+        let accents = |w: &Self| (w.accent(w.load), w.accent(w.memory), w.accent(w.disk));
+        let was = accents(self);
         self.read_settings(cx);
-        was != (self.accent(self.load), self.accent(self.memory))
+        was != accents(self)
     }
 
     fn view(&mut self, cx: &Cx) -> View {
@@ -114,9 +119,16 @@ impl Widget for SystemLoad {
         if let Ok(memory) = cx.memory_load() {
             self.memory = Some(memory.clamp(0.0, 1.0));
         }
+        // And the disk. A host older than ABI 9 would refuse to instantiate
+        // this widget at all, so there is no branch here for one that lacks
+        // the function — only for one that cannot answer it.
+        if let Ok(disk) = cx.disk_load() {
+            self.disk = Some(disk.clamp(0.0, 1.0));
+        }
 
         let cpu = self.accent(self.load);
         let memory = self.accent(self.memory);
+        let disk = self.accent(self.disk);
 
         panel(NodeId::named("system-load"))
             .gap(2)
@@ -160,6 +172,22 @@ impl Widget for SystemLoad {
                 progress(self.memory.unwrap_or(0.0))
                     .accent(memory)
                     .id(NodeId::named("memory-meter")),
+            )
+            .child(
+                row()
+                    .align(Align::Center)
+                    .child(text("Disk").role(Role::Section))
+                    .child(spacer())
+                    .child(
+                        chip(reading(self.disk))
+                            .accent(disk)
+                            .id(NodeId::named("disk-reading")),
+                    ),
+            )
+            .child(
+                progress(self.disk.unwrap_or(0.0))
+                    .accent(disk)
+                    .id(NodeId::named("disk-meter")),
             )
             .children(self.refused.as_ref().map(|why| {
                 text(format!("stale: {why}"))
@@ -247,6 +275,7 @@ mod tests {
         let view = widget.view(&Cx::new());
         assert!(widget.load.is_none());
         assert!(widget.memory.is_none());
+        assert!(widget.disk.is_none());
         assert!(widget.refused.is_some());
         assert!(format!("{view:?}").contains('—'));
     }

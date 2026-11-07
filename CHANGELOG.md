@@ -9,6 +9,26 @@ The widget ABI is versioned separately from the binary: a widget built against
 a different ABI is refused at instantiation, in a sentence naming both numbers.
 `uniwidged --version` prints both.
 
+## Unreleased
+
+### For users
+
+* `uniwidged doctor` lists what every machine counter answers here — CPU,
+  memory, disk, battery and network — so a meter showing a dash can be traced
+  to the machine rather than to the widget.
+* Two new reference widgets: `battery` (charge, time left, an hour of history,
+  and "on mains power" on a desktop) and `network` (down and up, a minute of
+  each on one shared scale). `system-load` gains a disk meter.
+
+### For widget authors
+
+* **ABI 9.** `cx.battery()`, `cx.disk_load()` and `cx.network_throughput()`
+  join `cpu_load` and `memory_load` under the one `metrics` grant.
+  `battery` answers `Ok(None)` for a machine without one; `minutes_left` is
+  `None` wherever the kernel gives no rate, rather than a guess. Widgets built
+  against ABI 8 are refused at instantiation, in a sentence naming both
+  numbers — rebuild against this SDK.
+
 ## 0.1.0 — 2026-08-31
 
 The first version with a number that means something. A working desktop on

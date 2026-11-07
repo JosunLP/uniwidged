@@ -21,6 +21,9 @@
 //! session could not provide. Everything below the first twenty lines is the
 //! same either way — `uniwidged_shell::platform::linux` is where the two meet.
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
@@ -546,6 +549,65 @@ fn reload(
 }
 
 /// What `uniwidged doctor` can say about this session without starting one.
+/// One line per counter a widget granted `metrics` can read: the answer, or
+/// the reason it would be told `unavailable`.
+///
+/// Separate from [`doctor`] so the wording is tested without a display.
+pub(crate) fn machine_counters(counters: &uniwidged_runtime::services::Counters) -> Vec<String> {
+    use uniwidged_runtime::machine::{PowerState, describe_rate};
+    let percent = |fraction: f32| format!("{}%", (fraction * 100.0).round() as u32);
+    let mut lines = Vec::new();
+    lines.push(match counters.cpu_load() {
+        // The first read on a fresh sampler is the average since boot, and
+        // saying so stops somebody wondering why it is not this second's.
+        Ok(load) => format!("cpu: {} since boot", percent(load)),
+        Err(why) => format!("cpu: unavailable — {why}"),
+    });
+    lines.push(match counters.memory_load() {
+        Ok(load) => format!("memory: {} in use", percent(load)),
+        Err(why) => format!("memory: unavailable — {why}"),
+    });
+    lines.push(match counters.disk_load() {
+        Ok(load) => format!(
+            "disk: {} in use (the filesystem holding $HOME)",
+            percent(load)
+        ),
+        Err(why) => format!("disk: unavailable — {why}"),
+    });
+    lines.push(match counters.battery() {
+        // Not a failure, and worded so it does not read like one.
+        Ok(None) => "battery: none — widgets are told this machine runs on mains".to_string(),
+        Ok(Some(battery)) => {
+            let state = match battery.state {
+                PowerState::Charging => "charging",
+                PowerState::Discharging => "discharging",
+                PowerState::Idle => "plugged in, not charging",
+            };
+            match battery.minutes_left {
+                Some(minutes) => format!(
+                    "battery: {}, {state}, {}:{:02} to go",
+                    percent(battery.charge),
+                    minutes / 60,
+                    minutes % 60
+                ),
+                None => format!("battery: {}, {state}", percent(battery.charge)),
+            }
+        }
+        Err(why) => format!("battery: unavailable — {why}"),
+    });
+    lines.push(match counters.network_throughput() {
+        // A rate needs two samples, and `doctor` takes one. What it can say
+        // is that the counters are there to be read.
+        Ok(rate) => format!(
+            "network: readable ({} in, {} out on a first read; a widget sees a rate from its second)",
+            describe_rate(rate.received),
+            describe_rate(rate.sent)
+        ),
+        Err(why) => format!("network: unavailable — {why}"),
+    });
+    lines
+}
+
 pub fn doctor() {
     match linux::session() {
         Session::Wayland => {
@@ -592,6 +654,13 @@ pub fn doctor() {
         (locale.utc_offset_seconds.abs() % 3600) / 60,
     );
     println!("  widget data: {}", crate::paths::data_root().display());
+    // What a widget granted `metrics` would be told right now, counter by
+    // counter. The question a widget author asks when their meter shows a
+    // dash: is it my code, or does this machine not have one?
+    println!("  machine counters (what `metrics` answers here):");
+    for line in machine_counters(&uniwidged_runtime::services::Counters::new()) {
+        println!("    {line}");
+    }
     // What a widget author needs when their widget reports `unavailable` and
     // they are trying to work out whether that is their manifest, their user's
     // choice, or this host.

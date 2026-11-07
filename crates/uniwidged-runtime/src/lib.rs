@@ -42,6 +42,7 @@ pub mod capability;
 pub mod images;
 pub mod keyring;
 pub mod limits;
+pub mod machine;
 pub mod manifest;
 pub mod net;
 pub mod registry;

@@ -35,7 +35,7 @@ use crate::settings::{
 };
 
 /// The ABI version this host speaks. See `wit/uniwidged.wit`.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 /// The most memory a widget may ask for.
 ///

@@ -283,6 +283,61 @@ interface host {
     cpu-load: func() -> result<f32, denied>;
     memory-load: func() -> result<f32, denied>;
 
+    /// What a battery is doing. Three states rather than the kernel's five,
+    /// because "full" and "not charging" are the same sentence to somebody
+    /// glancing at a widget — plugged in, and not gaining — and "unknown" is
+    /// answered as that too rather than as a fourth state nobody can draw.
+    enum power-state {
+        /// Plugged in, and gaining.
+        charging,
+        /// Running on its own charge.
+        discharging,
+        /// Plugged in and not gaining: full, or held below full by a charge
+        /// limit somebody set to spare the cells.
+        idle,
+    }
+
+    record battery-status {
+        /// `0.0..=1.0` of what the battery holds *now*, not of what it held
+        /// new — a worn battery that is full reads 1.0.
+        charge: f32,
+        state: power-state,
+        /// Until empty while discharging, until full while charging. `none`
+        /// where the kernel reports no rate to divide by, which is common for
+        /// the first seconds after a cable moves, and always when idle.
+        minutes-left: option<u32>,
+    }
+
+    /// Bytes per second, summed over every interface but loopback.
+    record throughput {
+        received: u64,
+        sent: u64,
+    }
+
+    /// The machine's battery — needs `metrics`.
+    ///
+    /// `ok(none)` is a machine with no battery, which is most desktops and is
+    /// their normal case rather than a failure: a power widget on one should
+    /// say "on mains power", and a widget forced to tell that apart from a
+    /// broken host by reading an error string would get it wrong. Several
+    /// batteries are reported as one, weighted by what each holds; a mouse's
+    /// or a headset's is not the machine's and is not counted.
+    battery: func() -> result<option<battery-status>, denied>;
+
+    /// The fraction of the filesystem holding the user's home directory that
+    /// is in use — needs `metrics`. "In use" counts the blocks reserved for
+    /// the administrator as used, the way `df` does, because a user cannot
+    /// write to them and a meter that read 95 % at the moment writes started
+    /// failing would be lying by five points.
+    disk-load: func() -> result<f32, denied>;
+
+    /// How fast the machine is talking to the network — needs `metrics`.
+    ///
+    /// A rate over the window since it was last asked, sampled the way
+    /// `cpu-load` is: the first call answers zero (there is no window yet),
+    /// and two calls within 250 ms get the same answer rather than noise.
+    network-throughput: func() -> result<throughput, denied>;
+
     /// Goes to the host's log, prefixed with the widget's name. Always
     /// available: a widget that cannot say what went wrong is one nobody can
     /// help.
@@ -346,6 +401,11 @@ interface guest {
     /// 7 → 8: `register-image` and `release-image`. `image(u32)` had been in
     /// `content` since the first version with no way to obtain a handle, so
     /// every `image` node ever built drew nothing.
+    ///
+    /// 8 → 9: `battery`, `disk-load` and `network-throughput` join the
+    /// counters under `metrics`. Functions added to an interface are imports
+    /// an older host cannot satisfy, so a widget using them would fail to
+    /// link there — this number turns that into a sentence instead.
     abi-version: func() -> u32;
 
     /// Called once, before the first view.

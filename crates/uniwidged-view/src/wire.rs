@@ -36,7 +36,7 @@ use uniwidged_core::NodeId;
 /// The most nodes one widget may describe.
 ///
 /// A widget is a small panel. A thousand nodes is already far more than any
-/// real one — the reference system-load widget uses fourteen — and the cap
+/// real one — the reference system-load widget uses about twenty — and the cap
 /// exists so that a runaway loop in guest code costs a rejected frame rather
 /// than the host's memory.
 pub const MAX_NODES: usize = 1024;

@@ -1,0 +1,8 @@
+# A network meter: how fast this machine is sending and receiving. The same two
+# lines as `system-load`, and nothing else — it reads the machine's counters and
+# never touches the network itself, so it asks for no `net` grant.
+name = "network"
+version = "1.0.0"
+description = "How fast this machine is talking to the network"
+capabilities = ["timer", "metrics"]
+memory-mb = 8

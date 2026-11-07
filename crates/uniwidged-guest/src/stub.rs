@@ -44,6 +44,43 @@ pub enum TaskResult {
     Failed(String),
 }
 
+/// What a battery is doing.
+///
+/// Three states rather than the kernel's five: "full" and "not charging" are
+/// the same sentence to somebody glancing at a widget — plugged in, and not
+/// gaining — and so is a battery held below full by a charge limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerState {
+    /// Plugged in, and gaining.
+    Charging,
+    /// Running on its own charge.
+    Discharging,
+    /// Plugged in and not gaining.
+    Idle,
+}
+
+/// The machine's batteries, as one. See [`Cx::battery`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Battery {
+    /// `0.0..=1.0` of what the battery holds now. A worn battery that is
+    /// full reads `1.0`.
+    pub charge: f32,
+    pub state: PowerState,
+    /// Minutes until empty while discharging, until full while charging.
+    /// `None` where the kernel reports no rate — common for the first seconds
+    /// after a cable moves, and always when idle. Show nothing rather than a
+    /// guess.
+    pub minutes_left: Option<u32>,
+}
+
+/// Bytes per second, summed over every interface but loopback. See
+/// [`Cx::network_throughput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Throughput {
+    pub received: u64,
+    pub sent: u64,
+}
+
 /// One of your widget's own settings, as your manifest declared it and your
 /// user set it.
 ///
@@ -167,6 +204,18 @@ impl Cx {
     }
 
     pub fn memory_load(&self) -> Result<f32, Denied> {
+        Err(Denied::NotGranted)
+    }
+
+    pub fn battery(&self) -> Result<Option<Battery>, Denied> {
+        Err(Denied::NotGranted)
+    }
+
+    pub fn disk_load(&self) -> Result<f32, Denied> {
+        Err(Denied::NotGranted)
+    }
+
+    pub fn network_throughput(&self) -> Result<Throughput, Denied> {
         Err(Denied::NotGranted)
     }
 

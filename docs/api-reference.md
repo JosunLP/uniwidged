@@ -10,7 +10,7 @@ makes of it. A widget written in another language that targets the component
 model implements the same world and gets the same guarantees; the names change
 and nothing else does.
 
-**ABI 8.** Checked at instantiation, before anything else runs — see
+**ABI 9.** Checked at instantiation, before anything else runs — see
 [ABI history](#abi-history).
 
 ---
@@ -266,6 +266,9 @@ deciding against a guess.
 ```rust
 cx.cpu_load() -> Result<f32, Denied>
 cx.memory_load() -> Result<f32, Denied>
+cx.disk_load() -> Result<f32, Denied>
+cx.battery() -> Result<Option<Battery>, Denied>
+cx.network_throughput() -> Result<Throughput, Denied>
 ```
 
 `cpu_load` is `0.0` to `1.0` across all cores. Never blocks: the first call
@@ -279,8 +282,47 @@ not "not free", which counts the page cache and reads 95 % on any machine that
 has been up for an hour. A level rather than a rate, so one read is a
 measurement and there is no window.
 
-One grant for both. "This widget reads how busy the machine is" is one sentence
-to a user.
+`disk_load` is the fraction of the filesystem holding the user's home directory
+that is in use, counted the way `df` counts it: the blocks reserved for the
+administrator are *used*, because an ordinary user cannot write to them. A
+meter that read 95 % at the moment writes start failing would be lying by five
+points.
+
+`battery` is `Ok(None)` on a machine without one — most desktops, and their
+normal case rather than a failure: say "on mains power". Otherwise a
+`Battery`:
+
+```rust
+pub struct Battery {
+    pub charge: f32,               // 0.0..=1.0 of what it holds now
+    pub state: PowerState,         // Charging · Discharging · Idle
+    pub minutes_left: Option<u32>, // until empty, or until full
+}
+```
+
+Several batteries arrive as one, weighted by capacity — a large one at 90 % and
+a small one at 10 % are not a machine at 50 %. A peripheral's battery (a mouse,
+a headset) is not the machine's and is not counted. `Idle` is plugged in and
+not gaining: full, or held at a charge limit. `minutes_left` is `None` where the
+kernel reports no rate to divide by, and the host does not guess; it is also
+`None` for an estimate past a day, which is a driver reporting almost no rate in
+the second after a cable moved.
+
+`network_throughput` is bytes per second in each direction, summed over every
+interface except loopback, over the window since it was last asked — sampled
+like `cpu_load`, so the first call answers zero and two calls inside 250 ms get
+the same answer. A counter that went *down* (a VPN disconnecting takes its
+totals with it) is a window of zero rather than an underflow.
+
+One grant for all five. "This widget reads how the machine is doing" is one
+sentence to a user. `uniwidged doctor` prints what each of them answers on the
+machine it runs on, which is the first thing to check when a meter shows a dash.
+
+| Unavailable when | |
+|---|---|
+| `cpu_load`, `memory_load`, `network_throughput` | the platform has no `/proc` counters wired up (anything but Linux, today) |
+| `disk_load` | `statvfs` fails on the home directory, or the filesystem reports no size |
+| `battery` | the platform reads no power supplies at all — **not** a machine without a battery, which is `Ok(None)` |
 
 ### `fs:<subpath>`
 
@@ -599,3 +641,4 @@ refused in a sentence naming both numbers.
 | **5 → 6** | `setting` — a widget can read its own configuration. `Event::Configured` had been in the file since the first version with nothing to produce it, because until settings existed there was nothing to be configured by. |
 | **6 → 7** | `sparkline` joins `content`, and `memory_load` joins `cpu_load` under `metrics`. A variant added to `content` is a view an older host cannot decode at all, which is exactly the mismatch the version number exists to turn into a sentence naming both numbers. |
 | **7 → 8** | `register_image` and `release_image`. `image(u32)` had been in `content` since the first version with no way to obtain a handle, so every `image` node ever built drew nothing. |
+| **8 → 9** | `battery`, `disk_load` and `network_throughput` join the counters under `metrics`. New imports are ones an older host cannot satisfy, so a widget using them would fail to link there — the number turns that into a sentence. |

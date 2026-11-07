@@ -1,8 +1,9 @@
 //! The widgets somebody else is meant to copy.
 //!
-//! `widgets/clock`, `widgets/system-load`, `widgets/counter`, `widgets/uptime`
-//! and `widgets/vault` are the framework's worked examples, one per served
-//! capability. Examples rot, and a
+//! `widgets/clock`, `widgets/system-load`, `widgets/battery`,
+//! `widgets/network`, `widgets/counter`, `widgets/uptime` and `widgets/vault`
+//! are the framework's worked examples, one per served capability — and, for
+//! `metrics`, one per kind of answer it gives. Examples rot, and a
 //! rotted example is worse than none: it is the first thing a new author reads
 //! and the last thing anybody runs. So they are built here, installed under
 //! **exactly the capabilities their own manifests declare**, and asserted to
@@ -215,6 +216,83 @@ fn the_meter_reads_the_machine_and_stays_in_range() {
 }
 
 #[test]
+fn the_disk_meter_reads_the_machine_and_stays_in_range() {
+    let scratch = Scratch::new("disk");
+    let mut host = desktop(&scratch.0);
+    let id = install(&mut host, "system-load");
+    tick(&mut host);
+
+    let reading = text_of(&host, id, "disk-reading");
+    if reading == "—" {
+        return;
+    }
+    let percent: u32 = reading
+        .trim_end_matches('%')
+        .parse()
+        .unwrap_or_else(|_| panic!("a disk meter should read a percentage, got {reading:?}"));
+    assert!(percent <= 100, "{percent}% is not a fraction of a disk");
+}
+
+#[test]
+fn the_battery_widget_says_what_this_machine_runs_on() {
+    // Whatever this machine is. A CI runner has no battery, and the widget
+    // must say "Mains" rather than drawing an empty one; a laptop has one, and
+    // the widget must show a percentage. Both are asserted from the host's own
+    // answer, so the test checks the widget against the machine rather than
+    // against an assumption about it.
+    let scratch = Scratch::new("battery");
+    let mut host = desktop(&scratch.0);
+    let id = install(&mut host, "battery");
+    tick(&mut host);
+
+    let reading = text_of(&host, id, "reading");
+    match uniwidged_runtime::machine::battery() {
+        Ok(None) => {
+            assert_eq!(reading, "Mains");
+            assert!(text_of(&host, id, "status").contains("mains"));
+        }
+        Ok(Some(_)) => {
+            let percent: u32 = reading
+                .trim_end_matches('%')
+                .parse()
+                .unwrap_or_else(|_| panic!("a battery should read a percentage, got {reading:?}"));
+            assert!(percent <= 100);
+        }
+        // A platform with no power supplies wired up: the widget says it
+        // could not read rather than claiming either.
+        Err(_) => assert_eq!(reading, "—"),
+    }
+    // Thirty seconds, not a frame: a battery meter that redraws faster than
+    // its number can change is spending the battery to watch it.
+    assert!(
+        host.next_timeout(Instant::now())
+            .is_some_and(|d| d > Duration::from_secs(20)),
+        "the battery widget should not ask to be woken often"
+    );
+}
+
+#[test]
+fn the_network_widget_measures_a_rate_over_two_readings() {
+    // The first reading is zero by definition — there is no window yet — and
+    // the widget draws it as a rate rather than as a dash, because zero bytes
+    // a second is a reading.
+    let scratch = Scratch::new("network");
+    let mut host = desktop(&scratch.0);
+    let id = install(&mut host, "network");
+    tick(&mut host);
+
+    for chip in ["down", "up"] {
+        let reading = text_of(&host, id, chip);
+        if reading == "—" {
+            // No counters on this platform.
+            return;
+        }
+        assert!(reading.ends_with("B/s"), "{chip} read {reading:?}");
+    }
+    assert!(text_of(&host, id, "scale").starts_with("top of chart:"));
+}
+
+#[test]
 fn the_counter_remembers_across_a_restart() {
     // The property the whole supervisor design rests on: a widget's state is
     // derived from its data, so a fresh instance is a working widget again.
@@ -286,6 +364,8 @@ fn every_reference_widget_declares_only_what_it_uses() {
     for (name, expected) in [
         ("clock", vec!["timer", "locale"]),
         ("system-load", vec!["timer", "metrics"]),
+        ("battery", vec!["timer", "metrics"]),
+        ("network", vec!["timer", "metrics"]),
         ("counter", vec!["fs:state"]),
         ("uptime", vec!["timer", "command:uptime"]),
         ("vault", vec!["secrets"]),

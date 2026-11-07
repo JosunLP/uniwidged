@@ -220,6 +220,9 @@ const ATTEMPTS: &[&str] = &[
     "secrets-key",
     "metrics",
     "metrics-memory",
+    "metrics-battery",
+    "metrics-disk",
+    "metrics-network",
     "command",
 ];
 
@@ -392,6 +395,12 @@ fn a_served_capability_returns_what_it_was_asked_for() {
     assert_eq!(outcome(&view, "measure"), "measured");
     assert_eq!(outcome(&view, "metrics"), "allowed");
     assert_eq!(outcome(&view, "metrics-memory"), "allowed");
+    // A machine with no battery is `ok(none)`, which is allowed too — this
+    // suite runs on desktops and CI runners as well as laptops, and a test
+    // that only passed on a laptop would be asserting the hardware.
+    assert_eq!(outcome(&view, "metrics-battery"), "allowed");
+    assert_eq!(outcome(&view, "metrics-disk"), "allowed");
+    assert_eq!(outcome(&view, "metrics-network"), "allowed");
     // Asynchronous by design: the first view can only report that the request
     // was *started*. The next test watches it finish.
     assert_eq!(outcome(&view, "command"), "started");
@@ -872,6 +881,14 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
         answer == "allowed" || answer == "unavailable",
         "memory_load answered {answer:?}"
     );
+    // And ABI 9's three, under the same grant and the same rule.
+    for row in ["metrics-battery", "metrics-disk", "metrics-network"] {
+        let answer = outcome(&view, row);
+        assert!(
+            answer == "allowed" || answer == "unavailable",
+            "{row} answered {answer:?}"
+        );
+    }
     assert!(
         took < Duration::from_millis(100),
         "reading a counter took {took:?}; a host function may not block"
@@ -880,13 +897,14 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
 
 #[test]
 fn the_abi_version_is_checked_before_anything_else_runs() {
-    // The ABI has moved six times while the framework was pre-release:
+    // The ABI has moved eight times while the framework was pre-release:
     // `read-file` answering `ok(none)`, `measure-text` taking a role rather
     // than a `u8`, one asynchronous mechanism replacing one per capability,
     // `get-secret` answering `ok(none)` — the first of those made again, in
     // the one other place where absence was being reported as an error —
     // `setting`, which is a widget reading its own configuration, and a
-    // `sparkline` variant in `content` beside `memory-load`. The check is
+    // `sparkline` variant in `content` beside `memory-load`, a way to hand
+    // the host a picture, and three more machine counters. The check is
     // what makes all of that safe: a widget built against an older world is
     // refused at instantiation, in a sentence naming both numbers, rather than
     // failing somewhere confusing later.
@@ -898,7 +916,7 @@ fn the_abi_version_is_checked_before_anything_else_runs() {
     runtime
         .instantiate(&component, manifest, Policy::deny_all(), Services::none())
         .expect("a widget built from this tree speaks this ABI");
-    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 8);
+    assert_eq!(uniwidged_runtime::manifest::ABI_VERSION, 9);
 }
 
 #[test]
