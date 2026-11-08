@@ -159,6 +159,17 @@ model.
 > and never mirrors it, and the conformance widget registers one and offers the
 > host bytes that are not a PNG, so both answers are measured. ABI 8.
 >
+> **And the rest of the machine.** `metrics` now answers for the battery, the
+> disk and the network as well as the CPU and memory — still one grant, because
+> "this widget reads how the machine is doing" is still one sentence. A desktop
+> with no battery is `Ok(None)` rather than an error, because that is its
+> normal case; the disk is counted the way `df` counts it, the
+> administrator's reserve included, so the meter is full at the moment writes
+> start failing; the network is a rate sampled the way the CPU is, so it never
+> blocks. Two new reference widgets show the two shapes the old ones did not —
+> nothing to measure, and a rate a chart has to be scaled for — and `uniwidged
+> doctor` says what each counter answers on the machine it runs on. ABI 9.
+>
 > **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
 > surface on the bottom layer; an X11 session gets a 32-bit
 > `_NET_WM_STATE_BELOW` window; the binary picks at start-up and says which. A
@@ -237,8 +248,10 @@ That is a working widget on your desktop. [**The authoring
 guide**](docs/writing-a-widget.md) is the rest of it, [**the API
 reference**](docs/api-reference.md) is every function and limit on one page, and
 [`widgets/clock`](widgets/clock), [`widgets/system-load`](widgets/system-load),
+[`widgets/battery`](widgets/battery), [`widgets/network`](widgets/network),
 [`widgets/counter`](widgets/counter), [`widgets/uptime`](widgets/uptime) and
-[`widgets/vault`](widgets/vault) are five worked examples, one per capability.
+[`widgets/vault`](widgets/vault) are seven worked examples, one per capability —
+and, for `metrics`, one per kind of answer it gives.
 
 You describe; the host decides what it looks like. That is what makes a screen
 full of widgets by different authors look like one product.
@@ -345,6 +358,8 @@ crates/
 wit/uniwidged.wit      the host/guest contract
 widgets/clock          the reference widget for `locale`
 widgets/system-load    the reference widget for `metrics`, and for settings
+widgets/battery        a battery meter, and the answer "there is none"
+widgets/network        a rate, scaled for a chart that takes fractions
 widgets/counter        the reference widget for `fs`, and a restart it survives
 widgets/uptime         the reference widget for `command`, and the async shape
 widgets/vault          the reference widget for `secrets`, and a credential

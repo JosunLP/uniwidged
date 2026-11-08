@@ -194,6 +194,21 @@ impl Widget for Conformance {
                 outcome: describe(cx.memory_load()),
             },
             Attempt {
+                // ABI 9's three, each its own row for the same reason. A
+                // machine without a battery answers `ok(none)`, which is
+                // still "allowed": absence is an answer, not a refusal.
+                name: "metrics-battery",
+                outcome: describe(cx.battery()),
+            },
+            Attempt {
+                name: "metrics-disk",
+                outcome: describe(cx.disk_load()),
+            },
+            Attempt {
+                name: "metrics-network",
+                outcome: describe(cx.network_throughput()),
+            },
+            Attempt {
                 name: "settings-values",
                 outcome: setting_values(&read_settings),
             },

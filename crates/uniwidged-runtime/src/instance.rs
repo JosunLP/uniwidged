@@ -607,6 +607,43 @@ impl uniwidged::widget::host::Host for State {
         self.counters()?.memory_load().map_err(Denied::Unavailable)
     }
 
+    fn battery(&mut self) -> Result<Option<wit_host::BatteryStatus>, Denied> {
+        // Still `metrics`. A battery is how the machine is doing, which is the
+        // sentence the user approved; a separate grant would be a second line
+        // in the approval prompt that says the same thing.
+        self.check(Request::Metrics)?;
+        let battery = self.counters()?.battery().map_err(Denied::Unavailable)?;
+        Ok(battery.map(|battery| {
+            use crate::machine::PowerState;
+            wit_host::BatteryStatus {
+                charge: battery.charge,
+                state: match battery.state {
+                    PowerState::Charging => wit_host::PowerState::Charging,
+                    PowerState::Discharging => wit_host::PowerState::Discharging,
+                    PowerState::Idle => wit_host::PowerState::Idle,
+                },
+                minutes_left: battery.minutes_left,
+            }
+        }))
+    }
+
+    fn disk_load(&mut self) -> Result<f32, Denied> {
+        self.check(Request::Metrics)?;
+        self.counters()?.disk_load().map_err(Denied::Unavailable)
+    }
+
+    fn network_throughput(&mut self) -> Result<wit_host::Throughput, Denied> {
+        self.check(Request::Metrics)?;
+        let rate = self
+            .counters()?
+            .network_throughput()
+            .map_err(Denied::Unavailable)?;
+        Ok(wit_host::Throughput {
+            received: rate.received,
+            sent: rate.sent,
+        })
+    }
+
     fn register_image(&mut self, png: Vec<u8>) -> Result<u32, Denied> {
         // No `check`: nothing here reaches outside the sandbox, and what is
         // bounded is the host's memory rather than the user's consent. See

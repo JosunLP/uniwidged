@@ -54,18 +54,24 @@ pub mod prelude;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
-pub use host::{CommandOutput, Cx, Denied, HttpResponse, SettingValue, TaskResult};
+pub use host::{
+    Battery, CommandOutput, Cx, Denied, HttpResponse, PowerState, SettingValue, TaskResult,
+    Throughput,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod stub;
 #[cfg(not(target_arch = "wasm32"))]
-pub use stub::{CommandOutput, Cx, Denied, HttpResponse, SettingValue, TaskResult};
+pub use stub::{
+    Battery, CommandOutput, Cx, Denied, HttpResponse, PowerState, SettingValue, TaskResult,
+    Throughput,
+};
 
 use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
 /// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 /// Something that happened to your widget.
 #[derive(Debug, Clone, PartialEq, Eq)]

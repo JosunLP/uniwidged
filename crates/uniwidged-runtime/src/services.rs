@@ -683,6 +683,10 @@ fn wait_with_timeout(
 /// noise rather than a measurement.
 pub struct Counters {
     last: Mutex<Option<Sample>>,
+    /// The network's own sampler, which keeps its own window: a widget asking
+    /// for the CPU must not shorten the window the network rate is measured
+    /// over, or the other way round.
+    network: crate::machine::Network,
 }
 
 /// The shortest window worth dividing by.
@@ -712,6 +716,7 @@ impl Counters {
     pub fn new() -> Self {
         Self {
             last: Mutex::new(None),
+            network: crate::machine::Network::new(),
         }
     }
 
@@ -825,6 +830,25 @@ impl Counters {
             return Err("this machine reports no memory at all".into());
         }
         Ok((used as f32 / total as f32).clamp(0.0, 1.0))
+    }
+}
+
+impl Counters {
+    /// The machine's battery, or `None` for a machine without one. See
+    /// [`crate::machine::battery`].
+    pub fn battery(&self) -> Result<Option<crate::machine::Battery>, String> {
+        crate::machine::battery()
+    }
+
+    /// How full the disk holding the user's home directory is. See
+    /// [`crate::machine::disk_load`].
+    pub fn disk_load(&self) -> Result<f32, String> {
+        crate::machine::disk_load()
+    }
+
+    /// Bytes per second since the last call. See [`crate::machine::Network`].
+    pub fn network_throughput(&self) -> Result<crate::machine::Throughput, String> {
+        self.network.throughput()
     }
 }
 

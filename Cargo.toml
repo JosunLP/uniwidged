@@ -16,7 +16,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+# 1.95 because the Wasmtime 48.x releases that fix its 2026 security advisories
+# (see `cargo deny`) need it, and this process runs other people's code.
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/j-pfalzgraf/uniwidged"
 authors = ["uniwidged contributors"]
@@ -59,12 +61,12 @@ raw-window-handle = "0.6.2"
 x11rb = { version = "0.14", features = ["allow-unsafe-code", "randr"] }
 
 # --- WASM guests ----------------------------------------------------------
-wasmtime = { version = "48.0.1", default-features = false, features = [
+wasmtime = { version = "48.0.8", default-features = false, features = [
     "component-model",
     "cranelift",
     "runtime",
 ] }
-wasmtime-wasi = "48.0.1"
+wasmtime-wasi = "48.0.8"
 wit-bindgen = "0.61.1"
 
 # --- HTTPS ----------------------------------------------------------------

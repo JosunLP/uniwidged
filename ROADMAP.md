@@ -1477,12 +1477,64 @@ The conformance widget registers its four pixels in `start`, offers the host
 bytes that are not a PNG, and the test reads the decoded pixels back off the
 instance in the order the file holds them.
 
+### The rest of the machine — ABI 9 — **done, 2026-11-07**
+
+`metrics` answered two questions, and a person glancing at a desktop asks five:
+how busy, how full, how much memory, how much battery, how much network.
+`battery`, `disk-load` and `network-throughput` join `cpu-load` and
+`memory-load` under the one grant, because the sentence a user approves —
+"this widget reads how the machine is doing" — has not changed. Each is a small
+parser of a kernel file in `crates/uniwidged-runtime/src/machine.rs`, and the
+parsers take a directory or a string so the tests can hand them a laptop, a
+desktop and a server without owning any of the three.
+
+The decisions worth writing down:
+
+* **No battery is `ok(none)`.** The rule `read-file` and `get-secret` learned in
+  ABI 2 and ABI 5, applied before anybody had to learn it a third time: a
+  desktop's normal case is not a failure, and a widget made to tell "this
+  machine runs on mains" from "this host is broken" by reading an error string
+  would get it wrong.
+* **Three power states, not five.** "Full", "Not charging" and the "Unknown"
+  some firmware reports at a charge limit are one sentence to somebody looking
+  at a widget: plugged in, and not gaining.
+* **No estimate the kernel did not make.** `minutes-left` is `none` where there
+  is no rate to divide by, and past a day — the second after a cable moves,
+  some drivers report a few microwatts, and "4 000 hours left" is arithmetic,
+  not an estimate.
+* **Weighted, not averaged.** Two batteries are combined by capacity, and a
+  peripheral's (`scope = Device`: a mouse, a headset) is not the machine's.
+* **The disk the way `df` counts it.** The administrator's reserve is used,
+  because an ordinary user cannot write to it; `used / total` reads 95 % at
+  the moment writes start failing.
+* **The network sampled like the CPU.** A rate needs two samples, and the
+  second is taken at the next call rather than by sleeping, with its own
+  window so a widget reading the CPU does not shorten the network's. Loopback
+  is the machine talking to itself and is not counted; a total that went down
+  is an interface that went away, and a window of zero rather than an
+  underflow.
+
+Two reference widgets for the two shapes the others did not show. `battery` is
+what to draw when there is nothing to measure; `network` is a rate in a chart
+that takes fractions, scaled against the busiest moment with a floor so that
+keep-alives are not a mountain range, and with the scale written under it. Both
+are installed under exactly their manifests' grants in
+`crates/uniwidged-host/tests/reference_widgets.rs`, and the conformance widget
+has a row for each new function, so a host that serves one and forgets another
+fails a test rather than a sentence here.
+
+And `uniwidged doctor` now says what each counter answers on the machine it
+runs on — one line of the 1.0 criterion below, "`doctor` names the ones this
+machine will produce", for the capability with the most of them.
+
 ### Reference widgets, one per served capability
 
 | | |
 |---|---|
 | [`clock`](widgets/clock) | `locale` |
 | [`system-load`](widgets/system-load) | `metrics` |
+| [`battery`](widgets/battery) | `metrics`, with nothing to measure |
+| [`network`](widgets/network) | `metrics`, as a rate |
 | [`counter`](widgets/counter) | `fs` |
 | [`uptime`](widgets/uptime) | `command` |
 | [`vault`](widgets/vault) | `secrets` |

@@ -312,15 +312,25 @@ impl Tasks {
         }
         // Claimed before the work is handed over, so that two widgets asking at
         // once cannot both see the last slot.
-        if self
-            .shared
-            .running
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
-                (running < MAX_CONCURRENT).then_some(running + 1)
-            })
-            .is_err()
-        {
-            return Err(StartError::DesktopBusy);
+        //
+        // An explicit compare-and-swap rather than `fetch_update`, which newer
+        // toolchains deprecate in favour of a `try_update` older ones do not
+        // have: the loop means the same thing on every compiler this builds on.
+        let running = &self.shared.running;
+        let mut current = running.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_CONCURRENT {
+                return Err(StartError::DesktopBusy);
+            }
+            match running.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
         }
 
         let token = self.next.fetch_add(1, Ordering::Relaxed);

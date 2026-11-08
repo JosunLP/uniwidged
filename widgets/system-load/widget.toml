@@ -3,7 +3,7 @@
 # system monitor should need and rather less than most of them take.
 name = "system-load"
 version = "1.0.0"
-description = "How busy this machine's processors are"
+description = "How busy this machine's processors, memory and disk are"
 capabilities = ["timer", "metrics"]
 memory-mb = 8
 

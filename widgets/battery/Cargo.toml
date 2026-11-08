@@ -1,0 +1,25 @@
+[package]
+name = "battery-widget"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "How much charge is left. The reference widget for `metrics` on a laptop."
+
+# Its own workspace: a widget is built for `wasm32-wasip2`, and a member of the
+# host's workspace would be built for the host's target by `cargo test`.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+uniwidged-guest = { path = "../../crates/uniwidged-guest" }
+uniwidged-core = { path = "../../crates/uniwidged-core" }
+uniwidged-view = { path = "../../crates/uniwidged-view" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

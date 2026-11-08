@@ -567,13 +567,16 @@ and then a restart costs nothing.
 
 ## 11. Worked examples
 
-Five reference widgets in this repository, one per capability, each small
+Seven reference widgets in this repository, one per capability (and three
+for `metrics`, one per kind of answer), each small
 enough to read in a sitting:
 
 | | |
 |---|---|
 | [`widgets/clock`](../widgets/clock) | `locale`. The smallest useful widget: asks for an instant, redraws once a minute. |
 | [`widgets/system-load`](../widgets/system-load) | `metrics` and **settings**. How often to sample, how to show a reading you could not take, and the two numbers a widget cannot pick for its user. |
+| [`widgets/battery`](../widgets/battery) | `metrics`, when there may be **nothing to measure**. A desktop has no battery, and `Ok(None)` is "on mains power", not an empty meter — and an estimate the host does not have is not one the widget invents. |
+| [`widgets/network`](../widgets/network) | `metrics` for a **rate**. A sparkline takes fractions and bytes per second are not one: scale against the busiest moment, with a floor, and say what the top of the chart means. |
 | [`widgets/counter`](../widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
 | [`widgets/uptime`](../widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
 | [`widgets/vault`](../widgets/vault) | `secrets`. Keeping a credential, and keeping it out of the view. |

@@ -1,0 +1,27 @@
+# A battery meter. It asks for a schedule and the machine's counters — the same
+# two lines as `system-load` — because a battery is how the machine is doing,
+# and that is the sentence the user already approved for a CPU meter.
+name = "battery"
+version = "1.0.0"
+description = "How much charge is left, and how long it will last"
+capabilities = ["timer", "metrics"]
+memory-mb = 8
+
+# Where the meter turns amber and where it turns red. Somebody who never leaves
+# their desk wants to hear about it at 10 %; somebody on a train wants to hear
+# at 30 %, while there is still a socket to look for.
+[[setting]]
+key = "low-at"
+label = "Low below"
+type = "number"
+default = 0.2
+min = 0.0
+max = 1.0
+
+[[setting]]
+key = "critical-at"
+label = "Critical below"
+type = "number"
+default = 0.1
+min = 0.0
+max = 1.0
