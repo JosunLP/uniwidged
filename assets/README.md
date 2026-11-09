@@ -31,6 +31,9 @@ which is the thing this project exists to do well.
 ```sh
 node assets/render.js assets   # needs Playwright with Chromium
 cp assets/*.svg docs/public/
+cp assets/logo-512.png docs/public/logo-512.png
+cp assets/logo-180.png docs/public/apple-touch-icon.png
+cp assets/social-preview.png docs/public/og-image.png
 ```
 
 The marks are licensed like the code (MIT OR Apache-2.0). Please don't use them

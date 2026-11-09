@@ -76,7 +76,7 @@ fn main() -> ExitCode {
     let rest: Vec<String> = args.collect();
     // `<command> --help` anywhere on the line is a question about the command,
     // never an argument to it: no command here takes a value spelled that way.
-    let asks_for_help = rest.iter().any(|a| a == "--help" || a == "-h");
+    let asks_for_help = asks_for_help(&rest);
     let result = match command.as_deref() {
         Some(name) if asks_for_help && completions::COMMANDS.iter().any(|c| c.name == name) => {
             command_help(name)
@@ -179,11 +179,39 @@ const USAGE: &str = "uniwidged — a cross-platform desktop widget framework\n\n
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n  \
            uniwidged completions <shell>     a completion script for bash, zsh or fish\n  \
+           uniwidged help [command]          every command, or more about one\n  \
            uniwidged --version\n";
 
 fn print_usage() {
     println!("{USAGE}");
     println!("  `uniwidged help <command>` says more about one of them.\n");
+}
+
+/// Whether `-h` or `--help` appears as a flag of its own, rather than as the
+/// value of the flag before it — `--config -h` names a file called `-h`.
+///
+/// The flags that take no value are listed; every other flag takes one. A new
+/// switch missing from this list makes `--switch --help` read as a value, which
+/// is the harmless way round: the command runs and says what it thinks of it.
+fn asks_for_help(args: &[String]) -> bool {
+    const SWITCHES: &[&str] = &[
+        "--allow-unsigned",
+        "--purge",
+        "--names",
+        "--refresh",
+        "--offline",
+        "--check",
+        "--reset-all",
+        "-f",
+        "--follow",
+    ];
+    args.iter().enumerate().any(|(i, arg)| {
+        (arg == "--help" || arg == "-h")
+            && match i.checked_sub(1).map(|p| args[p].as_str()) {
+                Some(previous) if previous.starts_with('-') => SWITCHES.contains(&previous),
+                _ => true,
+            }
+    })
 }
 
 /// `uniwidged help <command>`, and `uniwidged <command> --help`.

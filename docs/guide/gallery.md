@@ -14,7 +14,8 @@ and the [API reference](../reference/api.md) cover them.
 ## Building one
 
 ```sh
-cd widgets/system-load
+git clone https://github.com/JosunLP/uniwidged   # if you have no checkout yet
+cd uniwidged/widgets/system-load
 cargo test                                     # natively — no WASM toolchain needed
 cargo build --release --target wasm32-wasip2
 uniwidged install target/wasm32-wasip2/release/system_load_widget.wasm --allow-unsigned

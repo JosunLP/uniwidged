@@ -1,30 +1,21 @@
 # Quick start
 
 Five minutes from nothing to your own widget on the desktop. You need
-`uniwidged` [installed](./installation.md) and, for step 3,
+`uniwidged` [installed](./installation.md) and
 `rustup target add wasm32-wasip2`.
 
-## 1. Start a desktop
+## 1. Install a widget
+
+Reference widgets live in the `widgets/` folder of the repository. If you
+installed a release package rather than building from source, get a checkout
+first:
 
 ```sh
-uniwidged run
+git clone https://github.com/JosunLP/uniwidged
+cd uniwidged
 ```
 
-The first line says which shell it got — `Wayland (wlr-layer-shell, bottom
-layer)` or `X11`. Nothing is installed yet, so nothing is drawn. Leave it
-running: every command below reaches a desktop that is already up, and you
-will see each change appear without restarting it.
-
-::: tip Running it in the background
-`uniwidged autostart enable` starts it with your session from now on.
-`uniwidged status` and `uniwidged log -f` tell you what it is doing when it has
-no terminal.
-:::
-
-## 2. Install a widget
-
-Reference widgets live in the repository's `widgets/` folder. Build the clock
-and install it:
+Then build the clock and install it:
 
 ```sh
 cd widgets/clock
@@ -33,9 +24,28 @@ uniwidged install target/wasm32-wasip2/release/clock_widget.wasm --allow-unsigne
 ```
 
 `install` finds the crate's `widget.toml`, prints **what the widget asks for** —
-here `timer` and `locale` — and records the grant. A clock appears on the
-desktop. To decline a capability, remove it from `granted` in the configuration
-file; the widget keeps working and is told `NotGranted` for that one.
+here `timer` and `locale` — and records the grant. To decline a capability,
+remove it from `granted` in the configuration file; the widget keeps working
+and is told `NotGranted` for that one.
+
+## 2. Start the desktop
+
+```sh
+uniwidged run
+```
+
+The first line says which shell it got — `Wayland (wlr-layer-shell, bottom
+layer)` or `X11` — and the clock appears. `run` stays in the foreground, so
+**open a second terminal** for everything below: each command reaches the
+desktop that is already up, and you will see every change appear without
+restarting it. (With nothing installed, `run` says so and exits — that is why
+the widget came first.)
+
+::: tip Running it in the background
+`uniwidged autostart enable` starts it with your session from now on.
+`uniwidged status` and `uniwidged log -f` tell you what it is doing when it has
+no terminal.
+:::
 
 ::: info Why `--allow-unsigned`?
 A widget you did not write must be signed by a key this machine trusts, and the

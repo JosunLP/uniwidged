@@ -31,8 +31,8 @@ its SHA-256 checksum in `SHA256SUMS`.
 ```sh [Debian / Ubuntu]
 base=https://github.com/JosunLP/uniwidged/releases/download/v1.0.0
 curl -LO "$base/uniwidged_1.0.0_amd64.deb" -LO "$base/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./uniwidged_1.0.0_amd64.deb
+sha256sum --ignore-missing -c SHA256SUMS && \
+  sudo apt install ./uniwidged_1.0.0_amd64.deb
 ```
 
 ```sh [Arch Linux]
@@ -94,14 +94,19 @@ The packages install these for you. From source:
 ::: code-group
 
 ```sh [bash]
+mkdir -p ~/.local/share/bash-completion/completions
 uniwidged completions bash > ~/.local/share/bash-completion/completions/uniwidged
 ```
 
 ```sh [zsh]
-uniwidged completions zsh > "${fpath[1]}/_uniwidged"
+mkdir -p ~/.zfunc
+uniwidged completions zsh > ~/.zfunc/_uniwidged
+# and in ~/.zshrc, before `compinit`:
+#   fpath=(~/.zfunc $fpath)
 ```
 
 ```sh [fish]
+mkdir -p ~/.config/fish/completions
 uniwidged completions fish > ~/.config/fish/completions/uniwidged.fish
 ```
 

@@ -505,7 +505,9 @@ uniwidged sign target/wasm32-wasip2/release/my_widget.wasm \
     --key ~/.uniwidged-signing-key                # each release
 ```
 
-That writes `my_widget.wasm.sig` beside the component. Ship both, and put your
+That writes `my_widget.wasm.sig` beside the component, and — when the manifest
+it signed was your crate's `widget.toml` — a copy of it as `my_widget.toml`, the
+exact bytes the signature covers. **Ship all three** side by side, and put your
 public key in your README. People install it with:
 
 ```sh

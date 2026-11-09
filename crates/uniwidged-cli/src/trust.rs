@@ -111,7 +111,22 @@ pub fn sign(args: &[String]) -> Result<(), String> {
         manifest_path.display()
     );
     println!("  wrote {}", out.display());
+
+    // What a user installs is three files side by side — the component, its
+    // manifest and the signature — and the signature only verifies against
+    // the manifest bytes it covered. When those came from the crate's
+    // `widget.toml`, put that exact text beside the component, so that what
+    // gets published is the triple that verifies rather than two of its three.
+    let beside = component.with_extension("toml");
+    let already_beside = beside
+        .canonicalize()
+        .is_ok_and(|b| manifest_path.canonicalize().is_ok_and(|m| m == b));
+    if !already_beside {
+        std::fs::write(&beside, &manifest).map_err(|e| format!("{}: {e}", beside.display()))?;
+        println!("  wrote {} (the manifest it covers)", beside.display());
+    }
     println!("  with  {}", key.public().to_hex());
+    println!("  publish all three: the .wasm, the .toml and the .sig, side by side");
     Ok(())
 }
 

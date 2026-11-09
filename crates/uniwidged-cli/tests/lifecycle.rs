@@ -218,6 +218,53 @@ fn an_author_signs_a_user_trusts_and_the_widget_installs() {
 }
 
 #[test]
+fn signing_a_fresh_build_puts_the_manifest_it_covered_beside_it() {
+    // `sign` finds the crate's `widget.toml`, as `install` does. A signature
+    // only verifies against the manifest bytes it covered, so the published
+    // set has to carry those bytes as `<component>.toml` — otherwise an author
+    // ships the .wasm and the .sig and nobody can install either.
+    let machine = Machine::new("sign-from-target");
+    let built = reference_widget(&machine.0);
+    let krate = machine.0.join("my-widget");
+    let release = krate.join("target/wasm32-wasip2/release");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::write(krate.join("Cargo.toml"), "").unwrap();
+    std::fs::rename(machine.0.join("clock.toml"), krate.join("widget.toml")).unwrap();
+    let component = release.join("clock.wasm");
+    std::fs::rename(&built, &component).unwrap();
+
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    let said = machine.ok(&[
+        "sign",
+        component.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert!(said.contains("publish all three"), "{said}");
+    assert_eq!(
+        std::fs::read(release.join("clock.toml")).unwrap(),
+        std::fs::read(krate.join("widget.toml")).unwrap(),
+        "the exact manifest the signature covers, beside the component"
+    );
+
+    // And the three files, moved anywhere together, install as signed.
+    let published = machine.0.join("published");
+    std::fs::create_dir_all(&published).unwrap();
+    for name in ["clock.wasm", "clock.toml", "clock.wasm.sig"] {
+        std::fs::copy(release.join(name), published.join(name)).unwrap();
+    }
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    let installed = machine.ok(&["install", published.join("clock.wasm").to_str().unwrap()]);
+    assert!(installed.contains("signed by jane"), "{installed}");
+}
+
+#[test]
 fn changing_the_manifest_after_signing_is_caught() {
     // **The reason a signature covers the manifest too.** Without it, this
     // widens what the widget may do while keeping a signature the user trusts —

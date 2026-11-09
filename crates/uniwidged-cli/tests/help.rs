@@ -52,6 +52,7 @@ fn every_command_answers_help_with_its_own_usage() {
         "doctor",
         "snapshot",
         "completions",
+        "help",
     ] {
         let (ok, said) = uniwidged(&["help", command]);
         assert!(ok, "`help {command}` failed: {said}");
@@ -86,4 +87,15 @@ fn help_for_something_that_is_not_a_command_says_so() {
     let (ok, said) = uniwidged(&["help", "frobnicate"]);
     assert!(!ok);
     assert!(said.contains("not a command"), "{said}");
+}
+
+#[test]
+fn a_flag_value_that_looks_like_help_is_still_a_value() {
+    // `--config -h` names a file called `-h`; the command runs rather than
+    // printing its help and claiming success.
+    let (_, said) = uniwidged(&["list", "--config", "-h"]);
+    assert!(!said.starts_with("uniwidged list — "), "{said}");
+    // After a switch, though, it is a question.
+    let (ok, said) = uniwidged(&["list", "--names", "--help"]);
+    assert!(ok && said.starts_with("uniwidged list — "), "{said}");
 }

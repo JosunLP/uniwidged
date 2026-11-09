@@ -85,7 +85,13 @@ pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String
             .canonicalize()
             .map_err(|e| format!("{explicit}: {e}"));
     }
-    let (found, beside) = find_manifest(component);
+    // Absolute first: a bare `my_widget.wasm` run from `target/…/release/`
+    // has no ancestors to search, and `check` and `sign` are handed the path
+    // as typed.
+    let component = component
+        .canonicalize()
+        .unwrap_or_else(|_| component.to_path_buf());
+    let (found, beside) = find_manifest(&component);
     match found {
         Some(path) => {
             if path != beside {

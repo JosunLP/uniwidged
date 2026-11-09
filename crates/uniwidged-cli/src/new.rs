@@ -28,6 +28,21 @@ use uniwidged_runtime::manifest::Manifest;
 const REPOSITORY: &str = "https://github.com/JosunLP/uniwidged";
 const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
+/// Which revision of the SDK a scaffold outside a checkout depends on.
+///
+/// A release's tag, which the release workflow refuses to publish without —
+/// so every released binary names a tag that exists. A pre-release version
+/// (`1.1.0-dev`, `2.0.0-rc.1`) is a build from between releases, whose tag may
+/// not exist yet, and it follows `main` instead: newer than any tag, and
+/// never missing.
+fn git_reference() -> String {
+    if env!("CARGO_PKG_VERSION").contains('-') {
+        "branch = \"main\"".to_string()
+    } else {
+        format!("tag = \"{TAG}\"")
+    }
+}
+
 enum Sdk {
     /// A checkout, found by walking up from here.
     Checkout(PathBuf),
@@ -89,20 +104,23 @@ impl Sdk {
             // 1.3 asks for 1.3 rather than for whatever was typed here once —
             // and a tag rather than a branch, so the build is the same one
             // next year.
-            Sdk::Git => format!(
-                "# The SDK, at the release this scaffold was written by. A path to a\n\
-                 # checkout works too:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n\
-                 uniwidged-guest = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n\
-                 uniwidged-core = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n\
-                 uniwidged-view = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n"
-            ),
+            Sdk::Git => {
+                let reference = git_reference();
+                format!(
+                    "# The SDK, at the release this scaffold was written by. A path to a\n\
+                     # checkout works too:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n\
+                     uniwidged-guest = {{ git = \"{REPOSITORY}\", {reference} }}\n\
+                     uniwidged-core = {{ git = \"{REPOSITORY}\", {reference} }}\n\
+                     uniwidged-view = {{ git = \"{REPOSITORY}\", {reference} }}\n"
+                )
+            }
         }
     }
 
     fn describe(&self) -> String {
         match self {
             Sdk::Checkout(crates) => format!("the SDK at {}", crates.display()),
-            Sdk::Git => format!("the SDK from {REPOSITORY} at {TAG}"),
+            Sdk::Git => format!("the SDK from {REPOSITORY} ({})", git_reference()),
         }
     }
 }
