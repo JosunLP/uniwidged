@@ -38,9 +38,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GA_ROOT, GW_HWNDNEXT, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowTextW, SW_MAXIMIZE, SetCursorPos, SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    WindowFromPoint,
+    GetWindowTextW, SW_MAXIMIZE, SW_MINIMIZE, SW_SHOWNOACTIVATE, SetCursorPos, SetForegroundWindow,
+    ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WindowFromPoint,
 };
 
 fn required() -> bool {
@@ -243,8 +243,8 @@ fn a_widget_is_a_gadget_rather_than_a_window() {
     // see whether the click arrives and the foreground stays put.
     // SAFETY: as above.
     unsafe {
-        ShowWindow(app, 6 /* SW_MINIMIZE */);
-        ShowWindow(app, 4 /* SW_SHOWNOACTIVATE */);
+        ShowWindow(app, SW_MINIMIZE);
+        ShowWindow(app, SW_SHOWNOACTIVATE);
     }
     // SAFETY: a plain query.
     let foreground = unsafe { GetForegroundWindow() };

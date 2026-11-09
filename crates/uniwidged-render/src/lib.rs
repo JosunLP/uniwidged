@@ -79,14 +79,24 @@ pub enum RenderError {
     NoSuchSurface(SurfaceId),
 }
 
+/// What to do about a missing adapter, for the backend this platform uses.
+#[cfg(target_os = "windows")]
+const NO_ADAPTER_HINT: &str = "uniwidged draws through Direct3D 12, which Windows 10 and later \
+     provide (WARP, its software rasteriser, included); check `dxdiag`, and that \
+     `WGPU_BACKEND` is unset or names dx12";
+#[cfg(target_os = "macos")]
+const NO_ADAPTER_HINT: &str = "uniwidged draws through Metal, which every supported Mac has; \
+     check that `WGPU_BACKEND` is unset or names metal";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const NO_ADAPTER_HINT: &str =
+    "install a Vulkan driver (mesa-vulkan-drivers provides a software one)";
+
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RenderError::NoAdapter(why) => write!(
-                f,
-                "no GPU or software adapter: {why} — install a Vulkan driver \
-                 (mesa-vulkan-drivers provides a software one)"
-            ),
+            RenderError::NoAdapter(why) => {
+                write!(f, "no GPU or software adapter: {why} — {NO_ADAPTER_HINT}")
+            }
             RenderError::Device(why) => write!(f, "device: {why}"),
             RenderError::Surface(why) => write!(f, "surface: {why}"),
             RenderError::Vello(why) => write!(f, "vello: {why}"),

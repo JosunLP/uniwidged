@@ -60,14 +60,18 @@ curl -LO "$base/uniwidged-1.1.0-macos.zip" -LO "$base/SHA256SUMS"
 grep ' uniwidged-1.1.0-macos.zip$' SHA256SUMS | shasum -a 256 -c - && \
   mkdir -p ~/Applications && \
   ditto -x -k uniwidged-1.1.0-macos.zip ~/Applications
-# The command line, from the bundle:
+# The command line, from the bundle, on a PATH a default macOS shell lacks:
 mkdir -p ~/.local/bin
 ln -s ~/Applications/uniwidged.app/Contents/MacOS/uniwidged ~/.local/bin/uniwidged
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 ```
 
 `~/Applications` needs no administrator. To install for every account on the
 Mac, extract into `/Applications` instead — which an administrator account can
-write to.
+write to — and use `/Applications/uniwidged.app` wherever this page says
+`~/Applications/uniwidged.app`, in the link above and in the quarantine
+command below.
 
 ```sh [Arch Linux]
 # packaging/PKGBUILD builds the tagged release from source
@@ -89,7 +93,8 @@ the release workflow, and its notes say which. An **unsigned** Windows
 installer makes SmartScreen warn before it runs; a macOS bundle that is **not
 notarised** is refused by Gatekeeper when it came from a download — remove the
 quarantine flag with `xattr -d com.apple.quarantine ~/Applications/uniwidged.app`
-if you have checked `SHA256SUMS` and trust it.
+(or `/Applications/uniwidged.app`, wherever you extracted it) if you have
+checked `SHA256SUMS` and trust it.
 :::
 
 ## From source
