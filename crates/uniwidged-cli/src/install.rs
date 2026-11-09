@@ -184,8 +184,9 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
 /// `Cargo.toml` comes first, which makes the component part of *that* crate
 /// (staged inside somebody else's build directory, say) and not a build.
 /// In a workspace, whose members share one `target/`, the member that built
-/// the component is found by its artifact name; if no single member owns
-/// it, there is no answer, and `--manifest` has to say.
+/// the component is found by its artifact name, searching the whole
+/// workspace; if no single crate owns it, there is no answer, and
+/// `--manifest` has to say.
 ///
 /// `None`: not a build. `Some(None)`: a build with no manifest to be sure of.
 fn crate_of(component: &Path) -> Option<Option<PathBuf>> {
@@ -231,17 +232,23 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
             .or_else(|| package.map(|p| p.replace('-', "_")))
             .is_some_and(|name| name == artifact)
     };
+    // The whole workspace, however deep its members sit: a member missed
+    // would leave some other crate looking like the only owner. A workspace
+    // too large to search has no owner this can be sure of.
+    const MOST_DIRECTORIES: usize = 10_000;
     let mut owners = Vec::new();
-    let mut pending = vec![(krate.to_path_buf(), 0)];
-    while let Some((dir, depth)) = pending.pop() {
+    let mut pending = vec![krate.to_path_buf()];
+    let mut visited = 0;
+    while let Some(dir) = pending.pop() {
+        visited += 1;
+        if visited > MOST_DIRECTORIES {
+            return None;
+        }
         if let Some(table) = read(&dir)
             && builds(&table)
             && dir.join("widget.toml").is_file()
         {
             owners.push(dir.join("widget.toml"));
-        }
-        if depth == 3 {
-            continue;
         }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -250,7 +257,7 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
             let name = entry.file_name();
             let skipped = name == "target" || name.to_string_lossy().starts_with('.');
             if !skipped && entry.file_type().is_ok_and(|t| t.is_dir()) {
-                pending.push((entry.path(), depth + 1));
+                pending.push(entry.path());
             }
         }
     }
@@ -491,6 +498,15 @@ mod tests {
         assert_eq!(found("root_widget"), Some(space.join("widget.toml")));
         // Built by nobody it can name: no guess, so `--manifest` has to say.
         assert_eq!(found("nobody"), None);
+
+        // Two crates claiming one artifact name — the root, and a member far
+        // below it — is no single owner, however deep the member sits.
+        write(
+            space.join("a/b/c/d/deep/Cargo.toml"),
+            "[package]\nname = \"deep\"\n[lib]\nname = \"root_widget\"\n",
+        );
+        write(space.join("a/b/c/d/deep/widget.toml"), "");
+        assert_eq!(found("root_widget"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
