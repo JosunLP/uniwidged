@@ -26,9 +26,7 @@ pub fn check(args: &[String]) -> Result<(), String> {
         .filter(|a| !a.starts_with('-'))
         .ok_or("which widget? `uniwidged check <widget.wasm>`")?;
     let component = PathBuf::from(component);
-    let manifest_path = crate::flag(args, "--manifest")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| component.with_extension("toml"));
+    let manifest_path = crate::install::manifest_for(&component, args)?;
 
     let (bytes, manifest_text) = crate::trust::read_widget(&component, &manifest_path)?;
     let manifest = Manifest::parse(&manifest_text).map_err(|e| e.to_string())?;

@@ -534,3 +534,37 @@ fn a_version_that_cannot_be_ordered_is_refused_where_it_is_written() {
         Some(crate::version::Version::new(0, 2, 0))
     );
 }
+
+#[test]
+fn the_abi_check_is_a_range_with_the_one_point_oh_floor() {
+    // The 1.x promise in one assertion: what 1.0 shipped with keeps running.
+    assert_eq!(ABI_OLDEST, 9, "the floor moves only at 2.0");
+    assert!(abi_supported(ABI_OLDEST));
+    assert!(abi_supported(ABI_VERSION));
+    assert!(
+        !abi_supported(ABI_OLDEST - 1),
+        "a pre-1.0 widget is rebuilt"
+    );
+    assert!(
+        !abi_supported(ABI_VERSION + 1),
+        "a newer widget waits for a newer host"
+    );
+}
+
+#[test]
+fn the_two_ways_to_miss_the_range_say_two_different_things() {
+    use crate::instance::RuntimeError;
+    let old = RuntimeError::AbiMismatch {
+        widget: 8,
+        host: ABI_VERSION,
+    }
+    .to_string();
+    assert!(old.contains("rebuilding"), "{old}");
+    assert!(old.contains("ABI 8"), "{old}");
+    let new = RuntimeError::AbiMismatch {
+        widget: ABI_VERSION + 1,
+        host: ABI_VERSION,
+    }
+    .to_string();
+    assert!(new.contains("upgrading uniwidged"), "{new}");
+}

@@ -107,6 +107,36 @@ fn an_unsigned_widget_is_refused_and_the_message_says_both_ways_out() {
 }
 
 #[test]
+fn the_guides_first_install_works_straight_from_cargos_output() {
+    // `cargo build` writes the component under `target/` and no manifest
+    // beside it. The guide's next command is `uniwidged install` on exactly
+    // that path, and it used to be refused for a file nobody had told the
+    // author to copy.
+    let machine = Machine::new("from-target");
+    reference_widget(&machine.0);
+    let built = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../widgets/clock/target/wasm32-wasip2/release/clock_widget.wasm");
+    assert!(
+        !built.with_extension("toml").exists(),
+        "the premise: nothing is beside it"
+    );
+
+    let said = machine.ok(&["install", built.to_str().unwrap(), "--allow-unsigned"]);
+    assert!(
+        said.contains("manifest:"),
+        "it should say which manifest it used: {said}"
+    );
+    assert!(said.contains("widget.toml"), "{said}");
+    assert!(machine.ok(&["list"]).contains("clock"));
+
+    let config = std::fs::read_to_string(machine.config()).unwrap();
+    assert!(
+        config.contains("manifest = "),
+        "and remember it, since the desktop would not look there: {config}"
+    );
+}
+
+#[test]
 fn a_developer_can_install_their_own_build_by_saying_so() {
     let machine = Machine::new("allow-unsigned");
     let component = reference_widget(&machine.0);

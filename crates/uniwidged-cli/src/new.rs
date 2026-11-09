@@ -9,24 +9,30 @@
 //!
 //! ## The SDK dependency
 //!
-//! `uniwidged-guest` is not on crates.io yet, so a generated widget has to
-//! reach it by path. When `new` is run inside a checkout it finds one and says
-//! so; when it is run anywhere else it writes a version requirement and a
-//! comment explaining what to do until that resolves, and `--sdk <path>`
-//! settles it explicitly. Guessing silently — or writing a path that does not
-//! exist — would produce a project whose first `cargo build` fails for a
-//! reason nothing in it explains.
+//! `uniwidged-guest` is not on crates.io, so a generated widget reaches it
+//! either by path or by git. When `new` is run inside a checkout it finds one
+//! and uses it by path, which is what somebody working on uniwidged itself
+//! wants; when it is run anywhere else it depends on this repository **at the
+//! tag of the binary that wrote it**, so a scaffold written by 1.0.0 builds
+//! against the 1.0.0 SDK on any machine with network access and nothing else
+//! arranged. `--sdk <path>` settles it explicitly. Guessing silently — or
+//! writing a path that does not exist — would produce a project whose first
+//! `cargo build` fails for a reason nothing in it explains.
 
 use std::path::{Path, PathBuf};
 
 use uniwidged_runtime::manifest::Manifest;
 
 /// Where a generated widget gets the SDK from.
+/// Where the SDK is published from, and the tag this binary was released as.
+const REPOSITORY: &str = "https://github.com/JosunLP/uniwidged";
+const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
 enum Sdk {
     /// A checkout, found by walking up from here.
     Checkout(PathBuf),
-    /// Nowhere yet. The generated manifest says so in a comment.
-    Unpublished,
+    /// No checkout nearby: this repository, by git, at this binary's tag.
+    Git,
 }
 
 impl Sdk {
@@ -58,7 +64,7 @@ impl Sdk {
                 }
             }
         }
-        Sdk::Unpublished
+        Sdk::Git
     }
 
     /// The `[dependencies]` block for a widget at `widget_dir`.
@@ -80,31 +86,23 @@ impl Sdk {
                 )
             }
             // The version this binary was built from, so a scaffold written by
-            // 0.3 asks for 0.3 rather than for whatever was typed here once.
-            Sdk::Unpublished => concat!(
-                "# uniwidged is not on crates.io yet. Until it is, point these at a\n",
-                "# checkout:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n",
-                "uniwidged-guest = \"",
-                env!("CARGO_PKG_VERSION"),
-                "\"\nuniwidged-core = \"",
-                env!("CARGO_PKG_VERSION"),
-                "\"\nuniwidged-view = \"",
-                env!("CARGO_PKG_VERSION"),
-                "\"\n",
-            )
-            .to_string(),
+            // 1.3 asks for 1.3 rather than for whatever was typed here once —
+            // and a tag rather than a branch, so the build is the same one
+            // next year.
+            Sdk::Git => format!(
+                "# The SDK, at the release this scaffold was written by. A path to a\n\
+                 # checkout works too:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n\
+                 uniwidged-guest = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n\
+                 uniwidged-core = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n\
+                 uniwidged-view = {{ git = \"{REPOSITORY}\", tag = \"{TAG}\" }}\n"
+            ),
         }
     }
 
     fn describe(&self) -> String {
         match self {
             Sdk::Checkout(crates) => format!("the SDK at {}", crates.display()),
-            Sdk::Unpublished => concat!(
-                "uniwidged-guest ",
-                env!("CARGO_PKG_VERSION"),
-                " — unpublished, so edit Cargo.toml to point at a checkout"
-            )
-            .to_string(),
+            Sdk::Git => format!("the SDK from {REPOSITORY} at {TAG}"),
         }
     }
 }
@@ -451,7 +449,7 @@ fn readme(name: &str) -> String {
     let underscored = name.replace('-', "_");
     format!(
         "# {name}\n\n\
-         A [uniwidged](https://github.com/j-pfalzgraf/uniwidged) widget.\n\n\
+         A [uniwidged](https://github.com/JosunLP/uniwidged) widget.\n\n\
          ```sh\n\
          cargo test                                    # its logic, natively\n\
          cargo build --release --target wasm32-wasip2  # the component\n\

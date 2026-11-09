@@ -2,8 +2,17 @@
 //
 // Vendored rather than referenced: the component model is still moving, and a
 // widget built last month must keep working. `abi-version` is checked at
-// instantiation and refused on a mismatch, rather than being allowed to fail
-// confusingly later.
+// instantiation and refused outside the range the host runs, rather than being
+// allowed to fail confusingly later.
+//
+// ## Stability
+//
+// ABI 9 is the interface uniwidged 1.0 shipped with, and it is frozen for 1.x:
+// nothing here is removed or changed, and a widget built against ABI 9 runs on
+// every 1.x host. The interface may grow — a new host function is an import an
+// older widget simply does not have — and every addition raises the number, so
+// that a widget using one is refused by an older host in a sentence naming
+// both numbers. A change that is not an addition is 2.0.
 
 package uniwidged:widget@0.1.0;
 
@@ -368,8 +377,9 @@ interface host {
 interface guest {
     use types.{tree, wake, event};
 
-    /// Bumped when this world changes incompatibly. Checked at instantiation,
-    /// before anything else is called.
+    /// Bumped whenever this world changes. Checked at instantiation, before
+    /// anything else is called: the host runs widgets from ABI 9 — the 1.0
+    /// interface — up to its own number.
     ///
     /// 1 → 2: `read-file` answers `ok(none)` for a file that is not there,
     /// rather than a denial a widget had to read an error string to interpret.

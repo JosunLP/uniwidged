@@ -74,7 +74,14 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let command = args.next();
     let rest: Vec<String> = args.collect();
+    // `<command> --help` anywhere on the line is a question about the command,
+    // never an argument to it: no command here takes a value spelled that way.
+    let asks_for_help = rest.iter().any(|a| a == "--help" || a == "-h");
     let result = match command.as_deref() {
+        Some(name) if asks_for_help && completions::COMMANDS.iter().any(|c| c.name == name) => {
+            command_help(name)
+        }
+        Some("help") if !rest.is_empty() => command_help(&rest[0]),
         Some("run") => command_run(&rest),
         Some("new") => new::create(&rest),
         Some("check") => check::check(&rest),
@@ -107,11 +114,21 @@ fn main() -> ExitCode {
             // The ABI version too, because "which uniwidged is this" is nearly
             // always asked about a widget that will not load, and the answer is
             // the number in its manifest against the number here.
-            println!(
-                "uniwidged {} (widget ABI {})",
-                env!("CARGO_PKG_VERSION"),
-                uniwidged_runtime::ABI_VERSION
+            let (oldest, newest) = (
+                uniwidged_runtime::ABI_OLDEST,
+                uniwidged_runtime::ABI_VERSION,
             );
+            if oldest == newest {
+                println!(
+                    "uniwidged {} (widget ABI {newest})",
+                    env!("CARGO_PKG_VERSION")
+                );
+            } else {
+                println!(
+                    "uniwidged {} (widget ABI {newest}, runs {oldest} to {newest})",
+                    env!("CARGO_PKG_VERSION")
+                );
+            }
             Ok(())
         }
         Some("--help" | "-h" | "help") | None => {
@@ -129,20 +146,21 @@ fn main() -> ExitCode {
     }
 }
 
-fn print_usage() {
-    println!(
-        "uniwidged — a cross-platform desktop widget framework\n\n\
+/// The whole command line, one usage per line. `help <command>` reads its
+/// lines out of this, so a command's usage is written once.
+const USAGE: &str = "uniwidged — a cross-platform desktop widget framework\n\n\
          USAGE:\n  \
            uniwidged run [--config PATH]     start the desktop in the foreground\n  \
            uniwidged new <name> [--dir D] [--sdk P] [--capability C]…\n  \
-           uniwidged check <widget.wasm>     is this a widget, and who signed it?\n  \
+           uniwidged check <widget.wasm> [--manifest F]  is this a widget, and who signed it?\n  \
            uniwidged enable|disable <name>   turn one on or off\n  \
            uniwidged remove <name> [--purge] uninstall it\n  \
            uniwidged keygen [--out F]        a signing key of your own\n  \
-           uniwidged sign <w.wasm> --key F   sign a widget you publish\n  \
+           uniwidged sign <w.wasm> --key F [--manifest F]  sign a widget you publish\n  \
            uniwidged trust <key> [--name N]  accept that key's signatures\n  \
-           uniwidged untrust <key> | trusted\n  \
-           uniwidged install <widget.wasm> [--allow-unsigned]\n  \
+           uniwidged untrust <key>           stop accepting that key\n  \
+           uniwidged trusted                 the keys this machine accepts\n  \
+           uniwidged install <widget.wasm> [--manifest F] [--allow-unsigned]\n  \
            uniwidged registry add <url> --key <key> [--name N]\n  \
            uniwidged registry remove <name> | list\n  \
            uniwidged registry publish --key F --base-url U <w.wasm>…\n  \
@@ -161,8 +179,47 @@ fn print_usage() {
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n  \
            uniwidged completions <shell>     a completion script for bash, zsh or fish\n  \
-           uniwidged --version\n"
+           uniwidged --version\n";
+
+fn print_usage() {
+    println!("{USAGE}");
+    println!("  `uniwidged help <command>` says more about one of them.\n");
+}
+
+/// `uniwidged help <command>`, and `uniwidged <command> --help`.
+///
+/// The summary and flags come from the completion table and the usage from
+/// [`USAGE`], so nothing here is a third copy of either that could drift.
+fn command_help(name: &str) -> Result<(), String> {
+    let command = completions::COMMANDS
+        .iter()
+        .find(|c| c.name == name)
+        .ok_or_else(|| format!("`{name}` is not a command. Try `uniwidged help`."))?;
+    println!("uniwidged {} — {}\n", command.name, command.summary);
+    let usage: Vec<&str> = USAGE
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.strip_prefix("uniwidged ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .is_some_and(|word| word.split('|').any(|w| w == name))
+        })
+        .collect();
+    if !usage.is_empty() {
+        println!("USAGE:");
+        for line in usage {
+            println!("  {line}");
+        }
+        println!();
+    }
+    if !command.flags.is_empty() {
+        println!("FLAGS:\n  {}  --config PATH\n", command.flags.join("  "));
+    }
+    println!(
+        "More in `man uniwidged`, and at\n  https://josunlp.github.io/uniwidged/reference/cli#{}",
+        command.name
     );
+    Ok(())
 }
 
 pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {

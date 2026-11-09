@@ -37,6 +37,30 @@ use crate::settings::{
 /// The ABI version this host speaks. See `wit/uniwidged.wit`.
 pub const ABI_VERSION: u32 = 9;
 
+/// The oldest ABI this host still runs.
+///
+/// **The 1.x promise.** ABI 9 is the interface uniwidged 1.0 shipped with, and
+/// it is the floor for every 1.x release: a widget built against it keeps
+/// running on every later 1.x host. The interface may grow — new host
+/// functions, which an older widget simply does not import — and each
+/// addition raises [`ABI_VERSION`] so that a widget *using* one is refused by
+/// an older host in a sentence rather than failing to link. Nothing raises
+/// this number before 2.0.
+///
+/// Before 1.0 the check was equality, because the interface moved eight times
+/// in four days and every move broke something. A range is what an interface
+/// that has stopped breaking can afford.
+pub const ABI_OLDEST: u32 = 9;
+
+// A floor above the ceiling would refuse every widget, including the ones this
+// very build produces. Caught by the compiler rather than by a user.
+const _: () = assert!(ABI_OLDEST <= ABI_VERSION);
+
+/// Whether this host runs a widget built against `abi`.
+pub fn abi_supported(abi: u32) -> bool {
+    (ABI_OLDEST..=ABI_VERSION).contains(&abi)
+}
+
 /// The most memory a widget may ask for.
 ///
 /// Not a technical limit — a cap on what can be *asked for* without a
@@ -495,7 +519,7 @@ pub(crate) fn describe(capability: &Capability) -> String {
         Capability::Locale => "format dates and times for your locale".to_string(),
         Capability::Measure => "measure text".to_string(),
         Capability::Command(name) => format!("run the `{name}` command"),
-        Capability::Metrics => "read CPU, memory and battery counters".to_string(),
+        Capability::Metrics => "read CPU, memory, disk, battery and network counters".to_string(),
     }
 }
 

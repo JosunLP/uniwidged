@@ -43,7 +43,7 @@ pub enum Grant {
     AsBefore(Vec<String>),
 }
 
-/// `uniwidged install <widget.wasm> [--allow-unsigned]`
+/// `uniwidged install <widget.wasm> [--manifest F] [--allow-unsigned]`
 pub fn command(args: &[String]) -> Result<(), String> {
     let component = args
         .first()
@@ -52,7 +52,7 @@ pub fn command(args: &[String]) -> Result<(), String> {
     let component = PathBuf::from(component)
         .canonicalize()
         .map_err(|e| format!("{component}: {e}"))?;
-    let manifest_path = component.with_extension("toml");
+    let manifest_path = manifest_for(&component, args)?;
     let allow_unsigned = args.iter().any(|a| a == "--allow-unsigned");
     install(
         &component,
@@ -61,6 +61,59 @@ pub fn command(args: &[String]) -> Result<(), String> {
         Grant::Everything,
     )?;
     Ok(())
+}
+
+/// Where the manifest for `component` is.
+///
+/// `--manifest` if it was given; otherwise `<component>.toml` beside it, which
+/// is what a registry download and a published widget look like; otherwise the
+/// `widget.toml` of the crate the component was built in.
+///
+/// The last one is the case the authoring guide's first commands produce:
+/// `cargo build` writes `target/wasm32-wasip2/release/my_widget.wasm` and puts
+/// no manifest beside it. Refusing that — the very first thing somebody runs
+/// after `uniwidged new` — sent every new author to copy a file by hand for a
+/// reason nothing explained. The search stops at the crate root, the first
+/// directory above with a `Cargo.toml` in it, so it can never wander off and
+/// find some other project's manifest. Whatever it finds is said out loud.
+pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String> {
+    if let Some(explicit) = crate::flag(args, "--manifest") {
+        return Ok(PathBuf::from(explicit));
+    }
+    let (found, beside) = find_manifest(component);
+    match found {
+        Some(path) => {
+            if path != beside {
+                println!("  manifest: {}", path.display());
+            }
+            Ok(path)
+        }
+        None => Err(format!(
+            "no manifest for {}: looked for {} beside it, and for the widget.toml of \
+             the crate it was built in.\n  `--manifest <path>` names one.",
+            component.display(),
+            beside.display()
+        )),
+    }
+}
+
+/// The search behind [`manifest_for`], without the printing. Answers what was
+/// found, and the path beside the component that was tried first.
+pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
+    let beside = component.with_extension("toml");
+    if beside.is_file() {
+        return (Some(beside.clone()), beside);
+    }
+    for dir in component.ancestors().skip(1) {
+        let candidate = dir.join("widget.toml");
+        if candidate.is_file() {
+            return (Some(candidate), beside);
+        }
+        if dir.join("Cargo.toml").is_file() {
+            break;
+        }
+    }
+    (None, beside)
 }
 
 /// Installs a widget that is already on disk, and reports what was recorded.
@@ -151,6 +204,11 @@ pub fn install(
     config.widgets.retain(|w| w.name != name);
     let mut entry = WidgetConfig::granting_all(&name, component.to_path_buf(), &manifest);
     entry.granted = granted;
+    // Recorded only when it is not where the configuration would look anyway,
+    // so the common case stays one line shorter in a file people read.
+    if manifest_path != component.with_extension("toml") {
+        entry.manifest = Some(manifest_path.to_path_buf());
+    }
     if let Some(previous) = previous {
         entry.placement = previous.placement;
         entry.settings = previous.settings;
@@ -219,5 +277,39 @@ pub fn describe(manifest: &Manifest, signed_by: Option<&str>) {
                 .join(", ")
         );
         println!("  `uniwidged configure {}`\n", manifest.name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_manifest;
+
+    #[test]
+    fn a_cargo_build_finds_the_crates_own_manifest_and_stops_at_its_root() {
+        let root = std::env::temp_dir().join(format!("uniwidged-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let krate = root.join("project/hello");
+        let release = krate.join("target/wasm32-wasip2/release");
+        std::fs::create_dir_all(&release).unwrap();
+        std::fs::write(krate.join("Cargo.toml"), "").unwrap();
+        let component = release.join("hello.wasm");
+        std::fs::write(&component, b"").unwrap();
+
+        // Nothing yet: and an unrelated manifest *above* the crate root is
+        // not somebody else's widget to borrow.
+        std::fs::write(root.join("project/widget.toml"), "").unwrap();
+        assert_eq!(find_manifest(&component).0, None);
+
+        std::fs::write(krate.join("widget.toml"), "").unwrap();
+        assert_eq!(find_manifest(&component).0, Some(krate.join("widget.toml")));
+
+        // One beside the component wins: that is what was published.
+        std::fs::write(release.join("hello.toml"), "").unwrap();
+        assert_eq!(
+            find_manifest(&component).0,
+            Some(release.join("hello.toml"))
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

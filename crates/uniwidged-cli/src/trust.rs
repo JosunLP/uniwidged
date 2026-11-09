@@ -93,7 +93,7 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     let key_text = std::fs::read_to_string(&key_path).map_err(|e| format!("{key_path}: {e}"))?;
     let key = SecretKey::from_hex(key_text.trim()).map_err(|e| format!("{key_path}: {e}"))?;
 
-    let manifest_path = component.with_extension("toml");
+    let manifest_path = crate::install::manifest_for(&component, args)?;
     let (bytes, manifest) = read_widget(&component, &manifest_path)?;
 
     // Both, always. A signature over the component alone lets somebody widen
