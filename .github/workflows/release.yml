@@ -37,7 +37,8 @@ jobs:
             echo "the tag says $tag and Cargo.toml says $version" >&2
             exit 1
           }
-          grep -q "^## $version " CHANGELOG.md || {
+          # Literally: a version is not a pattern, and `1.0.0` must not match `1x0x0`.
+          awk -v h="## $version " 'index($0, h) == 1 { found = 1 } END { exit !found }' CHANGELOG.md || {
             echo "CHANGELOG.md has no entry for $version" >&2
             exit 1
           }
@@ -61,7 +62,7 @@ jobs:
           set -eu
           version=${GITHUB_REF_NAME#v}
           awk -v v="$version" '
-            $0 ~ "^## " v " " { on = 1; next }
+            index($0, "## " v " ") == 1 { on = 1; next }
             on && /^## / { exit }
             on { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"

@@ -137,6 +137,38 @@ fn the_guides_first_install_works_straight_from_cargos_output() {
 }
 
 #[test]
+fn a_relative_manifest_is_recorded_as_where_it_actually_is() {
+    // The desktop reads the configuration from wherever it was started, so a
+    // path recorded as typed would name a different file — or none — there.
+    let machine = Machine::new("relative-manifest");
+    let component = reference_widget(&machine.0);
+    let elsewhere = machine.0.join("manifests");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::rename(machine.0.join("clock.toml"), elsewhere.join("clock.toml")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uniwidged"))
+        .current_dir(&machine.0)
+        .args(["install", component.to_str().unwrap(), "--allow-unsigned"])
+        .args(["--manifest", "manifests/clock.toml"])
+        .env("UNIWIDGED_CONFIG", machine.config())
+        .output()
+        .expect("the CLI should be runnable");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(machine.config()).unwrap();
+    let recorded = elsewhere.join("clock.toml").canonicalize().unwrap();
+    assert!(
+        config.contains(&format!("manifest = \"{}\"", recorded.display())),
+        "it should record the absolute path, {}: {config}",
+        recorded.display()
+    );
+}
+
+#[test]
 fn a_developer_can_install_their_own_build_by_saying_so() {
     let machine = Machine::new("allow-unsigned");
     let component = reference_widget(&machine.0);

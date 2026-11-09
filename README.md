@@ -125,8 +125,10 @@ memory-mb = 8
 Off-target the whole thing still compiles and its tests still run, so a
 widget's logic can be tested without a WASM toolchain. The
 [**authoring guide**](https://josunlp.github.io/uniwidged/guide/writing-a-widget)
-is the rest; [`widgets/`](widgets) holds eight reference widgets, one per
-capability.
+is the rest; [`widgets/`](widgets) holds eight reference widgets covering
+`timer`, `locale`, `metrics`, `fs`, `command` and `secrets`. There is no worked
+example for `net`, `link` or `measure` yet — the guide and the API reference
+cover them.
 
 ## Capabilities
 
@@ -209,7 +211,7 @@ crates/
   uniwidged-host       the daemon: scheduler, configuration, supervision
   uniwidged-cli        `uniwidged run · status · log · new · install · …`
 wit/uniwidged.wit      the host/guest contract — frozen for 1.x
-widgets/               eight reference widgets, one per capability
+widgets/               eight reference widgets, and the test fixtures beside them
 docs/                  the documentation site (VitePress)
 assets/                the logo and brand assets
 packaging/             a .deb that CI builds and inspects, a PKGBUILD, the man page

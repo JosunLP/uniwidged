@@ -7,7 +7,12 @@ remembered.
 | | Location |
 |---|---|
 | Linux | `$XDG_CONFIG_HOME/uniwidged/`, else `~/.config/uniwidged/` |
-| Override | `UNIWIDGED_CONFIG=/path/to/config.toml` or `--config PATH` moves the whole directory to that file's parent |
+| Override | `UNIWIDGED_CONFIG=/path/to/config.toml` moves the whole directory to that file's parent — keys, data, keychain, log and the running desktop's state with it |
+
+`--config PATH`, which `run` and the commands that edit placements and
+settings accept, selects **only** the configuration file; everything else stays
+in the default directory. To keep a second desktop, or a test, entirely apart
+from yours, use `UNIWIDGED_CONFIG`.
 
 ```text
 ~/.config/uniwidged/
@@ -17,11 +22,20 @@ remembered.
 ├── widgets/<name>/      each widget's own data directory (fs: grants live here)
 ├── store/               components installed from a registry
 ├── registry-cache/      the last verified copy of each registry index
+├── keyring.enc          the `secrets` store, encrypted
+├── keyring.key          …and the key that opens it
 ├── uniwidged.log        what the desktop said (and .log.1, rotated)
-└── …                    the keychain store and the running desktop's state
+└── uniwidged.pid/.state the running desktop, while it runs
 ```
 
 All of it is plain text where it can be, and meant to be read.
+
+::: warning A backup of this directory contains your widgets' secrets
+`keyring.enc` and `keyring.key` sit side by side, so anybody who can read both
+can recover every credential a widget stored. Protect a backup of this
+directory like a password file, and leave both out of anything you share — a
+dotfiles repository included.
+:::
 
 ## `config.toml`
 
@@ -83,6 +97,6 @@ signature. Its format is in the [API reference](./api.md#the-manifest).
 
 | Variable | Effect |
 |---|---|
-| `UNIWIDGED_CONFIG` | Path to `config.toml`; everything else is kept beside it. Run two desktops side by side, or test without touching your own. |
+| `UNIWIDGED_CONFIG` | Path to `config.toml`; everything else is kept beside it. To run two desktops side by side, or test without touching your own, give each its own **directory** — two files in one directory share widget data and running state. |
 | `XDG_CONFIG_HOME` | The usual XDG base directory. |
 | `WGPU_BACKEND` | Force a wgpu backend (`vulkan`, `gl`) — occasionally useful on unusual drivers. |

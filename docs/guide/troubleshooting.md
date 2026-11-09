@@ -87,5 +87,6 @@ uniwidged before believing it. If a desktop was killed outright, the next
 ## Still stuck?
 
 Open an issue with the output of `uniwidged --version`, `uniwidged doctor` and
-the relevant part of `uniwidged log` —
+the relevant part of `uniwidged log` (with tokens, credentials and private URLs
+removed — issues are public) —
 [github.com/JosunLP/uniwidged/issues](https://github.com/JosunLP/uniwidged/issues).

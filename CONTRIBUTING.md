@@ -30,8 +30,9 @@ run what CI runs:
 
 ```sh
 sudo apt install xvfb sway x11-xserver-utils mesa-vulkan-drivers openssl
-UNIWIDGED_REQUIRE_X11=1 UNIWIDGED_REQUIRE_WAYLAND=1 UNIWIDGED_REQUIRE_NET=1 \
-  cargo test --workspace
+WGPU_BACKEND=vulkan VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+UNIWIDGED_REQUIRE_GPU=1 UNIWIDGED_REQUIRE_X11=1 UNIWIDGED_REQUIRE_WAYLAND=1 \
+UNIWIDGED_REQUIRE_NET=1 cargo test --workspace
 ```
 
 ## Before you open a pull request
@@ -46,7 +47,7 @@ cargo test --workspace
 And, if you touched a widget in `widgets/`, in that widget's directory:
 
 ```sh
-cargo fmt --check && cargo clippy --all-targets && cargo test
+cargo fmt --check && RUSTFLAGS="-D warnings" cargo clippy --all-targets && cargo test
 cargo build --release --target wasm32-wasip2
 ```
 
@@ -77,7 +78,8 @@ npm run build
 ## Reporting bugs
 
 Open an issue with `uniwidged --version`, `uniwidged doctor` and the relevant
-part of `uniwidged log`. For a security problem, see [`SECURITY.md`](https://github.com/JosunLP/uniwidged/blob/main/SECURITY.md)
+part of `uniwidged log` — with any tokens, credentials and private URLs or
+paths removed, since issues are public. For a security problem, see [`SECURITY.md`](https://github.com/JosunLP/uniwidged/blob/main/SECURITY.md)
 instead — please do not file it publicly.
 
 ## Licence

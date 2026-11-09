@@ -43,9 +43,9 @@ pub const ABI_VERSION: u32 = 9;
 /// it is the floor for every 1.x release: a widget built against it keeps
 /// running on every later 1.x host. The interface may grow — new host
 /// functions, which an older widget simply does not import — and each
-/// addition raises [`ABI_VERSION`] so that a widget *using* one is refused by
-/// an older host in a sentence rather than failing to link. Nothing raises
-/// this number before 2.0.
+/// addition raises [`ABI_VERSION`]. A widget built against a newer interface
+/// is refused by an older host: at linking, when it imports a function this
+/// host lacks, and otherwise here. Nothing raises this number before 2.0.
 ///
 /// Before 1.0 the check was equality, because the interface moved eight times
 /// in four days and every move broke something. A range is what an interface

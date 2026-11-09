@@ -23,9 +23,9 @@ uniwidged 1.0.0 (widget ABI 9)
 
 ## How the check works
 
-Every widget exports `abi-version`, and the host calls it **before anything
-else** — before `start`, before the first view. A host runs every ABI from
-**9**, the interface 1.0 shipped with, up to its own:
+Every widget exports `abi-version`, and the host calls it as soon as the
+component is instantiated — before `start` and before the first view. A host
+runs every ABI from **9**, the interface 1.0 shipped with, up to its own:
 
 ```text
  widget ABI      host 1.0 (runs 9…9)     host 1.x (runs 9…N)
@@ -45,14 +45,20 @@ this widget was built for ABI 10, which is newer than this host's 9;
 upgrading uniwidged will run it
 ```
 
+A widget built for a newer 1.x can also be stopped one step earlier. Its
+component imports the whole host interface it was built against, so if that
+includes a function this host does not have, the component **fails to link**
+and is refused with a component error naming the missing import, before
+`abi-version` can be asked. The remedy is the same: upgrade uniwidged.
+
 ## What may change in 1.x
 
 **Additions only.** Specifically:
 
 * **New host functions** — a new capability, a new counter under `metrics`.
-  A widget that does not call one does not import it, so an older widget is
-  untouched. A widget that does is built against a higher ABI and is refused,
-  in a sentence, by a host too old to provide it.
+  A widget built against 1.0 does not import them, so it is untouched. A
+  widget built against the newer SDK does, and a host too old to provide them
+  refuses it — at linking, or at the ABI check.
 * **New capabilities** in the manifest grammar.
 * **New settings types, new limits raised** (never lowered).
 * **Host behaviour** — rendering quality, themes, scheduling — that a widget

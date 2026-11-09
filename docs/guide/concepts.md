@@ -72,8 +72,10 @@ its event sources with no timer at all in between. Three rules keep it honest:
 ## The sandbox boundary
 
 A widget is a `wasm32-wasip2` **component** instantiated by Wasmtime. WASI
-Preview 2 grants **no ambient authority**: an undeclared capability is not
-denied, it is *absent*. There is nothing to escape from.
+Preview 2 grants **no ambient authority**: the component has no files, sockets
+or environment of its own. What it can reach is uniwidged's host functions,
+and every one of them checks the grant on every call — an ungranted call
+answers `NotGranted` and does nothing.
 
 What a widget can reach is the list in its manifest, approved by the user:
 

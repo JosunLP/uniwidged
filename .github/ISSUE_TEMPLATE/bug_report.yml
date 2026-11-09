@@ -26,5 +26,8 @@ body:
     id: log
     attributes:
       label: uniwidged log
-      description: The relevant part of what the desktop said.
+      description: >-
+        The relevant part of what the desktop said. This is public: remove
+        tokens, credentials and private URLs or paths first — a widget's links
+        and requests can carry them.
       render: text

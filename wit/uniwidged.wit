@@ -10,9 +10,10 @@
 // ABI 9 is the interface uniwidged 1.0 shipped with, and it is frozen for 1.x:
 // nothing here is removed or changed, and a widget built against ABI 9 runs on
 // every 1.x host. The interface may grow — a new host function is an import an
-// older widget simply does not have — and every addition raises the number, so
-// that a widget using one is refused by an older host in a sentence naming
-// both numbers. A change that is not an addition is 2.0.
+// older widget simply does not have — and every addition raises the number. A
+// widget built against a newer interface is refused by an older host: at
+// linking, if it imports a function the host lacks, or at this check. A change
+// that is not an addition is 2.0.
 
 package uniwidged:widget@0.1.0;
 

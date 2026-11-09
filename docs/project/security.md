@@ -10,7 +10,7 @@ problem.
 |---|---|---|
 | **Signature** | Who wrote this, and is it what they published? | Ed25519 over the component **and** its manifest, checked against your `trusted-keys` before anything runs. |
 | **Consent** | What did you agree it may do? | The manifest's capability list, shown at install, recorded in `config.toml` as `granted`. |
-| **Sandbox** | What can it actually reach? | A Wasmtime component with WASI Preview 2 and no ambient authority. Only granted capabilities are linked to anything. |
+| **Sandbox** | What can it actually reach? | A Wasmtime component with WASI Preview 2 and no ambient authority. Every host function checks the grant on every call. |
 | **Containment** | What happens when it misbehaves? | Memory cap, 16 ms deadline per call, three failures and it is given up on. |
 
 ### Signatures
@@ -41,8 +41,10 @@ problem.
 
 ### The sandbox
 
-* **No ambient authority.** An undeclared capability is not denied; it is
-  absent. There is nothing to escape from.
+* **No ambient authority.** WASI gives the component no files, sockets or
+  environment of its own — those are absent, not merely denied. What it can
+  reach is uniwidged's own host functions, and each of them checks the grant
+  on every call: an ungranted one answers `NotGranted` and does nothing.
 * **`fs`** is checked twice: textually, and again after the filesystem has
   resolved the path, because only the second sees a symlink somebody planted.
   Writes land through a rename. Per-file and per-widget quotas.

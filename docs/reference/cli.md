@@ -11,9 +11,10 @@ uniwidged <command> --help  # the same
 man uniwidged               # the manual page, installed by the packages
 ```
 
-Every command accepts `--config PATH` to use a configuration other than the
-default; the `UNIWIDGED_CONFIG` environment variable does the same for a whole
-shell. See [Configuration files](./configuration.md).
+`UNIWIDGED_CONFIG=/path/to/config.toml` points every command — and everything
+kept beside the configuration — at another directory. `--config PATH`, accepted
+by `run` and the commands that edit placements and settings, selects only the
+file. See [Configuration files](./configuration.md).
 
 ## The desktop
 

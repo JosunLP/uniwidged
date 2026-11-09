@@ -4,8 +4,10 @@ Eight widgets live in the repository's
 [`widgets/`](https://github.com/JosunLP/uniwidged/tree/main/widgets) folder.
 Each is small enough to read in a sitting, declares **only** what it uses — a
 test asserts that list — and is built and tested in CI for `wasm32-wasip2` on
-every change. They are one per capability, and for `metrics` one per kind of
-answer it gives.
+every change. Between them they cover `timer`, `locale`, `metrics` (one per
+kind of answer it gives), `fs`, `command` and `secrets`. There is no worked
+example for `net`, `link` or `measure` yet; [Writing a widget](./writing-a-widget.md)
+and the [API reference](../reference/api.md) cover them.
 
 <WidgetGallery />
 
