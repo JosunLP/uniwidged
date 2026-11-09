@@ -245,11 +245,17 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
         if visited > MOST_DIRECTORIES {
             return None;
         }
-        if let Some(table) = read(&dir)
-            && builds(&table)
-            && dir.join("widget.toml").is_file()
-        {
-            owners.push(dir.join("widget.toml"));
+        // No `Cargo.toml` is no crate. One that is there and cannot be read
+        // or parsed might be the other owner, so it ends the search unsure.
+        match std::fs::read_to_string(dir.join("Cargo.toml")) {
+            Ok(text) => {
+                let table: toml::Table = text.parse().ok()?;
+                if builds(&table) && dir.join("widget.toml").is_file() {
+                    owners.push(dir.join("widget.toml"));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
         }
         // A directory that cannot be read is a part of the workspace not
         // searched, and an owner found elsewhere might not be the only one.
@@ -264,8 +270,10 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
             // directory is searched, hidden ones too: a workspace may list a
             // member at `.widgets/clock`.
             let name = entry.file_name();
-            let skipped = name == "target" || name == ".git";
-            if !skipped && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let Ok(kind) = entry.file_type() else {
+                return None;
+            };
+            if kind.is_dir() && name != "target" && name != ".git" {
                 pending.push(entry.path());
             }
         }
@@ -525,6 +533,12 @@ mod tests {
         );
         write(space.join(".widgets/clock/widget.toml"), "");
         assert_eq!(found("renamed"), None);
+
+        // A `Cargo.toml` that is there and cannot be read could be another
+        // owner, so the search ends unsure rather than with the one it saw.
+        // (A directory by that name: unreadable even to root.)
+        std::fs::create_dir_all(space.join("members/unreadable/Cargo.toml")).unwrap();
+        assert_eq!(found("my_clock"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }

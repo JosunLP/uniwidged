@@ -145,24 +145,19 @@ fn server() -> Option<Server> {
 /// surface supports no format". Failing here says why; failing there said
 /// nothing about whose fault it was.
 ///
-/// **One at a time.** The four tests here start together, and each used to
-/// probe at once: four Vulkan instances, devices and swapchains created
-/// concurrently in this one process. The desktop never does that — it makes
-/// one device, once — and lavapipe's initialisation did not survive it on a
-/// loaded runner: the test binary itself died with `malloc(): unaligned
-/// tcache chunk detected` a second in, before any desktop had started. The
-/// lock makes the probe what it is meant to be, a question about the session,
-/// asked the way the desktop asks it.
+/// **Once per process.** The four tests here start together, and each used
+/// to probe: four Vulkan instances, devices and swapchains made in this one
+/// process. The desktop never does that — it makes one device, once — and
+/// lavapipe did not survive it on a loaded runner: first concurrently
+/// (`malloc(): unaligned tcache chunk detected`), and then, with the probes
+/// taken one at a time, as a plain SIGSEGV. Every test's X server is the same
+/// Xvfb, so the answer is the same for all of them; it is asked once, the way
+/// the desktop asks it, and remembered.
 fn presentable(server: &Server) -> bool {
     use uniwidged_core::geom::PhysicalRect;
     use uniwidged_shell::platform::x11::{WindowKind, X11Window};
-    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    // A probe that panicked poisons the lock without breaking anything it
-    // guards — there is no state behind it — so the next test still asks.
-    let _turn = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let probe = (|| {
+    static ANSWER: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    let probe = ANSWER.get_or_init(|| {
         let window = X11Window::open_on(
             Some(&server.display),
             PhysicalRect::new(0, 0, 64, 64),
@@ -179,7 +174,7 @@ fn presentable(server: &Server) -> bool {
             .map_err(|e| e.to_string())?;
         renderer.remove_surface(surface);
         Ok::<(), String>(())
-    })();
+    });
     match probe {
         Ok(()) => true,
         Err(why) => {
