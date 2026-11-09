@@ -34,7 +34,7 @@ LDFLAGS += -mexec-model=reactor
 SOURCES := $(wildcard $(WIDGET)/*.c) $(SDK)/src/uniwidged.c
 
 .PHONY: all clean check-tools
-all: $(BUILD)/$(NAME).wasm
+all: $(BUILD)/$(NAME).wasm $(BUILD)/$(NAME).toml
 
 check-tools:
 	@test -x "$(CC)" || { echo "no clang at $(CC): set WASI_SDK_PATH to a wasi-sdk (25 or later)" >&2; exit 1; }
@@ -58,8 +58,13 @@ $(BUILD)/widget.o: $(BINDINGS)/widget.c | check-tools
 
 $(BUILD)/$(NAME).wasm: $(SOURCES) $(SDK)/include/uniwidged.h $(BUILD)/widget.o $(BINDINGS)/widget_component_type.o | check-tools
 	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCES) $(BUILD)/widget.o $(BINDINGS)/widget_component_type.o -o $@
-	@cp $(WIDGET)/widget.toml $(BUILD)/$(NAME).toml
 	@echo "built $@"
+
+# Its own target, so that a change to the manifest alone — a capability, a
+# setting, a limit — reaches the build directory without a rebuild.
+$(BUILD)/$(NAME).toml: $(WIDGET)/widget.toml
+	@mkdir -p $(BUILD)
+	cp $< $@
 
 clean:
 	rm -rf $(BUILD)

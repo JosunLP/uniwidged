@@ -45,18 +45,29 @@ Invoke-WebRequest "$base/uniwidged-1.1.0-x64.msi" -OutFile uniwidged-1.1.0-x64.m
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
 $want = (Select-String -Path SHA256SUMS -Pattern 'uniwidged-1.1.0-x64.msi').Line.Split(' ')[0]
 $have = (Get-FileHash uniwidged-1.1.0-x64.msi -Algorithm SHA256).Hash.ToLower()
-if ($have -ne $want) { throw "checksum mismatch: do not install this file" }
-msiexec /i uniwidged-1.1.0-x64.msi
+if ($want -and $have -eq $want) {
+    msiexec /i uniwidged-1.1.0-x64.msi
+} else {
+    Write-Error "checksum mismatch or missing: do not install this file"
+}
 ```
 
 ```sh [macOS]
 base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
 curl -LO "$base/uniwidged-1.1.0-macos.zip" -LO "$base/SHA256SUMS"
-shasum -a 256 --ignore-missing -c SHA256SUMS && \
-  ditto -x -k uniwidged-1.1.0-macos.zip /Applications
+# Exactly this file's line, so a missing entry fails rather than passing on
+# whatever else the list holds.
+grep ' uniwidged-1.1.0-macos.zip$' SHA256SUMS | shasum -a 256 -c - && \
+  mkdir -p ~/Applications && \
+  ditto -x -k uniwidged-1.1.0-macos.zip ~/Applications
 # The command line, from the bundle:
-ln -s /Applications/uniwidged.app/Contents/MacOS/uniwidged /usr/local/bin/uniwidged
+mkdir -p ~/.local/bin
+ln -s ~/Applications/uniwidged.app/Contents/MacOS/uniwidged ~/.local/bin/uniwidged
 ```
+
+`~/Applications` needs no administrator. To install for every account on the
+Mac, extract into `/Applications` instead — which an administrator account can
+write to.
 
 ```sh [Arch Linux]
 # packaging/PKGBUILD builds the tagged release from source
@@ -77,7 +88,7 @@ A release is signed only where the project's signing keys were available to
 the release workflow, and its notes say which. An **unsigned** Windows
 installer makes SmartScreen warn before it runs; a macOS bundle that is **not
 notarised** is refused by Gatekeeper when it came from a download — remove the
-quarantine flag with `xattr -d com.apple.quarantine /Applications/uniwidged.app`
+quarantine flag with `xattr -d com.apple.quarantine ~/Applications/uniwidged.app`
 if you have checked `SHA256SUMS` and trust it.
 :::
 
