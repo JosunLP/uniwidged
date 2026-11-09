@@ -468,6 +468,13 @@ fn a_command_gets_almost_no_environment() {
         .filter_map(|line| line.split('=').next())
         .filter(|name| !name.is_empty())
         .collect();
+    // On Windows `env` is Git's, and the MSYS runtime it starts on gives
+    // itself a `HOME` and a `TERM` when it finds none. Those are the child's
+    // own, not anything this process handed over.
+    let names: Vec<&str> = names
+        .into_iter()
+        .filter(|name| !(cfg!(windows) && matches!(*name, "HOME" | "TERM")))
+        .collect();
     assert_eq!(
         names,
         vec!["PATH"],
@@ -675,6 +682,10 @@ fn an_ordinary_write_does_not_walk_the_directory() {
         std::fs::set_permissions(&root, readable).expect("restore");
         wrote.expect("a write under quota should not need a walk");
     }
+    // Nowhere to make a directory unlistable: the write, at least, lands.
+    #[cfg(not(unix))]
+    dir.write("second", &[0u8; 100])
+        .expect("a write under quota lands");
     assert_eq!(dir.used_bytes(), Ok(200));
 }
 

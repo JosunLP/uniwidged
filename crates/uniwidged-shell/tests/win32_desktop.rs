@@ -31,14 +31,15 @@ use std::time::{Duration, Instant};
 use uniwidged_core::geom::PhysicalRect;
 use uniwidged_shell::Input;
 use uniwidged_shell::platform::desktop::{self, DesktopWindow};
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, SW_MAXIMIZE, SetCursorPos, SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
+    GetWindow, GetWindowLongPtrW, GetWindowTextW, SW_MAXIMIZE, SetCursorPos, SetForegroundWindow,
+    ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WindowFromPoint,
 };
 
 fn required() -> bool {
@@ -63,6 +64,28 @@ fn pump(windows: &mut [DesktopWindow], for_: Duration) -> Vec<Input> {
         }
     }
     seen
+}
+
+/// A window's class and title, for a failure message.
+fn describe(hwnd: HWND) -> String {
+    if hwnd.is_null() {
+        return "none".into();
+    }
+    let mut class = [0u16; 256];
+    let mut title = [0u16; 256];
+    // SAFETY: buffers of the length given, on a window handle that may have
+    // died since — both calls then return 0.
+    let (c, t) = unsafe {
+        (
+            GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32),
+            GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32),
+        )
+    };
+    format!(
+        "{hwnd:?} class {:?} title {:?}",
+        String::from_utf16_lossy(&class[..c.max(0) as usize]),
+        String::from_utf16_lossy(&title[..t.max(0) as usize])
+    )
 }
 
 /// Is `lower` somewhere below `upper` in the z-order?
@@ -188,11 +211,16 @@ fn a_widget_is_a_gadget_rather_than_a_window() {
         );
     }
     pump(&mut windows, Duration::from_millis(200));
-    click(rect.x + 20, rect.y + 20);
+    let (x, y) = (rect.x + 20, rect.y + 20);
+    // The widget sits below every ordinary window, so whatever else the
+    // machine has open over that point takes the click instead. Say what.
+    // SAFETY: a plain query.
+    let under = describe(unsafe { WindowFromPoint(POINT { x, y }) });
+    click(x, y);
     let seen = pump(&mut windows, Duration::from_millis(400));
     assert!(
         seen.iter().any(|i| matches!(i, Input::Pressed { .. })),
-        "the click never reached the widget: {seen:?}"
+        "the click never reached the widget: {seen:?}; the window under ({x}, {y}) was {under}"
     );
     // SAFETY: a plain query.
     assert_eq!(
