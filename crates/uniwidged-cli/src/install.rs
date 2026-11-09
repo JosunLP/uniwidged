@@ -99,12 +99,11 @@ pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String
         // Absolute, because `install` records it: the desktop reads the
         // configuration from wherever it was started, and a relative path
         // would then name a different file or none.
-        return PathBuf::from(&explicit)
-            .canonicalize()
+        return crate::paths::resolved(&PathBuf::from(&explicit))
             .map_err(|e| format!("{explicit}: {e}"));
     }
     let (found, beside) = find_manifest(component);
-    match found {
+    match found.map(crate::paths::plain) {
         Some(path) => {
             if path != beside {
                 println!("  manifest: {}", path.display());

@@ -160,11 +160,22 @@ fn a_relative_manifest_is_recorded_as_where_it_actually_is() {
     );
 
     let config = std::fs::read_to_string(machine.config()).unwrap();
+    // As written: absolute, and in the spelling a person would type — on
+    // Windows without the `\\?\` that `canonicalize` adds. The quotes are the
+    // TOML writer's choice (a path with backslashes is a literal string), so
+    // the line is matched on the path rather than on them.
     let recorded = elsewhere.join("clock.toml").canonicalize().unwrap();
+    let recorded = recorded.to_string_lossy();
+    let recorded = recorded.strip_prefix(r"\\?\").unwrap_or(&recorded);
     assert!(
-        config.contains(&format!("manifest = \"{}\"", recorded.display())),
-        "it should record the absolute path, {}: {config}",
-        recorded.display()
+        config
+            .lines()
+            .any(|line| line.starts_with("manifest = ") && line.contains(recorded)),
+        "it should record the absolute path, {recorded}: {config}"
+    );
+    assert!(
+        !config.contains(r"\\?\"),
+        "no verbatim prefix in a file a person reads"
     );
 }
 
