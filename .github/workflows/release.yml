@@ -38,7 +38,11 @@ jobs:
             exit 1
           }
           # Literally: a version is not a pattern, and `1.0.0` must not match `1x0x0`.
-          awk -v h="## $version " 'index($0, h) == 1 { found = 1 } END { exit !found }' CHANGELOG.md || {
+          # After it, the end of the line, a space or a tab; `1.0.0` is not `1.0.01`.
+          awk -v h="## $version" '
+            index($0, h) == 1 && substr($0, length(h) + 1, 1) ~ /^([ \t]|)$/ { found = 1 }
+            END { exit !found }
+          ' CHANGELOG.md || {
             echo "CHANGELOG.md has no entry for $version" >&2
             exit 1
           }
@@ -82,7 +86,10 @@ jobs:
                 }
               }
               if (fence == "" && indent <= 3) {
-                if (!on && index(line, "## " v " ") == 1) { on = 1; seen = 1; next }
+                h = "## " v
+                if (!on && index(line, h) == 1 && substr(line, length(h) + 1, 1) ~ /^([ \t]|)$/) {
+                  on = 1; seen = 1; next
+                }
                 if (on && line ~ /^## /) exit
               }
               if (on) print

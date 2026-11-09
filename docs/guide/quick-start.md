@@ -1,10 +1,13 @@
 # Quick start
 
-Five minutes from nothing to your own widget on the desktop. You need
-a 1.x `uniwidged` [installed](./installation.md) (`uniwidged --version` says
-which), [Rust](https://www.rust-lang.org/tools/install) with `rustup`, and then
-`rustup target add wasm32-wasip2`. Hosts before 1.0.0 cannot find a widget's
-manifest next to a fresh build, so the install below fails on them.
+Five minutes from nothing to your own widget on the desktop. You need:
+
+- a 1.x `uniwidged`, [installed](./installation.md) — `uniwidged --version`
+  says which. Hosts before 1.0.0 cannot find a widget's manifest next to a fresh
+  build, so the install below fails on them;
+- [Rust](https://www.rust-lang.org/tools/install) 1.95 or newer, through
+  `rustup` (`rustc --version` says which; `rustup update` gets a newer one);
+- `git`, to fetch the reference widgets.
 
 ## 1. Install a widget
 
@@ -22,6 +25,7 @@ Then build the clock and install it:
 
 ```sh
 cd widgets/clock
+rustup target add wasm32-wasip2     # for the toolchain this directory uses
 cargo build --release --target wasm32-wasip2
 uniwidged install target/wasm32-wasip2/release/clock_widget.wasm --allow-unsigned
 ```
