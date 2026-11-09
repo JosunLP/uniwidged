@@ -73,9 +73,10 @@ pub fn command(args: &[String]) -> Result<(), String> {
 ///    `widget.toml`. That is the source of truth while somebody is developing:
 ///    `sign` leaves a copy beside the component for publishing, and a copy
 ///    from the last signing must never shadow the manifest the author has
-///    since edited. Only for the path as named (`..` resolved): a symlink
-///    into `target/` with a manifest beside the link uses that manifest
-///    (rule 2), and one with nothing beside it falls back to the crate's. In a
+///    since edited. Not for a symlink, inside `target/` or pointing into
+///    it: a link with a manifest beside it uses that manifest (rule 2), and
+///    one with nothing beside it falls back to the crate's. `..` is resolved
+///    first. In a
 ///    workspace the member is found by artifact name; a build no single crate
 ///    owns, with nothing beside it, has no manifest until `--manifest` names
 ///    one. A `Cargo.toml` between the component and `target/` makes it part
@@ -140,21 +141,23 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         _ => resolved.clone(),
     };
 
-    // 1. Named by a path inside `target/`: the crate's manifest.
+    // 1. Named by a path inside `target/`: the crate's manifest. Not for a
+    //    symlink, wherever it sits: a link kept with a manifest of its own is
+    //    read (and signed) with that one, so rule 2 goes first for it.
+    let is_link = std::fs::symlink_metadata(&resolved).is_ok_and(|m| m.file_type().is_symlink());
     let build = crate_of(&located);
-    if let Some(Some(manifest)) = build {
-        return (Some(manifest), beside);
+    if !is_link && let Some(Some(manifest)) = &build {
+        return (Some(manifest.clone()), beside);
     }
 
-    // 2. Beside it, as named — before following a symlink, so a link kept
-    //    with its own manifest is read (and signed) with that one.
+    // 2. Beside it, as named.
     if beside.is_file() {
         return (Some(beside.clone()), beside);
     }
 
     // A build that no single crate manifest owns has no answer to guess at.
-    if build.is_some() {
-        return (None, beside);
+    if let Some(manifest) = build {
+        return (manifest, beside);
     }
 
     // 1, again, for a symlink into a crate's `target/` with nothing beside it.
@@ -556,6 +559,16 @@ mod tests {
                 find_manifest(&into_build.join("dev.wasm")).0,
                 Some(into_build.join("dev.toml"))
             );
+        }
+
+        // The same for a link that itself sits inside `target/`.
+        #[cfg(unix)]
+        {
+            let inside = release.join("linked.wasm");
+            std::os::unix::fs::symlink(&component, &inside).unwrap();
+            assert_eq!(find_manifest(&inside).0, Some(krate.join("widget.toml")));
+            std::fs::write(release.join("linked.toml"), "").unwrap();
+            assert_eq!(find_manifest(&inside).0, Some(release.join("linked.toml")));
         }
 
         let _ = std::fs::remove_dir_all(&root);

@@ -267,10 +267,25 @@ fn signing_a_fresh_build_puts_the_manifest_it_covered_beside_it() {
 #[cfg(unix)]
 #[test]
 fn signing_through_a_link_into_a_build_keeps_the_manifest_beside_the_link() {
-    // A link kept with its own manifest, pointing into a crate's `target/`:
-    // `sign` signs that manifest and leaves it alone, rather than overwriting
-    // it with the crate's `widget.toml`.
-    let machine = Machine::new("sign-through-link");
+    sign_through_a_link(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn signing_through_a_link_inside_a_build_keeps_the_manifest_beside_the_link() {
+    sign_through_a_link(true);
+}
+
+/// A link kept with its own manifest, pointing at a crate's build — from
+/// outside `target/`, or from inside it: `sign` signs that manifest and
+/// leaves it alone, rather than overwriting it with the crate's `widget.toml`.
+#[cfg(unix)]
+fn sign_through_a_link(inside_target: bool) {
+    let machine = Machine::new(if inside_target {
+        "sign-link-inside"
+    } else {
+        "sign-through-link"
+    });
     let built = reference_widget(&machine.0);
     let krate = machine.0.join("my-widget");
     let release = krate.join("target/wasm32-wasip2/release");
@@ -280,7 +295,11 @@ fn signing_through_a_link_into_a_build_keeps_the_manifest_beside_the_link() {
     std::fs::write(krate.join("widget.toml"), &original).unwrap();
     std::fs::rename(&built, release.join("clock.wasm")).unwrap();
 
-    let linked = machine.0.join("linked");
+    let linked = if inside_target {
+        krate.join("target/linked")
+    } else {
+        machine.0.join("linked")
+    };
     std::fs::create_dir_all(&linked).unwrap();
     std::os::unix::fs::symlink(release.join("clock.wasm"), linked.join("clock.wasm")).unwrap();
     let own = original.replace(
