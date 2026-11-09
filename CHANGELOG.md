@@ -17,6 +17,69 @@ refused at instantiation, in a sentence naming both numbers.
 
 Nothing yet.
 
+## 1.1.0 — 2026-11-09
+
+**Windows and macOS, the SDK on crates.io, and a second SDK.** Every item the
+roadmap listed after 1.0 is in this release. Nothing about the widget
+interface changed: ABI 9 still, and every 1.0 widget runs unchanged on both new
+platforms.
+
+### New platforms
+
+* **Windows 10 and 11.** A widget is a `WS_EX_NOREDIRECTIONBITMAP |
+  WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE` popup, kept at `HWND_BOTTOM` on every
+  position change, drawn through a DirectComposition swapchain so the
+  wallpaper shows through. Per-monitor DPI v2. Its exit criterion — below a
+  maximised window, no focus taken by a click, no Alt-Tab entry, a
+  premultiplied swapchain — is measured against the real window manager in CI.
+* **macOS 11 and later.** A non-activating `NSPanel` at desktop-icon level,
+  on every Space and still there under Mission Control, presenting through a
+  `CAMetalLayer`; an accessory application with no Dock tile or menu bar.
+  Measured the same way, in CI.
+* `UNIWIDGED_BACKDROP=system` asks either platform for its own blur behind the
+  widget (acrylic, vibrancy). Off by default: it blurs the window's rectangle,
+  whose corners the theme did not choose.
+* `run`, `reload`, `status`, `list`, `doctor`, `autostart` and links all work
+  on both. `reload` is a named event on Windows rather than `SIGHUP`;
+  `autostart` writes a `HKCU\…\Run` value or a `LaunchAgent`; links open
+  through `ShellExecuteW` and `open`. `run --background` lets go of the
+  console on Windows, and is what the autostart entry and the Start-menu
+  shortcut use.
+
+### The keychain
+
+* **The key behind `secrets` is held by the OS** on Windows (sealed with DPAPI
+  to this account on this machine) and on macOS (an item in the login
+  keychain). The store itself is the same encrypted file on all three
+  platforms; `uniwidged doctor` says which custody this machine has. Linux is
+  unchanged.
+
+### Packaging
+
+* **An MSI**, per-user — no administrator, `%LOCALAPPDATA%\Programs`, the
+  binary on your `PATH`, a Start-menu entry — built by `packaging/windows/`.
+* **A macOS bundle**, universal, `LSUIElement`, signed with the hardened
+  runtime and notarised, built by `packaging/macos/build.sh`.
+* Releases attach both beside the `.deb`, with all three in `SHA256SUMS`.
+  Signing happens where the release workflow has the keys, and the release
+  notes say when it did not.
+
+### For widget authors
+
+* **The SDK is on crates.io**: `uniwidged-guest = "1.1"`, with `uniwidged-core`
+  and `uniwidged-view`. `uniwidged new` from a released binary depends on it by
+  version instead of by git tag.
+* **A C SDK**, in `sdks/c`: a header and one file over the bindings
+  `wit-bindgen c` generates, built with wasi-sdk, with a worked example that CI
+  builds and runs in the real runtime. Node ids hash the same as the Rust
+  SDK's, so `uw_id("plus")` and `NodeId::named("plus")` are the same node.
+
+### Fixed
+
+* On macOS, a swapchain that wgpu calls `PostMultiplied` is composited by Core
+  Animation as premultiplied; the blit now premultiplies there, where it would
+  otherwise have drawn every translucent pixel too bright.
+
 ## 1.0.0 — 2026-11-09
 
 **The first stable release.** The widget interface is frozen, the

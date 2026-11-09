@@ -9,6 +9,8 @@ homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
 description = "The declarative view tree that crosses uniwidged's sandbox boundary."
+keywords = ["widget", "desktop", "wasm"]
+categories = ["gui"]
 
 [dependencies]
 uniwidged-core.workspace = true

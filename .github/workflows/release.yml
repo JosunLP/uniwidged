@@ -1,9 +1,19 @@
 # A release is a tag.
 #
-# Pushing `v<version>` builds the `.deb` the way `ci.yml` builds it, checks
-# that the tag agrees with the workspace about the version — two places to
-# write one is one place to forget it — and attaches the package and its
-# checksum to a GitHub release. The tests are not run again here: the commit
+# Pushing `v<version>` builds the `.deb` the way `ci.yml` builds it, the
+# Windows installer and the macOS bundle the way their CI jobs do, checks that
+# the tag agrees with the workspace about the version — two places to write one
+# is one place to forget it — and attaches all three and their checksums to a
+# GitHub release. With a crates.io token it also publishes the SDK.
+#
+# Signing is the one thing that needs secrets, and every one is optional: a
+# release without them is built and published *unsigned*, and its notes say so.
+#
+#   WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD  base64 .pfx, for signtool
+#   MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD      base64 .p12 (Developer ID)
+#   MACOS_SIGNING_IDENTITY                             "Developer ID Application: …"
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD        for notarytool
+#   CARGO_REGISTRY_TOKEN                               for the SDK on crates.io The tests are not run again here: the commit
 # a tag points at has already been through `ci.yml` on `main`, and a release
 # workflow that re-ran them would be a second, slower copy of the first.
 #
@@ -20,8 +30,106 @@ permissions:
   contents: write
 
 jobs:
+  msi:
+    name: the Windows installer
+    runs-on: windows-latest
+    # Job-level, because a step's own `env` is not visible to its `if`.
+    env:
+      CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: dotnet tool install --global wix --version 5.0.2
+      - name: the certificate, if there is one
+        if: ${{ env.CERT != '' }}
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "sign.pfx"
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:CERT))
+          "UNIWIDGED_SIGN_CERT=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: the installer
+        shell: pwsh
+        env:
+          UNIWIDGED_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: packaging\windows\build.ps1 -Output "$env:RUNNER_TEMP\dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: ${{ runner.temp }}/dist/*.msi
+
+  app:
+    name: the macOS bundle
+    runs-on: macos-latest
+    env:
+      CERT: ${{ secrets.MACOS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: the certificate and the notary, if there are any
+        if: ${{ env.CERT != '' }}
+        env:
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -eu
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 16)
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "MACOS_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          if [ -n "$APPLE_ID" ]; then
+            xcrun notarytool store-credentials uniwidged --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+            echo "MACOS_NOTARY_PROFILE=uniwidged" >> "$GITHUB_ENV"
+          fi
+      - run: packaging/macos/build.sh --universal --output "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: ${{ runner.temp }}/dist/*.zip
+
+  # The SDK, so that a widget can depend on `uniwidged-guest = "1"` rather than
+  # on a git tag. One `cargo publish` for the three crates, which publishes them
+  # in dependency order and verifies each against the others first.
+  #
+  # Red without a token rather than skipped: a released `uniwidged new` writes
+  # a project that asks crates.io for this version, and a release whose SDK is
+  # not there is one whose first scaffold does not build.
+  sdk:
+    name: the SDK on crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - name: publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::no CARGO_REGISTRY_TOKEN, so the SDK was not published and this release's \`uniwidged new\` will not build"
+            exit 1
+          fi
+          cargo publish --locked --target wasm32-wasip2 \
+            -p uniwidged-core -p uniwidged-view -p uniwidged-guest
+
   deb:
-    name: the .deb, attached to the release
+    name: the .deb, and the release
+    needs: [msi, app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,8 +168,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/unpacked"
           dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
           "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version
-          cd "$RUNNER_TEMP/deb" && sha256sum uniwidged_*.deb > SHA256SUMS
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/deb
+          merge-multiple: true
+      - name: checksums
+        run: cd "$RUNNER_TEMP/deb" && sha256sum uniwidged_*.deb uniwidged-*.msi uniwidged-*-macos.zip > SHA256SUMS
       - name: the release notes are this version's changelog section
+        env:
+          WINDOWS_SIGNED: ${{ secrets.WINDOWS_CERTIFICATE != '' && '1' || '' }}
+          MACOS_SIGNED: ${{ secrets.APPLE_ID != '' && secrets.MACOS_CERTIFICATE != '' && '1' || '' }}
         run: |
           set -eu
           version=${GITHUB_REF_NAME#v}
@@ -108,8 +224,11 @@ jobs:
           {
             echo
             echo "---"
-            echo "The \`.deb\` is built by \`packaging/deb/build.sh\` and checked the way CI checks it;"
-            echo "\`SHA256SUMS\` is its checksum. Documentation: https://josunlp.github.io/uniwidged/"
+            echo "The \`.deb\`, the \`.msi\` and the macOS \`.zip\` are built by the scripts in \`packaging/\`"
+            echo "and checked the way CI checks them; \`SHA256SUMS\` holds their checksums."
+            if [ -z "$WINDOWS_SIGNED" ]; then echo "The Windows installer is **unsigned**: SmartScreen will warn before running it."; fi
+            if [ -z "$MACOS_SIGNED" ]; then echo "The macOS bundle is **not notarised**: Gatekeeper refuses it from a download until \`xattr -d com.apple.quarantine uniwidged.app\`."; fi
+            echo "Documentation: https://josunlp.github.io/uniwidged/"
           } >> "$RUNNER_TEMP/notes.md"
       - name: the release
         uses: softprops/action-gh-release@v2
@@ -118,4 +237,6 @@ jobs:
           body_path: ${{ runner.temp }}/notes.md
           files: |
             ${{ runner.temp }}/deb/uniwidged_*.deb
+            ${{ runner.temp }}/deb/uniwidged-*.msi
+            ${{ runner.temp }}/deb/uniwidged-*-macos.zip
             ${{ runner.temp }}/deb/SHA256SUMS

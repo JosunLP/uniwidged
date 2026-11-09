@@ -16,8 +16,11 @@ That is as far towards a canvas as uniwidged goes, on purpose.
 ### Which languages can I write a widget in?
 
 Any language that compiles to a WebAssembly **component** implementing
-`wit/uniwidged.wit`. The Rust SDK is the one that exists today; the interface
-file is the contract any other SDK would implement.
+`wit/uniwidged.wit`. Two SDKs exist: **Rust** (`uniwidged-guest` on crates.io)
+and **C** ([`sdks/c`](https://github.com/JosunLP/uniwidged/tree/main/sdks/c),
+built with wasi-sdk on bindings `wit-bindgen c` generates). CI builds the C
+example and runs it in the real runtime, which is what makes the interface file
+a contract rather than a description of the Rust SDK.
 
 ### Does it work on GNOME?
 
@@ -27,12 +30,14 @@ X11 works as a proper desktop layer.
 
 ### Windows? macOS?
 
-They are milestones M5 and M6 on the [roadmap](./roadmap.md), each a 1.x minor
-release. Platform code lives in one crate, `uniwidged-shell`, which has a
-place for each (`platform::win32`, `platform::appkit`), and Ephemeris already
-worked out how a window becomes a desktop widget on both. What remains is the
-surface code itself, the keychain, the packaging and the measured tests for
-each — and none of it touches the widget interface.
+Both, from 1.1. On **Windows** a widget is a `WS_EX_NOREDIRECTIONBITMAP`
+tool window kept at `HWND_BOTTOM`, presented through a DirectComposition
+swapchain so the wallpaper shows through; the keychain's key is sealed with
+DPAPI. On **macOS** it is a non-activating panel at desktop-icon level with a
+`CAMetalLayer`, on every Space and still under Mission Control; the keychain's
+key lives in your login keychain. Each platform's exit criterion is measured
+against its real window manager in CI. They are new, and have had less use on
+real desktops than Linux has — issues are welcome.
 
 ### How much CPU does it use?
 

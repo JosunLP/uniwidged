@@ -438,7 +438,7 @@ pub fn describe(manifest: &Manifest, signed_by: Option<&str>) {
         use uniwidged_runtime::SecretStore;
         println!(
             "  Its keychain here is {}.\n",
-            uniwidged_runtime::FileKeyring::new(crate::paths::keyring_dir()).describe()
+            uniwidged_runtime::FileKeyring::system(crate::paths::keyring_dir()).describe()
         );
     }
 

@@ -83,7 +83,7 @@ pub struct State {
     /// When it started, in seconds since the epoch.
     pub since: i64,
     /// `wlr-layer-shell`, `xdg_toplevel (no layer shell)`, the X11 wording —
-    /// whatever [`uniwidged_shell::platform::linux::DesktopWindow::describe`]
+    /// whatever [`uniwidged_shell::platform::desktop::DesktopWindow::describe`]
     /// answered. The single most useful line when a widget is not where it
     /// should be, because it is the one that says whether this session can put
     /// it there at all.

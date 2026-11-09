@@ -12,7 +12,7 @@ runtime, and written in any language that targets the component model.
 |---|---|
 | **For people** | Clocks, system meters, forecasts and dashboards on the desktop that cost no CPU while nothing changes, and that can reach only what you approved. |
 | **For widget authors** | A small Rust SDK, a manifest, and a host that does layout, text, theming, accessibility and hit-testing for you. |
-| **Platforms** | Linux — Wayland (`wlr-layer-shell`) and X11. Windows and macOS are on the [roadmap](../project/roadmap.md). |
+| **Platforms** | Linux — Wayland (`wlr-layer-shell`) and X11; Windows (DirectComposition); macOS (AppKit and Metal). Windows and macOS are new in 1.1. |
 | **Licence** | MIT OR Apache-2.0. |
 
 </div>

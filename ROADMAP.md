@@ -160,7 +160,7 @@ with a single root cause — taffy rounds a computed box down to whole pixels �
 that the golden-image suite could not see, because its bundled font made the
 arithmetic land differently.
 
-## M5 · Windows
+## M5 · Windows ✅ **done, 2026-11-09** (1.1.0)
 
 * `CreateWindowEx` with `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW |
   WS_EX_NOACTIVATE`, `WS_POPUP`; `HWND_BOTTOM` forced in
@@ -174,7 +174,26 @@ arithmetic land differently.
 **Exit:** the widget stays below a maximised window, never steals focus, has no
 Alt-Tab entry, and shows the wallpaper through its glass.
 
-## M6 · macOS
+What was built differs from the plan in one place, and it is a simplification:
+the DirectComposition visual tree is **wgpu's**, not this project's. wgpu 29's
+DX12 backend can make a composition target for a window and a composition
+swapchain on its visual (`Dx12SwapchainKind::DxgiFromVisual`), which is
+exactly what Ephemeris built by hand — so `uniwidged-render` asks for that,
+the shell hands over a plain `Win32WindowHandle`, and there is no COM in this
+repository. The backdrop is opt-in (`UNIWIDGED_BACKDROP=system`), because DWM
+rounds the blurred rectangle to its own radius rather than the theme's.
+
+**Measured**, in `crates/uniwidged-shell/tests/win32_desktop.rs`, on GitHub's
+Windows runner, against the real window manager: an ordinary window maximised
+over the widget is above it in the z-order; a synthesised click on the widget
+arrives as a press and leaves the foreground window where it was, and the
+widget still below; `WS_EX_TOOLWINDOW` is set and `WS_EX_APPWINDOW` is not; and
+a swapchain on the window offers `PreMultiplied`, which an HWND swapchain never
+does. *Show desktop* (Win+D) still covers it, as it covers every gadget that
+has ever existed — fixing that means parenting into the shell's undocumented
+`WorkerW`, and is not done.
+
+## M6 · macOS ✅ **done, 2026-11-09** (1.1.0)
 
 * Borderless `NSWindow` subclass with `canBecomeKeyWindow → NO`, level
   `kCGDesktopIconWindowLevel + 1`, `.canJoinAllSpaces | .stationary |
@@ -186,6 +205,26 @@ Alt-Tab entry, and shows the wallpaper through its glass.
 
 **Exit:** as M5, plus: the widget follows the user across Spaces and does not
 slide away under Mission Control.
+
+The window is an `NSPanel` subclass rather than a plain `NSWindow` one: a
+window that refuses to become key still *activates its application* when
+clicked, and the menu bar would change to uniwidged's on every press. A
+non-activating panel is the one window kind that takes a click without that —
+with `hidesOnDeactivate` off, or it would vanish whenever the accessory
+application is not frontmost, which is always. The desktop's coordinate space
+is in the *primary* display's pixels, so a secondary display of a different
+scale renders at the primary's density; the trade is written down in
+`platform/appkit.rs`.
+
+**Measured**, in `crates/uniwidged-shell/tests/appkit_desktop.rs` (a plain
+`main`, because AppKit wants the main thread), on GitHub's macOS runner: the
+window server reports an ordinary window, not the widget, frontmost at the
+widget's centre; the panel cannot become key, is non-activating, and the
+application is an accessory; `.canJoinAllSpaces`, `.stationary` and
+`.ignoresCycle` are set as AppKit reports them back; and neither the window nor
+a swapchain on its view is opaque. What CI cannot do is drag a real Space or
+open Mission Control, so those two clauses are measured as the flags that
+govern them rather than as an animation somebody watched.
 
 ## M7 · The host and the CLI ✅ **done, 2026-08-28**
 
@@ -1179,11 +1218,10 @@ depends on, and what once rendered "live" as "li…".
 
 `NOTICE.md` records what came from where. Every dependency is now on crates.io.
 
-## M8 · Shipping — **done, 2026-11-09** (Windows and macOS packaging moves with M5 and M6)
+## M8 · Shipping — **done, 2026-11-09**
 
-* Packaging: a `.deb` and an AUR package are **done** — see below; MSI/MSIX and
-  a signed and notarised `.app` wait on the platforms they package, which are
-  M5 and M6.
+* Packaging: a `.deb` and an AUR package are **done** — see below — and since
+  1.1 an MSI and a signed, notarised `.app` as well.
 * Running without a terminal: a log, `uniwidged status`, and shell completions
   — **done**, see below. And the vocabulary's one chart node, `sparkline`,
   with `metrics` answering for memory as well — ABI 7. And a picture behind
@@ -1329,7 +1367,7 @@ update check that got *that* backwards would offer a release candidate to
 somebody already running the release. A manifest's version is now checked when
 it is parsed rather than carried as an unexamined string.
 
-### Packaging — **partly done, 2026-08-28**
+### Packaging — **done, 2026-11-09**
 
 `packaging/deb/build.sh` builds a `.deb` with `dpkg-deb` and nothing else: no
 `cargo-deb`, no `dh`, no container. The package is a binary, a manual page and
@@ -1349,10 +1387,21 @@ nothing.
 `packaging/PKGBUILD` is written against `makepkg`'s documented behaviour and is
 **not** built here, and says so rather than implying it was.
 
-**Still to do:** MSI/MSIX and a signed, notarised `.app`. Both need the
-platform they package for, and packaging a binary that prints "this build has
-no shell for the current platform" would be packaging nothing. They come with
-M5 and M6, in the same commit as something to run. Flatpak is **not planned**:
+**Windows and macOS, 1.1.** `packaging/windows/` is a WiX 5 source and the
+PowerShell that builds it: a **per-user MSI** — `%LOCALAPPDATA%\Programs`,
+HKCU only, never elevating — that puts the binary on the user's `PATH` and a
+Start-menu entry that starts the desktop. `packaging/macos/build.sh` assembles
+`uniwidged.app` with `LSUIElement` set, as a universal binary for the release,
+signs it with the hardened runtime and the two entitlements Wasmtime's compiled
+code needs, submits it to `notarytool` and staples the ticket. Signing on both
+happens **only when the release workflow has the keys**; without them the
+installer is built unsigned and the `.app` ad-hoc signed, and the release notes
+say so rather than leaving a user to find out from SmartScreen or Gatekeeper.
+CI builds both on every change, installs the MSI and runs what it installed,
+and checks the bundle's `Info.plist` and signature and runs its binary. MSIX
+is **not** done: it cannot be installed at all without a signing certificate
+the machine trusts, so an MSIX built here would be a package nobody can open,
+and the MSI covers the same ground. Flatpak is **not planned**:
 a widget host draws below every window, reads the session's fonts, watches
 RandR and verifies a signature before running anybody's code, and a sandbox
 that has to be opened up for each of those is a sandbox holding nothing. The
@@ -1539,6 +1588,9 @@ machine will produce", for the capability with the most of them.
 | [`uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) | `command` |
 | [`vault`](https://github.com/JosunLP/uniwidged/tree/main/widgets/vault) | `secrets` |
 
+The C SDK has its own: [`sdks/c/examples/counter`](https://github.com/JosunLP/uniwidged/tree/main/sdks/c/examples/counter),
+which needs no capability, built and run in CI.
+
 `net` has none, and that is the gap in the set: a reference widget for it needs
 a service to talk to that will still be there in a year, and pointing the
 project's own worked example at somebody else's free API is a broken example
@@ -1599,17 +1651,41 @@ by counting.
 
 ## After 1.0.0
 
-Minor versions, each additive:
+Minor versions, each additive. The four that were planned are all in 1.1.
 
-* **1.x · Windows (M5).** A DirectComposition shell kept at `HWND_BOTTOM`,
-  DPAPI behind `secrets`, MSI/MSIX packaging, and the measured tests — see M5
-  above.
-* **1.x · macOS (M6).** A desktop-level `NSWindow` with a `CAMetalLayer`, the
-  Keychain behind `secrets`, a signed and notarised `.app` — see M6 above.
-* **1.x · The SDK on crates.io**, so a widget can depend on
-  `uniwidged-guest = "1"` rather than a git tag.
-* **1.x · A second SDK.** The interface is a WIT file; a non-Rust SDK is the
-  test that it is a contract rather than a Rust API with extra steps.
+### 1.1.0 — every desktop, and a second language
+
+* **Windows (M5) — done.** A DirectComposition shell kept at `HWND_BOTTOM`,
+  DPAPI behind `secrets`, an MSI, and the measured tests — see M5 above.
+* **macOS (M6) — done.** A non-activating panel at desktop-icon level with a
+  `CAMetalLayer`, the login keychain behind `secrets`, a signed and notarised
+  `.app` — see M6 above.
+* **The SDK on crates.io — done.** `uniwidged-guest`, with `uniwidged-core` and
+  `uniwidged-view`, published by the release workflow in one `cargo publish`.
+  The interface is vendored into the crate, because a package cannot reach
+  outside its own directory, and a test fails if the copy and
+  `wit/uniwidged.wit` ever differ. CI packages all three on every change and
+  builds them for `wasm32-wasip2` as packaged. `uniwidged new` from a released
+  binary now writes `uniwidged-guest = "1.1"`.
+* **A second SDK — done, in C.** `sdks/c` is a header and one file over the
+  bindings `wit-bindgen c` generates from the interface, built with wasi-sdk.
+  Its example reads a setting, answers a click by the id the Rust SDK would
+  have given the node, and is built and run in the real runtime on every
+  change. C because it is the language with nothing between it and the
+  canonical ABI: an SDK there is a test of the *interface*, not of somebody's
+  generator.
+
+The rest of the desktop came with the shells rather than after them, because a
+platform without them would be a platform where `run` works and nothing else
+does: `reload` is a named event on Windows; `status` and the pid check ask
+`proc_name` on macOS rather than trusting liveness alone; `autostart` writes a
+`Run` value and a `LaunchAgent`; links open through `ShellExecuteW` and `open`.
+
+### Still open
+
+Nothing on this list. What would come next is whatever real use of the Windows
+and macOS shells finds — they are measured in CI, and have had far less time on
+real desktops than Linux has.
 
 Patches for anything that is a fix. The `.deb` and the AUR package follow the
 workspace version, and nothing else has one. **2.0** only if the interface has

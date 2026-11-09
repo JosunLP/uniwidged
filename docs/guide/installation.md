@@ -1,14 +1,15 @@
 # Installation
 
-uniwidged 1.0 runs on **Linux**, on both Wayland and X11. The binary picks the
-right window system at start-up and says which it chose.
+uniwidged runs on **Linux** (Wayland and X11), **Windows 10 and 11**, and
+**macOS 11 or later**. On Linux the binary picks the right window system at
+start-up and says which it chose; on the other two there is only one.
 
 ## Requirements
 
 | | |
 |---|---|
-| A compositor | **Wayland:** one that implements `wlr-layer-shell` — sway, Hyprland, river, labwc, KDE Plasma, Wayfire and others. **X11:** any window manager with a compositing manager running, for per-pixel alpha. |
-| A GPU | Anything with a Vulkan, OpenGL ES or GL driver that wgpu supports. A software driver (lavapipe) works too. |
+| A compositor | **Wayland:** one that implements `wlr-layer-shell` — sway, Hyprland, river, labwc, KDE Plasma, Wayfire and others. **X11:** any window manager with a compositing manager running, for per-pixel alpha. **Windows and macOS:** always there (DWM, the window server). |
+| A GPU | **Linux:** anything with a Vulkan, OpenGL ES or GL driver that wgpu supports; a software driver (lavapipe) works too. **Windows:** a DirectX 12 adapter — WARP, the software one every Windows has, counts. **macOS:** Metal, which every supported Mac has. |
 | Fonts | Whatever fontconfig finds. The host uses your session's fonts. |
 
 Not sure what your session offers? After installing, run:
@@ -23,16 +24,33 @@ uses.
 
 ## From a release package
 
-Every tagged release on GitHub carries a `.deb` built and inspected in CI, with
-its SHA-256 checksum in `SHA256SUMS`.
+Every tagged release on GitHub carries a `.deb`, a Windows installer and a
+macOS bundle, each built and inspected in CI, with their SHA-256 checksums in
+`SHA256SUMS`.
 
 ::: code-group
 
 ```sh [Debian / Ubuntu]
-base=https://github.com/JosunLP/uniwidged/releases/download/v1.0.0
-curl -LO "$base/uniwidged_1.0.0_amd64.deb" -LO "$base/SHA256SUMS"
+base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
+curl -LO "$base/uniwidged_1.1.0_amd64.deb" -LO "$base/SHA256SUMS"
 sha256sum --ignore-missing -c SHA256SUMS && \
-  sudo apt install ./uniwidged_1.0.0_amd64.deb
+  sudo apt install ./uniwidged_1.1.0_amd64.deb
+```
+
+```powershell [Windows]
+# Per-user: installs under %LOCALAPPDATA%\Programs, adds itself to your PATH,
+# and never asks for an administrator.
+$base = "https://github.com/JosunLP/uniwidged/releases/download/v1.1.0"
+Invoke-WebRequest "$base/uniwidged-1.1.0-x64.msi" -OutFile uniwidged.msi
+msiexec /i uniwidged.msi
+```
+
+```sh [macOS]
+base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
+curl -LO "$base/uniwidged-1.1.0-macos.zip"
+ditto -x -k uniwidged-1.1.0-macos.zip /Applications
+# The command line, from the bundle:
+ln -s /Applications/uniwidged.app/Contents/MacOS/uniwidged /usr/local/bin/uniwidged
 ```
 
 ```sh [Arch Linux]
@@ -44,12 +62,24 @@ makepkg -si
 
 :::
 
-The package installs the binary, the manual page (`man uniwidged`), a session
-desktop entry, and completions for bash, zsh and fish.
+The `.deb` installs the binary, the manual page (`man uniwidged`), a session
+desktop entry, and completions for bash, zsh and fish. The Windows installer
+installs the binary and a Start-menu entry that starts the desktop. The macOS
+bundle is a universal binary for Apple Silicon and Intel, with no Dock tile.
+
+::: warning Signing
+A release is signed only where the project's signing keys were available to
+the release workflow, and its notes say which. An **unsigned** Windows
+installer makes SmartScreen warn before it runs; a macOS bundle that is **not
+notarised** is refused by Gatekeeper when it came from a download — remove the
+quarantine flag with `xattr -d com.apple.quarantine /Applications/uniwidged.app`
+if you have checked `SHA256SUMS` and trust it.
+:::
 
 ## From source
 
-You need a Rust toolchain of **1.95 or newer** and three system libraries.
+You need a Rust toolchain of **1.95 or newer**. On Linux you also need three
+system libraries; Windows and macOS need nothing else.
 
 ::: code-group
 
@@ -87,6 +117,10 @@ no C toolchain, no system libraries and no GPU on the build machine:
 rustup target add wasm32-wasip2
 ```
 
+The SDK is on crates.io as [`uniwidged-guest`](https://crates.io/crates/uniwidged-guest),
+so a widget depends on it like on anything else. Widgets can also be written in
+C, with wasi-sdk — see [`sdks/c`](https://github.com/JosunLP/uniwidged/tree/main/sdks/c).
+
 ## Shell completions
 
 The packages install these for you. From source:
@@ -120,13 +154,15 @@ Completions include the names of your installed widgets.
 uniwidged autostart enable
 ```
 
-This writes an XDG autostart entry. It will not overwrite one you wrote by
-hand. `uniwidged autostart status` says what is there; `disable` removes ours.
+This writes an XDG autostart entry on Linux, a `LaunchAgent` on macOS
+(`~/Library/LaunchAgents/io.github.josunlp.uniwidged.plist`), and a value under
+`HKCU\…\CurrentVersion\Run` on Windows — the one place each platform's own
+*startup apps* settings list. It will not overwrite one you wrote by hand. `uniwidged autostart status` says what is there; `disable` removes ours.
 
 ## Checking it worked
 
 ```sh
-uniwidged --version   # uniwidged 1.0.0 (widget ABI 9)
+uniwidged --version   # uniwidged 1.1.0 (widget ABI 9)
 uniwidged doctor
 ```
 

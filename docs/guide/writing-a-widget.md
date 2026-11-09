@@ -615,5 +615,4 @@ Named so nobody has to find out the hard way:
 [The API reference](../reference/api.md) is every function, type and refusal in
 one page. [The architecture](../project/architecture.md) has the reasoning behind
 all of this, and [the roadmap](../project/roadmap.md) says what is not built yet —
-every capability in the table above is served on Linux; what is missing is
-Windows and macOS.
+every capability in the table above is served on Linux, Windows and macOS.

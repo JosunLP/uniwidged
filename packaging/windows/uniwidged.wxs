@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer: one binary, a Start-menu entry, and the binary's
+  directory on the user's PATH.
+
+  Per-user, on purpose. A widget host runs as you, reads your configuration and
+  starts with your session; installing it for every account on the machine
+  would need an administrator for something that has no business asking for
+  one. `Scope="perUser"` installs under %LOCALAPPDATA%\Programs and writes only
+  to HKCU, so the installer never elevates.
+
+  Built by `packaging/windows/build.ps1` with WiX 5 (`wix build`). The version is
+  passed in from Cargo.toml rather than written here: two places to write a
+  version is one place to forget one.
+
+  The UpgradeCode is fixed for the life of the product and must never change —
+  it is how a new installer finds the old one to replace.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="uniwidged"
+      Manufacturer="uniwidged contributors"
+      Version="$(var.Version)"
+      UpgradeCode="7c1b6e2e-5a4f-4d55-9f3a-2f7a2d9b0c11"
+      Scope="perUser"
+      Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer uniwidged is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="uniwidged">
+          <Component Id="Binary" Guid="*">
+            <File Id="UniwidgedExe" Source="$(var.Binary)" KeyPath="yes" />
+            <!-- `uniwidged` from any terminal, which is where every command but
+                 `run` is used. Appended rather than prepended: nothing here
+                 should shadow a tool somebody already has. -->
+            <Environment
+                Id="UserPath"
+                Name="PATH"
+                Value="[INSTALLFOLDER]"
+                Part="last"
+                Action="set"
+                System="no"
+                Permanent="no" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenu" Guid="*">
+        <!-- "Start the desktop", which is the one command a person runs by
+             clicking. `--background` lets go of the console, exactly as the
+             autostart entry does. -->
+        <Shortcut
+            Id="StartDesktop"
+            Name="uniwidged"
+            Description="Desktop widgets"
+            Target="[INSTALLFOLDER]uniwidged.exe"
+            Arguments="run --background"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\uniwidged"
+            Name="StartMenu"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentRef Id="Binary" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+  </Package>
+</Wix>

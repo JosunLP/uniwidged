@@ -1,4 +1,4 @@
-//! The desktop, running on X11.
+//! The desktop, on whichever window system this is.
 //!
 //! This is `ARCHITECTURE.md` §5's loop with a real window system under it:
 //!
@@ -20,6 +20,14 @@
 //! window. Which one happened is in the start-up log, along with anything the
 //! session could not provide. Everything below the first twenty lines is the
 //! same either way — `uniwidged_shell::platform::linux` is where the two meet.
+//!
+//! **And the other two platforms.** Windows gets a `WS_EX_NOREDIRECTIONBITMAP`
+//! popup kept at `HWND_BOTTOM`, macOS a non-activating panel at desktop-icon
+//! level. Nothing in this file names either: it is written against
+//! `uniwidged_shell::platform::desktop`, which is the same set of names on all
+//! four, and the only lines here that know which platform they are on are
+//! [`open_link`] and [`doctor`] — because what opens a browser, and what is
+//! worth reporting about a session, are genuinely different questions on each.
 
 #[cfg(test)]
 mod tests;
@@ -37,8 +45,7 @@ use uniwidged_host::placement;
 use uniwidged_host::{Activated, Host};
 use uniwidged_render::SurfaceId;
 use uniwidged_runtime::manifest::Manifest;
-use uniwidged_shell::platform::linux::{self, DesktopWindow, Session};
-use uniwidged_shell::platform::x11::{AlphaPath, X11Window};
+use uniwidged_shell::platform::desktop::{self, DesktopWindow};
 use uniwidged_shell::{Input, Output, WakePipe};
 
 use crate::log::{problem, say};
@@ -304,18 +311,59 @@ fn place_widget(
 /// see `uniwidged_runtime::net::host_of`, which is one function for exactly
 /// that reason.
 fn open_link(url: &str) {
-    // No shell. `xdg-open` is executed directly with the URL as one argument,
-    // so nothing in it can become a second command — the same rule the
-    // `command` capability follows, and the reason both are worth stating.
-    match std::process::Command::new("xdg-open")
+    match spawn_browser(url) {
+        Ok(()) => say!("  opening {url}"),
+        Err(e) => problem!("could not open {url}: {e}"),
+    }
+}
+
+/// `xdg-open` on Linux, `open` on macOS: executed directly with the URL as one
+/// argument — no shell — so nothing in it can become a second command, the
+/// same rule the `command` capability follows.
+#[cfg(unix)]
+fn spawn_browser(url: &str) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-    {
-        Ok(_child) => say!("  opening {url}"),
-        Err(e) => problem!("could not open {url}: {e}"),
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+/// `ShellExecuteW` with the `open` verb: what Explorer does with a URL, and
+/// the one way to reach the user's default browser that involves no command
+/// line to quote. It returns as soon as the request is handed over.
+#[cfg(windows)]
+fn spawn_browser(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
+    let verb = wide("open");
+    let file = wide(url);
+    // SAFETY: two strings that outlive the call, and no window, parameters
+    // or directory.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Documented: anything above 32 is success.
+    if result as usize > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW answered {}", result as usize))
     }
 }
 
@@ -609,38 +657,7 @@ pub(crate) fn machine_counters(counters: &uniwidged_runtime::services::Counters)
 }
 
 pub fn doctor() {
-    match linux::session() {
-        Session::Wayland => {
-            let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
-            println!("  session: Wayland ({display})");
-            // Opening a real surface is the only way to find out whether this
-            // compositor has a layer shell, and it is the question that decides
-            // whether a widget is a widget here.
-            match DesktopWindow::open(PhysicalRect::new(0, 0, 32, 32), "uniwidged doctor") {
-                Ok(window) => {
-                    println!("    shell: {}", window.describe());
-                    let outputs = window.outputs();
-                    if outputs.is_empty() {
-                        println!("    monitors: this compositor reports no names");
-                    } else {
-                        println!("    monitors:");
-                        for output in outputs {
-                            println!(
-                                "      {} {}x{} at {},{}",
-                                output.name,
-                                output.rect.width,
-                                output.rect.height,
-                                output.rect.x,
-                                output.rect.y
-                            );
-                        }
-                    }
-                }
-                Err(e) => println!("    cannot create a surface: {e}"),
-            }
-        }
-        Session::X11 => println!("  session: X11"),
-    }
+    session_doctor();
     let locale = uniwidged_runtime::services::Locale::system();
     println!(
         "  dates and times: {} (UTC{}{:02}:{:02})",
@@ -670,7 +687,7 @@ pub fn doctor() {
     ) {
         Ok(mut host) => {
             host.set_data_root(crate::paths::data_root());
-            host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::new(
+            host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::system(
                 crate::paths::keyring_dir(),
             )));
             if let Some(what) = host.keyring_description() {
@@ -710,6 +727,62 @@ pub fn doctor() {
         }
         Err(e) => println!("  capabilities: cannot say — {e}"),
     }
+    monitors_doctor();
+}
+
+/// Which session this is, and what kind of surface a widget would get in it.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn session_doctor() {
+    use uniwidged_shell::platform::linux::{self, Session};
+    match linux::session() {
+        Session::Wayland => {
+            let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+            println!("  session: Wayland ({display})");
+            // Opening a real surface is the only way to find out whether this
+            // compositor has a layer shell, and it is the question that decides
+            // whether a widget is a widget here.
+            match DesktopWindow::open(PhysicalRect::new(0, 0, 32, 32), "uniwidged doctor") {
+                Ok(window) => {
+                    println!("    shell: {}", window.describe());
+                    let outputs = window.outputs();
+                    if outputs.is_empty() {
+                        println!("    monitors: this compositor reports no names");
+                    } else {
+                        println!("    monitors:");
+                        for output in outputs {
+                            println!(
+                                "      {} {}x{} at {},{}",
+                                output.name,
+                                output.rect.width,
+                                output.rect.height,
+                                output.rect.x,
+                                output.rect.y
+                            );
+                        }
+                    }
+                }
+                Err(e) => println!("    cannot create a surface: {e}"),
+            }
+        }
+        Session::X11 => println!("  session: X11"),
+    }
+}
+
+/// The other two platforms have one window system each, and the question is
+/// only whether a widget window can be made and what it says about itself.
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn session_doctor() {
+    match DesktopWindow::open(PhysicalRect::new(-200, -200, 32, 32), "uniwidged doctor") {
+        Ok(window) => println!("  shell: {}", window.describe()),
+        Err(e) => println!("  cannot create a surface: {e}"),
+    }
+}
+
+/// The monitors, by the names placements are stored against.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn monitors_doctor() {
+    use uniwidged_shell::platform::linux::{self, Session};
+    use uniwidged_shell::platform::x11::{AlphaPath, X11Window};
     if linux::session() == Session::Wayland {
         // The rest of this is about X11's transparency paths, which a Wayland
         // session does not have and does not need: `VK_COMPOSITE_ALPHA_PRE_
@@ -762,6 +835,27 @@ pub fn doctor() {
     }
 }
 
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn monitors_doctor() {
+    let outputs = desktop::outputs();
+    if outputs.is_empty() {
+        println!("  monitors: none reported");
+        return;
+    }
+    println!("  monitors:");
+    for output in outputs {
+        println!(
+            "    {} {}x{} at {},{}{}",
+            output.name,
+            output.rect.width,
+            output.rect.height,
+            output.rect.x,
+            output.rect.y,
+            if output.primary { " (primary)" } else { "" },
+        );
+    }
+}
+
 /// Starts the desktop and does not return until it is closed.
 pub fn run(config_path: &Path) -> Result<(), String> {
     let mut config = Config::read(config_path).map_err(|e| e.to_string())?;
@@ -804,7 +898,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     //
     // A desktop that cannot claim a pid file still runs. It just cannot be
     // told, which is a smaller loss than refusing to start.
-    let _pid_file = match crate::daemon::listen(std::os::fd::AsRawFd::as_raw_fd(&wake.as_fd())) {
+    let _pid_file = match crate::daemon::listen(&wake) {
         Ok(guard) => {
             say!("  pid file: {}", guard.path().display());
             Some(guard)
@@ -829,7 +923,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // per widget by the host — a widget has no argument through which to name
     // another's. Like the data directory, nothing is created until a widget
     // actually stores something.
-    host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::new(
+    host.set_keyring(std::sync::Arc::new(uniwidged_runtime::FileKeyring::system(
         crate::paths::keyring_dir(),
     )));
     // Every widget's window, kept alive for as long as the desktop is: dropping
@@ -839,7 +933,7 @@ pub fn run(config_path: &Path) -> Result<(), String> {
     // are opened at the coordinates they were saved with and *then* placed —
     // which is one extra `set_geometry` on X11 and the only possible order on
     // Wayland.
-    let mut outputs: Vec<Output> = linux::outputs();
+    let mut outputs: Vec<Output> = desktop::outputs();
 
     let mut desktop = Desktop::new();
 
@@ -961,8 +1055,9 @@ pub fn run(config_path: &Path) -> Result<(), String> {
         // its own — there is no session object above them on either protocol —
         // so waiting on one is waiting on one widget, and a click on any other
         // sat unread until something else happened to wake the process. See
-        // `linux::wait_any`.
-        linux::wait_any(&mut desktop.windows, timeout, Some(&wake)).map_err(|e| e.to_string())?;
+        // `linux::wait_any`. On Windows and macOS every window's messages
+        // arrive on one thread's queue, and this is a wait on that.
+        desktop::wait_any(&mut desktop.windows, timeout, Some(&wake)).map_err(|e| e.to_string())?;
 
         // Drained first, then acted on. A burst of motion events during a
         // drag is one geometry change rather than forty, and the last one is

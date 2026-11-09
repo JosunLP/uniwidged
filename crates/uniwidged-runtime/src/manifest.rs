@@ -525,3 +525,19 @@ pub(crate) fn describe(capability: &Capability) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// The SDK on crates.io carries its own copy of the interface, because a
+/// published crate cannot reach outside its directory. A copy that drifted
+/// would be an SDK generating bindings for a world this host does not run —
+/// which links, and then fails in a way that names neither file.
+#[cfg(test)]
+mod vendored_interface {
+    #[test]
+    fn the_interface_shipped_with_the_sdk_is_the_one_the_host_runs() {
+        assert_eq!(
+            include_str!("../../../wit/uniwidged.wit"),
+            include_str!("../../uniwidged-guest/wit/uniwidged.wit"),
+            "crates/uniwidged-guest/wit/uniwidged.wit is not wit/uniwidged.wit — copy it across"
+        );
+    }
+}

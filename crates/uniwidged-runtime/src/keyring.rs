@@ -27,6 +27,26 @@
 //!   because the key is held by a daemon that the login unlocked and that can
 //!   refuse. Those are backends behind this same trait; see `ROADMAP.md`.
 //!
+//! ### Where the key is held
+//!
+//! [`FileKeyring::system`] is what a desktop uses, and on two platforms it is
+//! stronger than the above, because the *key* — not the store — moves to the
+//! operating system:
+//!
+//! * **Windows**: the key file holds the key sealed with DPAPI
+//!   (`CryptProtectData`, user scope). Windows derives the sealing key from
+//!   the user's logon credentials, so the file is useless off this account and
+//!   off this machine, and opening it is the OS's decision rather than a file
+//!   permission's.
+//! * **macOS**: there is no key file. The key is a generic-password item in the
+//!   login keychain, which the login unlocked and which can prompt or refuse.
+//!
+//! The store itself is the same file on all three, sealed the same way, so
+//! everything below — one AEAD message, a read that is a lookup, a write that
+//! is a rename — holds unchanged. On Linux, [`FileKeyring::system`] is
+//! [`FileKeyring::new`]: the Secret Service is a D-Bus conversation this
+//! process does not yet have.
+//!
 //! [`Keyring::describe`] returns that sentence, and `uniwidged doctor` prints
 //! it, because a user deciding whether to let a widget store a password is
 //! entitled to know which of the two they have.
@@ -244,6 +264,8 @@ const MAGIC: &str = "uniwidged-keyring v1";
 pub struct FileKeyring {
     store_path: PathBuf,
     key_path: PathBuf,
+    /// Who holds the key. See the module notes.
+    custody: Custody,
     /// The decrypted store, and the key it was opened with.
     ///
     /// Read once and then kept, because **every one of these calls happens
@@ -279,6 +301,19 @@ struct Open {
     entries: Vec<Entry>,
 }
 
+/// Who holds the store's key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Custody {
+    /// A file beside the store, readable only by you.
+    File,
+    /// A file beside the store, sealed by DPAPI to this user on this machine.
+    #[cfg(windows)]
+    Dpapi,
+    /// An item in the login keychain; no file at all.
+    #[cfg(target_os = "macos")]
+    Keychain,
+}
+
 impl FileKeyring {
     /// Nothing is created here, and nothing is created by reading: a desktop
     /// on which no widget ever stores a secret leaves no keychain behind, key
@@ -288,7 +323,34 @@ impl FileKeyring {
         Self {
             store_path: dir.join("keyring.enc"),
             key_path: dir.join("keyring.key"),
+            custody: Custody::File,
             open: Mutex::new(None),
+        }
+    }
+
+    /// The same store, with its key held by the operating system where this
+    /// one offers that: DPAPI on Windows, the login keychain on macOS. Where
+    /// it does not, this is [`FileKeyring::new`]. What a desktop uses.
+    pub fn system(dir: impl AsRef<Path>) -> Self {
+        #[cfg(windows)]
+        {
+            let mut keyring = Self::new(dir);
+            // A different name from the raw key, so a store copied over from
+            // a Linux machine says which key it is missing rather than
+            // misreading one.
+            keyring.key_path = keyring.key_path.with_file_name("keyring.dpapi");
+            keyring.custody = Custody::Dpapi;
+            keyring
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut keyring = Self::new(dir);
+            keyring.custody = Custody::Keychain;
+            keyring
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Self::new(dir)
         }
     }
 
@@ -309,6 +371,13 @@ impl FileKeyring {
     /// mode equals `0600` — a user may legitimately have it `0400` — but that
     /// group and other have nothing.
     fn key(&self) -> Result<[u8; 32], KeyringError> {
+        #[cfg(target_os = "macos")]
+        if self.custody == Custody::Keychain {
+            return match keychain::get(&self.store_path)? {
+                Some(bytes) => self.exact_key(&bytes),
+                None => self.new_key(),
+            };
+        }
         match std::fs::read(&self.key_path) {
             Ok(bytes) => {
                 #[cfg(unix)]
@@ -327,13 +396,20 @@ impl FileKeyring {
                         )));
                     }
                 }
-                let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
-                    KeyringError::Unavailable(format!(
-                        "{} is not a keychain key: it should be exactly 32 bytes",
-                        self.key_path.display()
-                    ))
-                })?;
-                Ok(key)
+                #[cfg(windows)]
+                let bytes = if self.custody == Custody::Dpapi {
+                    dpapi::unseal(&bytes).map_err(|e| {
+                        KeyringError::Unavailable(format!(
+                            "{} does not unseal for this account on this machine \
+                             ({e}); a keychain copied from elsewhere cannot be \
+                             opened here — delete both files to start a new one",
+                            self.key_path.display()
+                        ))
+                    })?
+                } else {
+                    bytes
+                };
+                self.exact_key(&bytes)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.new_key(),
             Err(e) => Err(KeyringError::Unavailable(format!(
@@ -343,13 +419,35 @@ impl FileKeyring {
         }
     }
 
+    fn exact_key(&self, bytes: &[u8]) -> Result<[u8; 32], KeyringError> {
+        bytes.try_into().map_err(|_| {
+            KeyringError::Unavailable(format!(
+                "{} is not a keychain key: it should be exactly 32 bytes",
+                self.key_path.display()
+            ))
+        })
+    }
+
     fn new_key(&self) -> Result<[u8; 32], KeyringError> {
         let mut key = [0u8; 32];
         getrandom::fill(&mut key).map_err(|e| {
             KeyringError::Unavailable(format!("this machine gave no entropy for a new key: {e}"))
         })?;
+        #[cfg(target_os = "macos")]
+        if self.custody == Custody::Keychain {
+            keychain::set(&self.store_path, &key)?;
+            return Ok(key);
+        }
         if let Some(parent) = self.key_path.parent() {
             std::fs::create_dir_all(parent).map_err(io("creating the keychain's directory"))?;
+        }
+        #[cfg(windows)]
+        if self.custody == Custody::Dpapi {
+            let sealed = dpapi::seal(&key).map_err(|e| {
+                KeyringError::Unavailable(format!("DPAPI would not seal a new key: {e}"))
+            })?;
+            write_private(&self.key_path, &sealed)?;
+            return Ok(key);
         }
         write_private(&self.key_path, &key)?;
         Ok(key)
@@ -566,11 +664,27 @@ impl SecretStore for FileKeyring {
     }
 
     fn describe(&self) -> String {
-        format!(
-            "an encrypted file at {} — safe from a backup or another user, \
-             not from a program already running as you",
-            self.store_path.display()
-        )
+        match self.custody {
+            Custody::File => format!(
+                "an encrypted file at {} — safe from a backup or another user, \
+                 not from a program already running as you",
+                self.store_path.display()
+            ),
+            #[cfg(windows)]
+            Custody::Dpapi => format!(
+                "an encrypted file at {}, its key sealed by Windows (DPAPI) to \
+                 this account on this machine — useless anywhere else, though a \
+                 program already running as you can still ask Windows to unseal it",
+                self.store_path.display()
+            ),
+            #[cfg(target_os = "macos")]
+            Custody::Keychain => format!(
+                "an encrypted file at {}, its key held in your login keychain — \
+                 which macOS can lock, and which asks before a program other than \
+                 this one reads it",
+                self.store_path.display()
+            ),
+        }
     }
 }
 
@@ -754,6 +868,107 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
         let _ = std::fs::remove_file(&temporary);
         KeyringError::Unavailable(format!("{}: {e}", path.display()))
     })
+}
+
+/// Sealing a key to the current user with DPAPI.
+#[cfg(windows)]
+mod dpapi {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+    };
+
+    fn call(
+        input: &[u8],
+        f: impl FnOnce(*const CRYPT_INTEGER_BLOB, *mut CRYPT_INTEGER_BLOB) -> i32,
+    ) -> Result<Vec<u8>, String> {
+        let blob = CRYPT_INTEGER_BLOB {
+            cbData: input.len() as u32,
+            pbData: input.as_ptr() as *mut u8,
+        };
+        let mut out = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        if f(&blob, &mut out) == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        // SAFETY: DPAPI allocated `out` with `LocalAlloc` and gave us its
+        // length; it is copied and then freed exactly once.
+        let bytes = unsafe { std::slice::from_raw_parts(out.pbData, out.cbData as usize) }.to_vec();
+        unsafe { LocalFree(out.pbData.cast()) };
+        Ok(bytes)
+    }
+
+    pub(super) fn seal(plain: &[u8]) -> Result<Vec<u8>, String> {
+        call(plain, |input, output| {
+            // SAFETY: valid input and output blobs; no description, entropy
+            // or prompt; never shows UI — this runs inside a widget's call.
+            unsafe {
+                CryptProtectData(
+                    input,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    output,
+                )
+            }
+        })
+    }
+
+    pub(super) fn unseal(sealed: &[u8]) -> Result<Vec<u8>, String> {
+        call(sealed, |input, output| {
+            // SAFETY: as `seal`.
+            unsafe {
+                CryptUnprotectData(
+                    input,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    output,
+                )
+            }
+        })
+    }
+}
+
+/// The store's key as a generic-password item in the login keychain.
+///
+/// The account is the store's path, so two desktops with two configurations —
+/// a test, somebody's second profile — hold two different keys rather than
+/// fighting over one.
+#[cfg(target_os = "macos")]
+mod keychain {
+    use super::KeyringError;
+    use std::path::Path;
+
+    const SERVICE: &str = "uniwidged keychain";
+    /// `errSecItemNotFound`.
+    const NOT_FOUND: i32 = -25300;
+
+    pub(super) fn get(store: &Path) -> Result<Option<Vec<u8>>, KeyringError> {
+        match security_framework::passwords::get_generic_password(SERVICE, &store.to_string_lossy())
+        {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.code() == NOT_FOUND => Ok(None),
+            Err(e) => Err(KeyringError::Unavailable(format!(
+                "the login keychain would not give up this desktop's key: {e}"
+            ))),
+        }
+    }
+
+    pub(super) fn set(store: &Path, key: &[u8]) -> Result<(), KeyringError> {
+        security_framework::passwords::set_generic_password(SERVICE, &store.to_string_lossy(), key)
+            .map_err(|e| {
+                KeyringError::Unavailable(format!(
+                    "the login keychain would not keep this desktop's key: {e}"
+                ))
+            })
+    }
 }
 
 fn io(what: &str) -> impl Fn(std::io::Error) -> KeyringError + '_ {

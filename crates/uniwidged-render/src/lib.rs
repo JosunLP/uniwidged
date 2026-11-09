@@ -129,6 +129,35 @@ pub struct Renderer {
     next_id: u32,
 }
 
+/// What this platform's swapchains need from the instance.
+///
+/// **Windows.** A widget window is created with `WS_EX_NOREDIRECTIONBITMAP`,
+/// which is what lets DWM blend it per-pixel against the wallpaper — and also
+/// what makes an ordinary HWND swapchain show *nothing at all*, because there
+/// is no redirection surface for it to land in. wgpu's DX12 backend can instead
+/// make a DirectComposition target for the window and a composition swapchain
+/// on its visual (`DxgiFromVisual`), which is the path Ephemeris took by hand
+/// and the only one that offers `PreMultiplied`. DX12 alone, because the other
+/// backends would hand the same window an HWND swapchain and an opaque
+/// rectangle. `WGPU_BACKEND` still overrides it, for somebody debugging a
+/// driver.
+///
+/// Everywhere else the defaults are already right.
+fn platform_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::InstanceDescriptor {
+    #[cfg(target_os = "windows")]
+    {
+        let mut descriptor = descriptor;
+        descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+        descriptor.backend_options.dx12.presentation_system =
+            wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        descriptor
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        descriptor
+    }
+}
+
 impl Renderer {
     /// A renderer with no surface yet.
     ///
@@ -138,7 +167,9 @@ impl Renderer {
     /// [`Renderer::new_compatible_with`] so that the adapter is chosen against
     /// a real surface — on a hybrid-graphics laptop the two can differ.
     pub fn new() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(platform_instance(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+        ));
         Self::build(instance, None)
     }
 

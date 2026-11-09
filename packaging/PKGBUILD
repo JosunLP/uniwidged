@@ -4,7 +4,7 @@
 # project's CI — see packaging/README.md. Run `makepkg -si` locally before
 # publishing anything from it.
 pkgname=uniwidged
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Cross-platform desktop widget framework: sandboxed WASM widgets on the desktop layer"
 arch=('x86_64' 'aarch64')
