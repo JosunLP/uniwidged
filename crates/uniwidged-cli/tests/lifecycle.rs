@@ -491,6 +491,81 @@ fn a_widget_can_be_turned_off_without_losing_where_it_was_put() {
 }
 
 #[test]
+fn a_mistyped_or_incomplete_option_removes_nothing() {
+    // `remove` deletes a widget's placement and settings; an option it could
+    // not read must stop it, not be skipped over.
+    let machine = Machine::new("remove-typo");
+    let component = reference_widget(&machine.0);
+    machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+
+    let said = machine.ok(&["remove", "clock", "--purgee", "--help"]);
+    assert!(said.starts_with("uniwidged remove — "), "{said}");
+    let said = machine.fails(&["remove", "clock", "--purgee"]);
+    assert!(
+        said.contains("`--purgee` is not an option of `remove`"),
+        "{said}"
+    );
+    // Without its value, `--config` would have meant the default configuration.
+    let said = machine.fails(&["remove", "clock", "--config"]);
+    assert!(said.contains("`--config` needs a value"), "{said}");
+
+    assert!(
+        machine
+            .ok(&["list", "--names"])
+            .lines()
+            .any(|l| l == "clock"),
+        "the clock is still installed"
+    );
+}
+
+#[test]
+fn install_writes_to_the_configuration_it_is_given() {
+    let machine = Machine::new("install-config");
+    let component = reference_widget(&machine.0);
+    let other = machine.0.join("other/config.toml");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let other = other.to_str().unwrap();
+    machine.ok(&[
+        "install",
+        component.to_str().unwrap(),
+        "--allow-unsigned",
+        "--config",
+        other,
+    ]);
+    assert!(
+        machine
+            .ok(&["list", "--names", "--config", other])
+            .contains("clock")
+    );
+    assert!(
+        !machine.ok(&["list", "--names"]).contains("clock"),
+        "and not to the default one"
+    );
+}
+
+#[test]
+fn signing_a_manifest_instead_of_the_component_is_refused() {
+    let machine = Machine::new("sign-toml");
+    reference_widget(&machine.0);
+    let key = machine.0.join("signing-key");
+    machine.ok(&["keygen", "--out", key.to_str().unwrap()]);
+    let manifest = machine.0.join("clock.toml");
+    let before = std::fs::read(&manifest).unwrap();
+    let said = machine.fails(&[
+        "sign",
+        manifest.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert!(said.contains("is a manifest, not a component"), "{said}");
+    assert_eq!(
+        std::fs::read(&manifest).unwrap(),
+        before,
+        "and it is untouched"
+    );
+}
+
+#[test]
 fn removing_a_widget_keeps_its_data_unless_told_otherwise() {
     // Removing a widget is something people do to try one out and change their
     // minds. A note-taking widget that silently took the notes with it would be

@@ -151,13 +151,22 @@ fn server() -> Option<Server> {
 /// lavapipe did not survive it on a loaded runner: first concurrently
 /// (`malloc(): unaligned tcache chunk detected`), and then, with the probes
 /// taken one at a time, as a plain SIGSEGV. Every test's X server is the same
-/// Xvfb, so the answer is the same for all of them; it is asked once, the way
-/// the desktop asks it, and remembered.
+/// Xvfb, so a yes is the same for all of them: it is asked the way the
+/// desktop asks it, and remembered.
 fn presentable(server: &Server) -> bool {
     use uniwidged_core::geom::PhysicalRect;
     use uniwidged_shell::platform::x11::{WindowKind, X11Window};
-    static ANSWER: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-    let probe = ANSWER.get_or_init(|| {
+    // A success is remembered — the probe's whole point is not to repeat it.
+    // A failure is not: it may have been this one server's, and the next test,
+    // on its own server, asks again (one at a time, behind the same lock).
+    static PRESENTS: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    let mut presents = PRESENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *presents {
+        return true;
+    }
+    let probe = (|| {
         let window = X11Window::open_on(
             Some(&server.display),
             PhysicalRect::new(0, 0, 64, 64),
@@ -174,9 +183,12 @@ fn presentable(server: &Server) -> bool {
             .map_err(|e| e.to_string())?;
         renderer.remove_surface(surface);
         Ok::<(), String>(())
-    });
+    })();
     match probe {
-        Ok(()) => true,
+        Ok(()) => {
+            *presents = true;
+            true
+        }
         Err(why) => {
             assert!(
                 std::env::var("UNIWIDGED_REQUIRE_GPU").is_err(),

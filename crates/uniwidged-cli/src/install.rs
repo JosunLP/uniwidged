@@ -57,6 +57,7 @@ pub fn command(args: &[String]) -> Result<(), String> {
     let manifest_path = manifest_for(&component, args)?;
     let allow_unsigned = args.iter().any(|a| a == "--allow-unsigned");
     install(
+        &crate::config_path(args),
         &component,
         &manifest_path,
         allow_unsigned,
@@ -145,7 +146,13 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
     //    symlink, wherever it sits: a link kept with a manifest of its own is
     //    read (and signed) with that one, so rule 2 goes first for it.
     let is_link = std::fs::symlink_metadata(&resolved).is_ok_and(|m| m.file_type().is_symlink());
-    let build = crate_of(&located);
+    // For a link, whose build it is depends on where it points, not where it
+    // sits: `A/target/linked.wasm` pointing at crate B's build is B's.
+    let build = if is_link {
+        crate_of(&real)
+    } else {
+        crate_of(&located)
+    };
     if !is_link && let Some(Some(manifest)) = &build {
         return (Some(manifest.clone()), beside);
     }
@@ -155,13 +162,9 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         return (Some(beside.clone()), beside);
     }
 
-    // A build that no single crate manifest owns has no answer to guess at.
+    // A build — for a link, the build it points at — takes its crate's
+    // manifest; one no single crate owns has no answer to guess at.
     if let Some(manifest) = build {
-        return (manifest, beside);
-    }
-
-    // 1, again, for a symlink into a crate's `target/` with nothing beside it.
-    if let Some(manifest) = crate_of(&real) {
         return (manifest, beside);
     }
 
@@ -250,7 +253,10 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
         match std::fs::read_to_string(dir.join("Cargo.toml")) {
             Ok(text) => {
                 let table: toml::Table = text.parse().ok()?;
-                if builds(&table) && dir.join("widget.toml").is_file() {
+                // Every crate that could have built it counts, widget or not:
+                // one without a `widget.toml` is still a crate the build may
+                // belong to, and then no manifest found elsewhere is its.
+                if builds(&table) {
                     owners.push(dir.join("widget.toml"));
                 }
             }
@@ -273,12 +279,19 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
             let Ok(kind) = entry.file_type() else {
                 return None;
             };
-            if kind.is_dir() && name != "target" && name != ".git" {
+            // A crate's build output — `target/` beside a `Cargo.toml` — and
+            // git's own store hold no members. A member that happens to be
+            // called `target` is still searched.
+            let build_output = name == "target" && dir.join("Cargo.toml").is_file();
+            if kind.is_dir() && !build_output && name != ".git" {
                 pending.push(entry.path());
             }
         }
     }
-    (owners.len() == 1).then(|| owners.remove(0))
+    match owners.as_slice() {
+        [only] if only.is_file() => Some(only.clone()),
+        _ => None,
+    }
 }
 
 /// Installs a widget that is already on disk, and reports what was recorded.
@@ -287,6 +300,7 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
 /// download directory that is later cleared stops working. `uniwidged add`
 /// copies into the widget store first for exactly that reason.
 pub fn install(
+    config_path: &Path,
     component: &Path,
     manifest_path: &Path,
     allow_unsigned: bool,
@@ -359,7 +373,7 @@ pub fn install(
         describe(&manifest, signed_by.as_deref());
     }
 
-    let path = crate::paths::config_file();
+    let path = config_path.to_path_buf();
     let mut config = Config::read(&path).map_err(|e| e.to_string())?;
     let name = manifest.name.clone();
 
@@ -486,7 +500,7 @@ mod tests {
         let space = root.join("space");
         write(
             space.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"members/*\", \".widgets/clock\"]\n[package]\nname = \"root-widget\"\n",
+            "[workspace]\nmembers = [\"members/*\", \".widgets/clock\", \"a/b/c/d/deep\", \"widgets/target\"]\n[package]\nname = \"root-widget\"\n",
         );
         write(space.join("widget.toml"), "");
         write(
@@ -538,6 +552,29 @@ mod tests {
         // owner, so the search ends unsure rather than with the one it saw.
         // (A directory by that name: unreadable even to root.)
         std::fs::create_dir_all(space.join("members/unreadable/Cargo.toml")).unwrap();
+        assert_eq!(found("my_clock"), None);
+        std::fs::remove_dir_all(space.join("members/unreadable")).unwrap();
+        assert_eq!(
+            found("my_clock"),
+            Some(space.join("members/clock/widget.toml"))
+        );
+
+        // A crate that builds the same artifact without being a widget is
+        // still a crate the build may be: no manifest is borrowed for it.
+        write(
+            space.join("members/plain/Cargo.toml"),
+            "[package]\nname = \"plain\"\n[lib]\nname = \"my_clock\"\n",
+        );
+        assert_eq!(found("my_clock"), None);
+        std::fs::remove_dir_all(space.join("members/plain")).unwrap();
+
+        // A member called `target` is a member, not build output: its claim
+        // counts.
+        write(
+            space.join("widgets/target/Cargo.toml"),
+            "[package]\nname = \"t\"\n[lib]\nname = \"my_clock\"\n",
+        );
+        write(space.join("widgets/target/widget.toml"), "");
         assert_eq!(found("my_clock"), None);
 
         // A root `Cargo.toml` that cannot be parsed may be a workspace whose
@@ -615,6 +652,20 @@ mod tests {
                 find_manifest(&into_build.join("dev.wasm")).0,
                 Some(into_build.join("dev.toml"))
             );
+        }
+
+        // A link in one crate's `target/` pointing at another crate's build
+        // is the other crate's, when nothing sits beside it.
+        #[cfg(unix)]
+        {
+            let other = root.join("project/other");
+            std::fs::create_dir_all(other.join("target/release")).unwrap();
+            std::fs::write(other.join("Cargo.toml"), "").unwrap();
+            std::fs::write(other.join("widget.toml"), "").unwrap();
+            std::fs::write(other.join("target/release/b.wasm"), b"").unwrap();
+            let foreign = release.join("foreign.wasm");
+            std::os::unix::fs::symlink(other.join("target/release/b.wasm"), &foreign).unwrap();
+            assert_eq!(find_manifest(&foreign).0, Some(other.join("widget.toml")));
         }
 
         // The same for a link that itself sits inside `target/`.

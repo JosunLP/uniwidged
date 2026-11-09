@@ -111,6 +111,14 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     // `widget.toml`, put that exact text beside the component, so that what
     // gets published is the triple that verifies rather than two of its three.
     let beside = component.with_extension("toml");
+    // `sign clock.toml` would write the manifest copy over the very file it
+    // signed. Components are `.wasm`; a `.toml` here is a mistake.
+    if beside == component {
+        return Err(format!(
+            "{} is a manifest, not a component: sign the `.wasm` beside it",
+            component.display()
+        ));
+    }
     let already_beside = beside
         .canonicalize()
         .is_ok_and(|b| manifest_path.canonicalize().is_ok_and(|m| m == b));

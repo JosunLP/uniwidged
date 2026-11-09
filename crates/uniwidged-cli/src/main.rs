@@ -228,8 +228,10 @@ fn read_options(command: &completions::Command, args: &[String]) -> Result<bool,
         let known = arg == "--config" || command.flags.contains(&arg.as_str());
         if !known {
             unknown.get_or_insert_with(|| arg.clone());
-        } else if !SWITCHES.contains(&arg.as_str()) {
-            args.next();
+        } else if !SWITCHES.contains(&arg.as_str()) && args.next().is_none() {
+            // `remove clock --config` must not fall back to the default
+            // configuration and remove the clock from there.
+            return Err(format!("`{arg}` needs a value"));
         }
     }
     match unknown {
@@ -750,7 +752,7 @@ fn command_snapshot(args: &[String]) -> Result<(), String> {
         .ok_or("which widget? `uniwidged snapshot <name>`")?;
     let out = flag(args, "-o").unwrap_or_else(|| format!("{name}.png"));
 
-    let path = paths::config_file();
+    let path = config_path(args);
     let config = Config::read(&path).map_err(|e| e.to_string())?;
     let widget = config
         .widget(name)
