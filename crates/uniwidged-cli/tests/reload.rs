@@ -70,11 +70,12 @@ fn a_pid_file_naming_something_that_is_not_uniwidged_is_never_signalled() {
     std::fs::write(machine.pid_file(), std::process::id().to_string()).expect("write");
 
     let output = machine.run(&["reload"]);
-    if cfg!(target_os = "linux") {
-        assert!(!output.status.success());
-        let said = String::from_utf8_lossy(&output.stderr);
-        assert!(said.contains("is gone"), "{said}");
-    }
+    // Every platform can tell now: Linux reads `/proc/<pid>/comm`, macOS asks
+    // `proc_name`, and on Windows only a running desktop has the reload event
+    // its pid names.
+    assert!(!output.status.success());
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(said.contains("is gone"), "{said}");
     // And this process is still here to assert it.
     assert_eq!(std::process::id(), std::process::id());
 }
