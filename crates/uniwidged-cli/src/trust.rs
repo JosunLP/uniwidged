@@ -115,11 +115,11 @@ pub fn sign(args: &[String]) -> Result<(), String> {
         .canonicalize()
         .is_ok_and(|b| manifest_path.canonicalize().is_ok_and(|m| m == b));
     if !already_beside {
-        std::fs::write(&beside, &manifest).map_err(|e| format!("{}: {e}", beside.display()))?;
+        write_replacing(&beside, &manifest)?;
         println!("  wrote {} (the manifest it covers)", beside.display());
     }
     let out = signature_path(&component);
-    std::fs::write(&out, file.to_text()).map_err(|e| format!("{}: {e}", out.display()))?;
+    write_replacing(&out, file.to_text())?;
     println!(
         "  signed {} and {}",
         component.display(),
@@ -130,6 +130,22 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     println!("  with  {}", key.public().to_hex());
     println!("  publish all three: the .wasm, the .toml and the .sig, side by side");
     Ok(())
+}
+
+/// Writes `path` whole or not at all: the bytes go to a temporary file in the
+/// same directory, which then replaces `path` in one rename. A write that
+/// fails halfway leaves the old file as it was, never a truncated one.
+fn write_replacing(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(), String> {
+    let shown = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let temporary = path.with_file_name(name);
+    let written =
+        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written.map_err(shown)
 }
 
 /// `uniwidged trust <hex key> [--name NAME]`
@@ -237,4 +253,31 @@ pub fn provenance(component: &Path, manifest: &Path) -> Result<Provenance, Strin
         Ok(name) => Provenance::Trusted(name.to_string()),
         Err(why) => Provenance::Refused(why.to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_replacing;
+
+    #[test]
+    fn a_replacement_is_whole_and_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("uniwidged-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clock.toml");
+        std::fs::write(&path, "old").unwrap();
+
+        write_replacing(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(left.len(), 1, "the temporary file is gone");
+
+        // A destination that cannot be replaced: the old contents survive.
+        let blocked = dir.join("blocked");
+        std::fs::create_dir_all(blocked.join("inside")).unwrap();
+        assert!(write_replacing(&blocked, "new").is_err());
+        assert!(blocked.join("inside").is_dir());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

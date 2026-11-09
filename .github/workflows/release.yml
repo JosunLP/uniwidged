@@ -62,12 +62,21 @@ jobs:
           set -eu
           version=${GITHUB_REF_NAME#v}
           # The section runs to the next level-two heading — outside a fenced
-          # block, so an example containing `## ` does not cut it short.
+          # block, so an example containing `## ` does not cut it short. As in
+          # CommonMark, a fence closes only with the character that opened it,
+          # at least as many times, and nothing after it.
           awk -v v="$version" '
             index($0, "## " v " ") == 1 { on = 1; next }
-            on && /^(```|~~~)/ { fenced = !fenced }
-            on && !fenced && /^## / { exit }
-            on { print }
+            on {
+              line = $0; sub(/^ */, "", line)
+              if (length($0) - length(line) <= 3 && match(line, /^(````*|~~~~*)/)) {
+                run = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH + 1)
+                if (fence == "") fence = run
+                else if (substr(run, 1, 1) == substr(fence, 1, 1) &&
+                         length(run) >= length(fence) && rest ~ /^[ \t]*$/) fence = ""
+              } else if (fence == "" && /^## /) exit
+              print
+            }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           # A heading with nothing under it is no release notes at all.
           grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || {

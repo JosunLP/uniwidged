@@ -68,8 +68,9 @@ the remedy is the same: upgrade uniwidged.
 
 * **New host functions** — a new capability, a new counter under `metrics`.
   A widget built against 1.0 does not import them, so it is untouched. A
-  widget built against the newer SDK does, and a host too old to provide them
-  refuses it — at linking, or at the ABI check.
+  widget built against the newer SDK may import them — a component imports
+  only what it calls — and if it does, a host too old to provide them refuses
+  it at linking; if it does not, the ABI check refuses it instead.
 * **New capabilities** in the manifest grammar.
 * **New settings types, new limits raised** (never lowered).
 * **Host behaviour** — rendering quality, themes, scheduling — that a widget
