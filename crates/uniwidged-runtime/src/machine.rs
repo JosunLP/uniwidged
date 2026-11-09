@@ -62,7 +62,11 @@ pub fn battery() -> Result<Option<Battery>, String> {
     {
         read_batteries(Path::new(POWER_SUPPLY))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        crate::native::battery()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         Err(format!(
             "this host reads no battery on {}",
@@ -221,7 +225,8 @@ fn combine(cells: &[Cell]) -> Option<Battery> {
 /// Where `HOME` is not set — a service account, a test harness — the root
 /// filesystem is the only other honest answer.
 pub fn disk_load() -> Result<f32, String> {
-    let home = std::env::var_os("HOME")
+    // `USERPROFILE` is Windows' name for the same directory.
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .filter(|h| !h.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/".into());
@@ -287,7 +292,12 @@ fn statvfs(path: &Path) -> Result<Blocks, String> {
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn statvfs(path: &Path) -> Result<Blocks, String> {
+    crate::native::disk(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn statvfs(_path: &Path) -> Result<Blocks, String> {
     Err(format!(
         "this host reads no disk usage on {}",
@@ -387,7 +397,12 @@ fn read_network_counters() -> Result<(u64, u64), String> {
     parse_net_dev(&text).ok_or_else(|| "/proc/net/dev is not in the format this host reads".into())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", windows))]
+fn read_network_counters() -> Result<(u64, u64), String> {
+    crate::native::network()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn read_network_counters() -> Result<(u64, u64), String> {
     Err(format!(
         "this host reads no network counters on {}",

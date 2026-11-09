@@ -332,11 +332,16 @@ fn anything_that_is_not_the_aggregate_line_is_refused() {
 #[test]
 fn a_load_is_a_fraction_and_a_second_reading_is_stable() {
     let sampler = Counters::new();
-    let Ok(first) = sampler.cpu_load() else {
-        // Not Linux. The refusal is the documented answer, and it carries a
+    let first = match sampler.cpu_load() {
+        Ok(first) => first,
+        // Linux, macOS and Windows all read CPU counters, so a refusal there
+        // is a bug rather than a platform without one.
+        Err(why) if cfg!(any(target_os = "linux", target_os = "macos", windows)) => {
+            panic!("this platform should read CPU counters: {why}")
+        }
+        // Elsewhere the refusal is the documented answer, and it carries a
         // reason rather than a zero a widget would draw as an idle machine.
-        assert!(sampler.cpu_load().is_err());
-        return;
+        Err(_) => return,
     };
     assert!(
         (0.0..=1.0).contains(&first),

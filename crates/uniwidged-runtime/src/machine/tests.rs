@@ -240,21 +240,22 @@ fn a_rate_of_almost_nothing_is_not_four_thousand_hours() {
 
 #[test]
 fn reading_this_machines_battery_does_not_fail_or_block() {
-    // Whatever this machine is. A refusal is only acceptable off Linux.
+    // Whatever this machine is. Linux, macOS and Windows can all answer; a
+    // refusal is only acceptable on a platform with no reader.
     let began = Instant::now();
     let answer = battery();
     assert!(
         began.elapsed() < Duration::from_millis(50),
         "battery blocked"
     );
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
-        let answer = answer.expect("Linux can always answer");
+        let answer = answer.expect("this platform can always answer");
         if let Some(battery) = answer {
             assert!((0.0..=1.0).contains(&battery.charge));
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     let _ = answer;
 }
 
@@ -405,12 +406,13 @@ fn reading_this_machines_network_does_not_block() {
         began.elapsed() < Duration::from_millis(50),
         "network blocked"
     );
-    #[cfg(target_os = "linux")]
+    // A first reading is a window of nothing, whichever reader answered it.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     assert_eq!(
-        answer.expect("Linux has /proc/net/dev"),
+        answer.expect("this platform reads network counters"),
         Throughput::default()
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     let _ = answer;
 }
 

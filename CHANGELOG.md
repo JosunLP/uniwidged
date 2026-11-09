@@ -46,6 +46,15 @@ platforms.
   console on Windows, and is what the autostart entry and the Start-menu
   shortcut use.
 
+### `metrics` everywhere
+
+* CPU, memory, disk, network and battery are read on macOS (Mach host
+  statistics, `getifaddrs`, the I/O registry's battery) and on Windows
+  (`GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW`,
+  `GetIfTable2`, `GetSystemPowerStatus`), with the same meanings as on Linux.
+  Before, a widget granted `metrics` there was told `unavailable` for all of
+  them.
+
 ### The keychain
 
 * **The key behind `secrets` is held by the OS** on Windows (sealed with DPAPI
