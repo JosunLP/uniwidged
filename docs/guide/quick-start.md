@@ -1,0 +1,116 @@
+# Quick start
+
+Five minutes from nothing to your own widget on the desktop. You need
+`uniwidged` [installed](./installation.md) and, for step 3,
+`rustup target add wasm32-wasip2`.
+
+## 1. Start a desktop
+
+```sh
+uniwidged run
+```
+
+The first line says which shell it got — `Wayland (wlr-layer-shell, bottom
+layer)` or `X11`. Nothing is installed yet, so nothing is drawn. Leave it
+running: every command below reaches a desktop that is already up, and you
+will see each change appear without restarting it.
+
+::: tip Running it in the background
+`uniwidged autostart enable` starts it with your session from now on.
+`uniwidged status` and `uniwidged log -f` tell you what it is doing when it has
+no terminal.
+:::
+
+## 2. Install a widget
+
+Reference widgets live in the repository's `widgets/` folder. Build the clock
+and install it:
+
+```sh
+cd widgets/clock
+cargo build --release --target wasm32-wasip2
+uniwidged install target/wasm32-wasip2/release/clock_widget.wasm --allow-unsigned
+```
+
+`install` finds the crate's `widget.toml`, prints **what the widget asks for** —
+here `timer` and `locale` — and records the grant. A clock appears on the
+desktop. To decline a capability, remove it from `granted` in the configuration
+file; the widget keeps working and is told `NotGranted` for that one.
+
+::: info Why `--allow-unsigned`?
+A widget you did not write must be signed by a key this machine trusts, and the
+signature covers the manifest as well as the code. Your own builds are not
+signed, so you say so explicitly. See [Finding widgets](./registries.md) for
+installing signed widgets from a registry.
+:::
+
+## 3. Write your own
+
+```sh
+uniwidged new hello && cd hello
+cargo test                                     # your logic, natively
+cargo build --release --target wasm32-wasip2   # the component
+uniwidged install target/wasm32-wasip2/release/hello.wasm --allow-unsigned
+```
+
+The scaffold already builds, draws, responds to a click and has its own tests.
+Outside a checkout of this repository, the scaffold depends on the SDK by git
+at the release tag of your `uniwidged` binary; inside one, by path. Open
+`src/lib.rs`:
+
+```rust
+impl Widget for Hello {
+    fn view(&mut self, _cx: &Cx) -> View {
+        panel(NodeId::named("root"))
+            .gap(2)
+            .child(text(self.greeting.clone()).role(Role::Title))
+            .child(text(self.clicks.to_string()).role(Role::Display))
+            .child(
+                chip("Click me")
+                    .accent(Accent::Brand)
+                    .on_click(NodeId::named("button"))
+                    .label("Count one more"),
+            )
+            .view()
+    }
+
+    fn on_event(&mut self, event: &Event, cx: &Cx) -> bool {
+        match event {
+            Event::Clicked(id) if *id == NodeId::named("button") => {
+                self.clicks += 1;
+                true // the view would now differ
+            }
+            // …
+        }
+    }
+}
+```
+
+Edit it, rebuild, and `uniwidged install` again — the running desktop swaps in
+the new version.
+
+## 4. Make it yours
+
+```sh
+uniwidged configure hello --set greeting="Guten Morgen"
+uniwidged move hello --x 64 --y 64
+uniwidged lock hello
+```
+
+Or drag and resize it with the pointer. Placement is remembered per monitor,
+by monitor *name*, so it survives docking and unplugging.
+
+## 5. See what is happening
+
+```sh
+uniwidged status   # what is on the screen, and where
+uniwidged list     # what is installed, and what it was granted
+uniwidged log -f   # what the desktop is saying
+```
+
+## Where next
+
+* [Writing a widget](./writing-a-widget.md) — the full guide.
+* [Capabilities](./capabilities.md) — asking for the network, files, secrets
+  or commands.
+* [Running the desktop](./desktop.md) — everything about the host itself.

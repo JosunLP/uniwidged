@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 128" width="560" height="128" role="img" aria-label="uniwidged">
+  <g>
+  <defs>
+    <linearGradient id="uw-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="0.55" stop-color="#4F7BFF"/>
+      <stop offset="1" stop-color="#14C8B0"/>
+    </linearGradient>
+    <radialGradient id="uw-sheen" cx="0.25" cy="0.15" r="0.9">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/>
+      <stop offset="0.6" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="uw-glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.06"/>
+    </linearGradient>
+    <radialGradient id="uw-dot" cx="0.35" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#FFF4D6"/>
+      <stop offset="1" stop-color="#FFB547"/>
+    </radialGradient>
+    <filter id="uw-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#1B1150" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <!-- the wallpaper -->
+  <rect width="128" height="128" rx="30" fill="url(#uw-bg)"/>
+  <rect width="128" height="128" rx="30" fill="url(#uw-sheen)"/>
+  <!-- the desktop layer: a glass surface composited over it -->
+  <rect x="16" y="16" width="96" height="96" rx="22" fill="url(#uw-glass)" stroke="#fff" stroke-opacity="0.28" stroke-width="1.5"/>
+  <!-- u, whose right arm is also the stem of an i -->
+  <path d="M42 40 V68 a22 22 0 0 0 44 0 V60" fill="none" stroke="#fff" stroke-width="15" stroke-linecap="round" filter="url(#uw-shadow)"/>
+  <!-- the dot: a widget's one accent, and the sparkline's latest point -->
+  <circle cx="86" cy="37" r="8.5" fill="url(#uw-dot)" filter="url(#uw-shadow)"/>
+</g>
+  <text x="152" y="80" font-family="'Space Grotesk','Inter','Segoe UI',system-ui,sans-serif" font-size="64" font-weight="700" letter-spacing="-2" fill="#F4F2FF">uni<tspan fill="url(#uw-bg)">widged</tspan></text>
+  <text x="155" y="108" font-family="'Inter','Segoe UI',system-ui,sans-serif" font-size="16" font-weight="500" letter-spacing="3.2" fill="#A9A6C9">DESKTOP WIDGETS · GPU · WASM</text>
+</svg>
