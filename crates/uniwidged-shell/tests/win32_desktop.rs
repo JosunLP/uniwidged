@@ -36,10 +36,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow,
-    GetWindow, GetWindowLongPtrW, GetWindowTextW, SW_MAXIMIZE, SetCursorPos, SetForegroundWindow,
-    ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WindowFromPoint,
+    CreateWindowExW, DestroyWindow, GA_ROOT, GW_HWNDNEXT, GWL_EXSTYLE, GetAncestor, GetClassNameW,
+    GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindow, GetWindowLongPtrW,
+    GetWindowTextW, SW_MAXIMIZE, SetCursorPos, SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW,
+    WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WindowFromPoint,
 };
 
 fn required() -> bool {
@@ -88,6 +89,60 @@ fn describe(hwnd: HWND) -> String {
     )
 }
 
+/// Is nothing but the desktop itself at this point?
+fn bare(x: i32, y: i32) -> bool {
+    // SAFETY: plain queries; a null window is answered as such.
+    unsafe {
+        let at = WindowFromPoint(POINT { x, y });
+        if at.is_null() {
+            return true;
+        }
+        let root = GetAncestor(at, GA_ROOT);
+        if root == GetShellWindow() || root == GetDesktopWindow() {
+            return true;
+        }
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(root, class.as_mut_ptr(), class.len() as i32);
+        let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+        class == "Progman" || class == "WorkerW"
+    }
+}
+
+/// Somewhere on the primary screen that no other window covers.
+///
+/// The widget sits below every ordinary window, so a click on it only lands
+/// where nothing else is — and a CI runner has windows of its own open (the
+/// hosted agent's terminal sits at the top left). Clear of where the test's
+/// own application window will be moved to, as well.
+fn uncovered(width: u32, height: u32) -> PhysicalRect {
+    let screen = desktop::outputs()
+        .into_iter()
+        .find(|o| o.primary)
+        .map(|o| o.rect)
+        .unwrap_or(PhysicalRect::new(0, 0, 1024, 768));
+    let (w, h) = (width as i32, height as i32);
+    let app = (APP.0, APP.1, APP.0 + APP.2, APP.1 + APP.3);
+    for y in (screen.y + 40..screen.y + screen.height as i32 - h - 40).step_by(40) {
+        for x in (screen.x + 40..screen.x + screen.width as i32 - w - 40).step_by(40) {
+            let overlaps_app = x < app.2 && x + w > app.0 && y < app.3 && y + h > app.1;
+            let samples = [
+                (x + 4, y + 4),
+                (x + w - 4, y + 4),
+                (x + 4, y + h - 4),
+                (x + w - 4, y + h - 4),
+                (x + w / 2, y + h / 2),
+            ];
+            if !overlaps_app && samples.iter().all(|&(x, y)| bare(x, y)) {
+                return PhysicalRect::new(x, y, width, height);
+            }
+        }
+    }
+    PhysicalRect::new(screen.x + 40, screen.y + 40, width, height)
+}
+
+/// Where the test's ordinary application window is moved to before the click.
+const APP: (i32, i32, i32, i32) = (600, 400, 400, 300);
+
 /// Is `lower` somewhere below `upper` in the z-order?
 fn is_below(lower: HWND, upper: HWND) -> bool {
     let mut at = upper;
@@ -128,7 +183,7 @@ fn click(x: i32, y: i32) {
 
 #[test]
 fn a_widget_is_a_gadget_rather_than_a_window() {
-    let rect = PhysicalRect::new(40, 40, 240, 160);
+    let rect = uncovered(240, 160);
     let mut windows = match DesktopWindow::open(rect, "uniwidged test widget") {
         Ok(window) => vec![window],
         Err(e) if !required() => {
@@ -195,17 +250,17 @@ fn a_widget_is_a_gadget_rather_than_a_window() {
     let foreground = unsafe { GetForegroundWindow() };
     // The widget is below the restored window, so click a point the
     // restored-not-maximised application does not cover: it was created at
-    // 800x600 from the origin and the widget is inside that, so move the
-    // application out of the way first.
+    // 800x600 from the origin, where the widget may well be, so move the
+    // application to `APP`, which `uncovered` kept the widget clear of.
     // SAFETY: as above.
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos(
             app,
             std::ptr::null_mut(),
-            600,
-            400,
-            400,
-            300,
+            APP.0,
+            APP.1,
+            APP.2,
+            APP.3,
             windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
                 | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
         );

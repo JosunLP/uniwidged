@@ -2,6 +2,12 @@ use super::*;
 
 use std::path::PathBuf;
 
+/// What "does not block" means: well under one sampling window, which is what
+/// a reader that waited to measure a rate would have to spend. Not a few
+/// milliseconds, because `GetIfTable2` asks every network driver and on a CI
+/// runner running two hundred tests at once that has taken over 50 ms.
+const NOT_BLOCKING: Duration = Duration::from_millis(MIN_WINDOW.as_millis() as u64 / 2);
+
 /// A fake `/sys/class/power_supply`, removed when the test ends.
 struct Supplies(PathBuf);
 
@@ -245,8 +251,9 @@ fn reading_this_machines_battery_does_not_fail_or_block() {
     let began = Instant::now();
     let answer = battery();
     assert!(
-        began.elapsed() < Duration::from_millis(50),
-        "battery blocked"
+        began.elapsed() < NOT_BLOCKING,
+        "battery blocked for {:?}",
+        began.elapsed()
     );
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
@@ -403,8 +410,9 @@ fn reading_this_machines_network_does_not_block() {
     let began = Instant::now();
     let answer = network.throughput();
     assert!(
-        began.elapsed() < Duration::from_millis(50),
-        "network blocked"
+        began.elapsed() < NOT_BLOCKING,
+        "network blocked for {:?}",
+        began.elapsed()
     );
     // A first reading is a window of nothing, whichever reader answered it.
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]

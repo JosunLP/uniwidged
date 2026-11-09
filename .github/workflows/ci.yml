@@ -274,20 +274,26 @@ jobs:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets
-      # Where a D3D12 crash on the runner's WARP device comes from: one test at
-      # a time, so the last name printed is the one that crashed, with wgpu's
-      # debug layer on (the debug-build default) and off. Informational; the
-      # step after it is the one that has to pass.
-      - name: the renderer's own tests, one at a time, with and without the debug layer
+      # Where a D3D12 crash on the runner's WARP device comes from: each of the
+      # renderer's tests on its own, then the first that crashes under cdb for
+      # a native stack. Informational; the step after it has to pass.
+      - name: the renderer's own tests, one at a time, and a stack for a crash
         continue-on-error: true
         shell: pwsh
         run: |
-          foreach ($v in '1', '0') {
-            $env:WGPU_VALIDATION = $v
-            $env:WGPU_DEBUG = $v
-            cargo test -p uniwidged-render --lib -- --test-threads=1 --nocapture
-            "WGPU_VALIDATION=$v -> exit $LASTEXITCODE"
+          $exe = (cargo test -p uniwidged-render --lib --no-run --message-format=json |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.executable } | Select-Object -Last 1).executable
+          $crashed = $null
+          foreach ($t in (& $exe --list --format=terse | ForEach-Object { $_ -replace ': test$', '' })) {
+            & $exe --exact $t --test-threads=1 *> $null
+            "$t -> $LASTEXITCODE"
+            if ($LASTEXITCODE -lt 0 -and -not $crashed) { $crashed = $t }
           }
+          $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($crashed -and $cdb) {
+            & $cdb.FullName -lines -c ".sympath srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols;.reload;g;.echo ==== CRASH;r;kb 80;q" $exe --exact $crashed --test-threads=1
+          } else { "crashed: $crashed; cdb: $cdb" }
       - run: cargo test --workspace --no-fail-fast
         env:
           UNIWIDGED_REQUIRE_WIN32: "1"
