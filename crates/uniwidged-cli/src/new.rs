@@ -95,15 +95,23 @@ impl Sdk {
     fn dependencies(&self, widget_dir: &Path) -> String {
         match self {
             Sdk::Checkout(crates) => {
+                // Quoted by the TOML writer rather than by hand: an absolute
+                // Windows path is full of backslashes, and inside a basic
+                // string each one starts an escape — `D:\a\uniwidged` is not
+                // a path Cargo can read. Found by the scaffold test on the
+                // Windows runner, where the checkout and the temporary
+                // directory are on different drives and there is no relative
+                // path to fall back on.
                 let relative = |name: &str| {
                     let target = crates.join(name);
-                    relative_path(widget_dir, &target)
-                        .unwrap_or_else(|| target.display().to_string())
+                    let path = relative_path(widget_dir, &target)
+                        .unwrap_or_else(|| target.display().to_string());
+                    toml::Value::String(path).to_string()
                 };
                 format!(
-                    "uniwidged-guest = {{ path = \"{}\" }}\n\
-                     uniwidged-core = {{ path = \"{}\" }}\n\
-                     uniwidged-view = {{ path = \"{}\" }}\n",
+                    "uniwidged-guest = {{ path = {} }}\n\
+                     uniwidged-core = {{ path = {} }}\n\
+                     uniwidged-view = {{ path = {} }}\n",
                     relative("uniwidged-guest"),
                     relative("uniwidged-core"),
                     relative("uniwidged-view"),
@@ -515,6 +523,17 @@ mod tests {
         let block = Sdk::Registry.dependencies(Path::new("/tmp/w"));
         assert!(block.contains(&format!("uniwidged-guest = \"{requirement}\"")));
         assert!(!block.contains("git ="), "{block}");
+    }
+
+    #[test]
+    fn a_checkout_on_another_drive_is_written_as_a_toml_string_cargo_can_read() {
+        // What the Windows runner produces: no relative path between two
+        // drives, so the absolute one is written, backslashes and all.
+        let crates = PathBuf::from(r"D:\a\uniwidged\crates");
+        let block = Sdk::Checkout(crates).dependencies(Path::new(r"C:\Temp\demo"));
+        let parsed: toml::Table = toml::from_str(&block).expect("the block is valid TOML");
+        let guest = parsed["uniwidged-guest"]["path"].as_str().expect("a path");
+        assert!(guest.ends_with("uniwidged-guest"), "{guest}");
     }
 
     #[test]
