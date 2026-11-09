@@ -1,345 +1,199 @@
-# uniwidged
+<div align="center">
 
-**A cross-platform desktop widget framework, built for graphical quality and
-for costing nothing when nothing is happening.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
+  <img alt="uniwidged" src="assets/wordmark-light.svg" width="440">
+</picture>
 
-One host process owns one GPU device and every widget's surface. Widgets sit
-below your windows and above your wallpaper, composited per-pixel against it —
-not floating in a grey rectangle. They are WASM components: sandboxed,
-installable at runtime, and written in any language that targets the component
-model.
+### Desktop widgets that cost nothing when nothing happens.
 
-> **Status: 0.1.0 — a working Linux desktop, on the road to 1.0.** The
-> architecture is settled and written down, every crate is real and tested, and
-> what 1.0 still needs is listed in [`ROADMAP.md`](ROADMAP.md#towards-100)
-> rather than implied. [`CHANGELOG.md`](CHANGELOG.md) is where a release says
-> what changed.
->
-> **Milestones M0 through M4 are done, M7 in full and M8 in part.** A
-> `wlr-layer-shell` surface on the bottom layer really does back a wgpu
-> swapchain with per-pixel alpha, and the widget really does stay below
-> ordinary windows. `uniwidged-render` drives it: one
-> device, many surfaces, an idle frame costing zero submits, and a headless
-> render that matches the on-screen one to within one 8-bit unit.
-> `uniwidged-compose` turns a view tree into that scene — layout, text, theme,
-> icons, hit rectangles and an accessibility tree, all from one pass — with
-> fifteen golden images behind it. And widgets really are sandboxed WASM
-> components: `widgets/conformance` is built for `wasm32-wasip2`, instantiated
-> by the real runtime, and twenty-four tests assert what the sandbox refuses —
-> and, since every gate acquired something behind it, what it serves.
-> And it runs on X11 as well as Wayland — the risk `ARCHITECTURE.md` §10.1
-> named, measured rather than assumed, with the documented fallback built and
-> forced so it stays honest. See
-> [`spikes/m0_layer_shell/FINDINGS.md`](spikes/m0_layer_shell/FINDINGS.md) and
-> [`spikes/m4_x11/FINDINGS.md`](spikes/m4_x11/FINDINGS.md).
-> And it runs: `uniwidged run` starts a real desktop on X11 with sandboxed WASM
-> widgets in it, drawing, responding to clicks, restarting when one fails, and
-> submitting nothing at all when nothing is happening. Behind the capability
-> gates is a widget's own data directory, which
-> it cannot leave even through a symlink; dates and times in the machine's
-> locale; text measured against the host's real fonts in the theme it is about
-> to be drawn in; the machine's CPU load, sampled without ever blocking a
-> widget's deadline; declared commands, run asynchronously so that a widget
-> never waits; and HTTPS to a granted host — where a redirect off that host is
-> refused, because otherwise a grant for one name is a grant for wherever that
-> name points.
->
-> **And now the last one.** `secrets` is served: an encrypted keychain, one
-> namespace per widget with no argument through which to name another's, and a
-> description of what that encryption does and does not buy which `install`
-> prints at the moment somebody is asked to approve it — because "store
-> passwords in your keychain" is a sentence whose weight depends entirely on
-> what the keychain is. Every capability this framework defines now has
-> something behind it, and the conformance suite asserts the empty list from
-> the widget's side, so one that stops being served fails a test.
->
-> **And a widget you did not write is checked before it runs.** `install`
-> refuses one that is not signed by a key this machine was told to trust, and
-> the signature covers the *manifest* as well as the component — otherwise
-> somebody could widen what a widget may do and keep a signature its author's
-> users recognise. The
-> workspace builds from crates.io alone: no sibling checkout, no private
-> repository, `git clone && cargo test`. Widgets can be dragged, resized and
-> pinned, and they remember which monitor they were on — measured against a
-> real X server with synthetic pointer input, not asserted — including across
-> two monitors, where a widget stored against the right-hand one opens where
-> the right-hand one is, survives being unplugged without forgetting which
-> screen it belongs to, and comes back exactly where it was when it is plugged
-> in again. It starts with the session, it will not overwrite an autostart
-> entry somebody wrote by hand, and a widget granted `fs` can no longer fill a
-> disk one file at a time.
->
-> **And widgets have settings.** A widget declares what it can be configured
-> with — a type, a range, a default — the host validates before the widget is
-> started, and `uniwidged configure` is where a wrong value is refused. So a
-> widget reading a number never has a branch for somebody typing `banana`, and
-> `Event::Configured`, which had been in the interface file since the first
-> commit with nothing to produce it, now fires.
->
-> **A running desktop is told.** `uniwidged configure`, `move` and `lock` reach
-> a desktop that is already running — one `SIGHUP`, one byte down the wake pipe
-> that already exists, and a widget reconfigured without being restarted. And a
-> link a widget draws now opens: `https` only, to a host the manifest declared,
-> checked at the click rather than when the view was built.
->
-> **And widgets arrive and leave while it is running.** `install`, `remove`,
-> `enable`, `disable` and `update` all reach a desktop that is on the screen:
-> a widget appears where its placement says, or goes, taking its window, its
-> swapchain and its outstanding work with it — and leaving what it saved, which
-> only `remove --purge` deletes. An upgrade is applied live too, because a new
-> version under the same name is invisible to a diff of names and is exactly
-> what `update` produces. Measured against the real binary on a real X server
-> with a second process changing the configuration underneath it, because the
-> order a window and a swapchain are destroyed in is not something a type check
-> can be wrong about.
->
-> **And it notices the monitors changing.** A screen plugged in, unplugged,
-> moved or resized reaches the loop on both window systems, and every widget is
-> put back where its placement says — which is what makes "remembers which
-> monitor it was on" true of a laptop that is docked while it is running, and
-> not only of one that is restarted afterwards.
->
-> **And now there is somewhere to find widgets.** A registry is one signed TOML
-> file on a static host — no accounts, no API, no server to run — and
-> `uniwidged search · add · update` read it. Two signatures by two people are
-> checked separately: the *index* is signed by whoever publishes the list, with
-> its key pinned when the registry is added, and each *widget* by whoever wrote
-> it, against the trusted keys this machine already had. Neither implies the
-> other, so a registry can offer and never install: the machine's own keys
-> still decide. What a listing claims is checked against the manifest that
-> arrives — a download whose manifest asks for more than the entry showed is
-> refused with every signature valid — and `update`, the one command that
-> installs something nobody looked at, will not widen a permission: it says so
-> and sends you to `add`, which prints the whole list. It is all driven against
-> a real TLS server in the tests, including an index edited after it was signed
-> and a component swapped after it was listed.
->
-> **And it packages.** `packaging/deb/build.sh` builds a `.deb` with `dpkg-deb`
-> and nothing else, and CI builds it and then looks inside: the binary, the
-> manual page and the desktop entry are there, the version in the package is
-> the version in the workspace, and the binary that comes out of it runs. What
-> is still missing is named in [`ROADMAP.md`](ROADMAP.md) rather than glossed
-> over — the Windows and macOS platforms, and the packaging that waits on them,
-> because packaging a binary that prints "this build has no shell for the
-> current platform" would be packaging nothing.
->
-> **And it says what it is doing, after the terminal has gone.** A desktop
-> started with the session has no terminal, so everything it prints goes to a
-> log beside the configuration as well — a megabyte, rotated once — and
-> `uniwidged log` reads it, `-f` follows it. `uniwidged status` answers the
-> question `list` never could: not what the file asks for, but what is on the
-> screen — which widget is drawing, which one the desktop gave up on after
-> three failures, where each actually is and which shell the session gave it.
-> A desktop killed outright leaves both files behind, and neither is believed
-> until the pid beside them is checked to be alive and to be this program. And
-> one widget that will not start — a deleted component, a manifest somebody was
-> halfway through editing — no longer empties the whole screen: it is named,
-> and the rest start.
->
-> **And a widget can draw a chart.** `sparkline(values)` is the one node that
-> carries a series rather than a value, and it is as far as this framework goes
-> towards a canvas: the widget hands over numbers, the host draws the line, the
-> area and the marker on the latest point, in the theme's stroke and the node's
-> accent — so a screen of charts by different authors is still one chart style.
-> Two hundred and fifty-six points at most, refused past that at the boundary
-> like everything else. `metrics` now answers for memory as well as the CPU,
-> under the one grant, and `widgets/system-load` shows a minute of history under
-> its meter. Four more golden images, and the shell completes widget names:
-> `uniwidged completions bash|zsh|fish` is written by the binary from the
-> commands it actually has, and the packages install it.
->
-> **And a widget can show a picture.** `image(handle)` had been in the
-> vocabulary since the first commit with no way to get a handle, so every image
-> node ever built drew nothing. `register_image` is the other half: a PNG in,
-> decoded once on the host, a handle out, drawn at its own size in logical
-> pixels. No capability — the bytes are the widget's and go on its own surface
-> — and bounded instead: a megabyte, 1024 pixels a side, sixteen at once, PNG
-> only because one format is one parser running on bytes a widget chose. An
-> unregistered handle takes no room, a right-to-left layout moves the picture
-> and never mirrors it, and the conformance widget registers one and offers the
-> host bytes that are not a PNG, so both answers are measured. ABI 8.
->
-> **And the rest of the machine.** `metrics` now answers for the battery, the
-> disk and the network as well as the CPU and memory — still one grant, because
-> "this widget reads how the machine is doing" is still one sentence. A desktop
-> with no battery is `Ok(None)` rather than an error, because that is its
-> normal case; the disk is counted the way `df` counts it, the
-> administrator's reserve included, so the meter is full at the moment writes
-> start failing; the network is a rate sampled the way the CPU is, so it never
-> blocks. Two new reference widgets show the two shapes the old ones did not —
-> nothing to measure, and a rate a chart has to be scaled for — and `uniwidged
-> doctor` says what each counter answers on the machine it runs on. ABI 9.
->
-> **Both Linux window systems.** A Wayland session gets a `wlr-layer-shell`
-> surface on the bottom layer; an X11 session gets a 32-bit
-> `_NET_WM_STATE_BELOW` window; the binary picks at start-up and says which. A
-> test starts its own headless `sway`, creates the surface `uniwidged run`
-> creates, and checks what only a compositor can confirm.
->
-> And somebody else can write one. `uniwidged new` scaffolds a widget that
-> already builds, draws and responds; [the authoring
-> guide](docs/writing-a-widget.md) is written; and there are three reference
-> widgets, one per served capability. A test runs the scaffold, builds what it
-> wrote for `wasm32-wasip2`, instantiates it in the real runtime and clicks its
-> button — so the guide's first four commands are checked on every change
-> rather than believed.
+One GPU-rendered host, many sandboxed WASM widgets — composited per pixel
+against your wallpaper, below your windows.
 
-![Two sandboxed WASM widgets running on a desktop](docs/images/desktop.png)
+[![CI](https://github.com/JosunLP/uniwidged/actions/workflows/ci.yml/badge.svg)](https://github.com/JosunLP/uniwidged/actions/workflows/ci.yml)
+[![Docs](https://github.com/JosunLP/uniwidged/actions/workflows/docs.yml/badge.svg)](https://josunlp.github.io/uniwidged/)
+[![Release](https://img.shields.io/github/v/release/JosunLP/uniwidged?color=4F7BFF)](https://github.com/JosunLP/uniwidged/releases)
+[![Widget ABI](https://img.shields.io/badge/widget%20ABI-9%20·%20stable-14C8B0)](https://josunlp.github.io/uniwidged/reference/abi)
+[![Licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-7C5CFF)](#licence)
 
-*Not a mockup: `uniwidged run` on an X11 session, screenshotted. Two WASM
-components, each in its own desktop-layer window with its own swapchain, drawn
-from one GPU device. The right-hand one is the conformance widget, reporting
-that every capability it tried was refused.*
+[**Documentation**](https://josunlp.github.io/uniwidged/) ·
+[Quick start](https://josunlp.github.io/uniwidged/guide/quick-start) ·
+[Write a widget](https://josunlp.github.io/uniwidged/guide/writing-a-widget) ·
+[API](https://josunlp.github.io/uniwidged/reference/api) ·
+[Changelog](CHANGELOG.md)
 
-## Where it comes from
+</div>
 
-uniwidged is the union of two projects, and both halves are load-bearing.
+---
 
-[**Ephemeris**](https://github.com/JosunLP/Ephemeris) worked out how a window
-becomes a *desktop widget* rather than an application window — on Windows,
-macOS, Wayland and X11, with all the flags and protocols that implies, and all
-the ways each platform gets it wrong. That is `uniwidged-shell`.
+![Two sandboxed WASM widgets running on a desktop](docs/public/images/desktop.png)
 
-[**Ferrum UI**](https://github.com/j-pfalzgraf/ferrumui) is a GPU-rendered UI
-stack on Vello, wgpu, Parley, taffy and AccessKit, and it is where the
-rendering, layout and text techniques above the surface come from.
+<sub>Not a mock-up: `uniwidged run` on an X11 session. Two WASM components, each
+in its own desktop-layer window with its own swapchain, drawn from one GPU
+device. The right-hand one is the conformance widget, reporting that every
+capability it tried was refused.</sub>
 
-Both are **adopted, not depended on**. This workspace has no path dependency on
-a sibling checkout and nothing outside crates.io: `git clone && cargo test`
-works on a machine with neither project on it. `NOTICE.md` records what came
-from where, and every adapted file says so in its own module documentation.
+## Why uniwidged
 
-What is new is the seam between the two — handing a desktop-layer surface to
-wgpu instead of to Cairo — and the sandbox boundary that lets somebody else
-write a widget.
+A desktop widget is on screen all day. That changes what matters.
 
-## What makes it fast
+- **🪶 Zero-cost idle.** No idle loop, no idle frame. Every widget says when it
+  next wants to be called; the host sleeps until the earliest of those, and a
+  view that did not change submits nothing to the GPU. Eight clocks cost one
+  wake-up, not eight.
+- **🧩 Sandboxed by default.** Widgets are `wasm32-wasip2` components with no
+  ambient authority, a memory cap and a 16 ms deadline per call. They reach
+  only what their manifest named — `net:api.open-meteo.com`, not "the network"
+  — and you approved.
+- **🎨 You describe, the host draws.** No colours, fonts or pixels in the API:
+  roles and accents. Vello, Parley, taffy and AccessKit do layout, shaped text,
+  Oklch colour and screen-reader support once, for everyone — so twenty
+  authors look like one product, in every theme.
+- **🔏 Signed, then trusted.** Ed25519 over the component **and** its
+  manifest. Registries are one signed TOML file on a static host, and
+  downloading is still not trusting.
+- **🖥️ Wayland and X11.** A `wlr-layer-shell` surface on the bottom layer, or
+  a 32-bit `_NET_WM_STATE_BELOW` window. Placement by monitor *name* that
+  survives docking and unplugging.
+- **🧪 Measured, not asserted.** 21 golden images on a software Vulkan device,
+  a sandbox conformance suite, and real compositors, X servers and TLS servers
+  in CI.
 
-There is no idle loop and no idle frame. Every widget answers "when should I be
-called again?", the scheduler sleeps until the earliest of those, and between
-them the process blocks on its event sources with no timer at all. Widgets
-whose deadlines fall close together share one wake-up — eight clocks cost one,
-not eight — and a widget whose view tree has not changed produces no GPU work
-whatsoever.
-
-Ephemeris reached 0.03 s of CPU per 40 s of idle this way with three hand-rolled
-timers. uniwidged generalises it to N widgets that have never heard of each
-other.
-
-## What makes it look right
-
-Analytically anti-aliased vector rendering, gamma-correct compositing,
-perceptual colour in Oklch, real Gaussian shadows, full text shaping with bidi
-and font fallback, fractional scaling resolved once at the surface, and true
-per-pixel alpha against the actual wallpaper on all four platforms.
-
-Every one of those has a golden-image test behind it, rendered headlessly in CI
-on a software rasterizer. See [`ARCHITECTURE.md`](ARCHITECTURE.md) §7.
-
-## Writing a widget
+## Quick start
 
 ```sh
-uniwidged new my-widget && cd my-widget
-cargo build --release --target wasm32-wasip2
-uniwidged install target/wasm32-wasip2/release/my_widget.wasm && uniwidged run
+# Debian/Ubuntu: the .deb from the latest release — or build from source:
+sudo apt install pkg-config libfontconfig1-dev libxcb1-dev
+cargo install --locked --git https://github.com/JosunLP/uniwidged --tag v1.0.0 uniwidged-cli
+
+uniwidged doctor              # what this session can do
+uniwidged run                 # start the desktop
+uniwidged autostart enable    # …and with every session from now on
 ```
 
-That is a working widget on your desktop. [**The authoring
-guide**](docs/writing-a-widget.md) is the rest of it, [**the API
-reference**](docs/api-reference.md) is every function and limit on one page, and
-[`widgets/clock`](widgets/clock), [`widgets/system-load`](widgets/system-load),
-[`widgets/battery`](widgets/battery), [`widgets/network`](widgets/network),
-[`widgets/counter`](widgets/counter), [`widgets/uptime`](widgets/uptime) and
-[`widgets/vault`](widgets/vault) are seven worked examples, one per capability —
-and, for `metrics`, one per kind of answer it gives.
+Full instructions, including Arch and shell completions:
+[**Installation**](https://josunlp.github.io/uniwidged/guide/installation).
 
-You describe; the host decides what it looks like. That is what makes a screen
-full of widgets by different authors look like one product.
+## A whole widget
+
+```sh
+rustup target add wasm32-wasip2
+uniwidged new clock && cd clock
+cargo build --release --target wasm32-wasip2
+uniwidged install target/wasm32-wasip2/release/clock.wasm --allow-unsigned
+```
 
 ```rust
 use uniwidged_guest::prelude::*;
 
 #[derive(Default)]
-struct Clock;
+pub struct Clock;
 
 impl Widget for Clock {
     fn view(&mut self, cx: &Cx) -> View {
         let now = now_seconds();
+        // A refusal is shown, not hidden.
+        let time = cx.format_time(now).unwrap_or_else(|_| "--:--".into());
+        let date = cx.format_date(now).unwrap_or_default();
+
         panel(NodeId::named("clock"))
-            .child(text(cx.format_time(now).unwrap_or_default()).role(Role::Display))
-            .child(text(cx.format_date(now).unwrap_or_default()).role(Role::Caption).muted())
+            .align(Align::Center)
+            .child(text(time).role(Role::Display))
+            .child(text(date).role(Role::Caption).muted())
             .view()
     }
 
-    // The top of the next minute — not "in 60 seconds", so the clock stays
-    // right across a suspend, a timezone change and an NTP step.
-    fn wake(&self) -> Wake { Wake::At(next_minute()) }
+    // The top of the next minute — not "in 60 seconds" — so it stays right
+    // across a suspend, a time-zone change and an NTP step.
+    fn wake(&self) -> Wake {
+        Wake::at_next_multiple_of(60, now_seconds())
+    }
 }
 
 uniwidged_guest::export!(Clock);
 ```
 
-Every host call returns a `Result`, and the refusals are distinguished: a
-capability the manifest never asked for answers `NotGranted`, and one the user
-approved that this host cannot serve answers `Unavailable`. A user can decline
-anything, and a widget that disappears when they do is a worse answer than one
-that shows its last value and says it is stale. Off-target the whole thing still compiles and its
-tests still run — `export!` expands to nothing there — so a widget's logic can
-be tested without a WASM toolchain.
-
-No colours, no fonts, no pixels, no coordinates. A widget names
-`Role::Display`; the theme decides what that is. A widget names
-`Accent::Critical`; the theme picks a red that is legible against *this*
-wallpaper at *this* contrast setting.
-
-Capabilities are declared and host-scoped:
-
 ```toml
-# widget.toml
-name = "weather"
-capabilities = ["timer", "net:api.open-meteo.com", "fs:cache"]
-memory-mb = 32
+# widget.toml — everything a user is asked to approve
+name = "clock"
+version = "1.0.0"
+description = "The time and the date, in your locale"
+capabilities = ["timer", "locale"]
+memory-mb = 8
 ```
 
-`net:api.open-meteo.com`, not `network` — because "this widget talks to
-api.open-meteo.com" is something a user can agree to, and "this widget uses the
-network" is not. `link:open-meteo.com` is a *different* line, because "talks to
-a server" and "can send you to a web page" are different things happening to a
-user.
+Off-target the whole thing still compiles and its tests still run, so a
+widget's logic can be tested without a WASM toolchain. The
+[**authoring guide**](https://josunlp.github.io/uniwidged/guide/writing-a-widget)
+is the rest; [`widgets/`](widgets) holds eight reference widgets, one per
+capability.
 
-## Running it
+## Capabilities
+
+| Capability | Grants |
+|---|---|
+| `timer` | being woken on a schedule |
+| `locale` | dates and times in the user's locale |
+| `measure` | measuring text with the host's real fonts |
+| `metrics` | CPU, memory, disk, battery and network counters |
+| `fs:<subpath>` | one folder inside the widget's own directory |
+| `net:<host>` | HTTPS to exactly that host — redirects off it refused |
+| `link:<host>` | opening that host in the browser, at the user's click |
+| `secrets` | an encrypted keychain namespaced to the widget |
+| `command:<name>` | one declared program — no shell, no stdin, bounded |
+
+Every host call returns a `Result`, and the refusals are distinguished:
+`NotGranted`, `Unavailable` and `Malformed` are fixed by three different
+people. [More →](https://josunlp.github.io/uniwidged/guide/capabilities)
+
+## Day to day
 
 ```sh
-uniwidged install my_widget.wasm     # tells a running desktop, if there is one
-uniwidged run                        # or start one; `uniwidged autostart enable` for next time
-uniwidged status                     # what is on the screen right now
-uniwidged log -f                     # what the desktop is saying, terminal or not
+uniwidged status                              # what is on the screen right now
+uniwidged list                                # what is installed, granted what
+uniwidged log -f                              # what the desktop is saying
 uniwidged configure system-load --set warn-at=0.8
-```
-
-`status` and `list` answer different questions — what is on the screen, and what
-the file asks for — and a widget that is in the second and not the first is
-exactly the case somebody running either is trying to explain, so `list` says
-so beside the name. `uniwidged completions bash` (or `zsh`, `fish`) makes the
-shell complete all of it, widget names included.
-
-## Finding a widget
-
-```sh
+uniwidged move clock --x 48 --y 48 --output DP-1
 uniwidged registry add https://widgets.example/index.toml --key 3d40…
-uniwidged search clock
-uniwidged add clock
-uniwidged update
+uniwidged search clock && uniwidged add clock
+uniwidged help <command>
 ```
 
-A registry is one signed TOML file on a static host. The key you pin says *who
-publishes the list*; whether a widget is installed is still decided by
-`trusted-keys`, where it always was. A registry cannot vouch a widget past
-that: downloading is not trusting.
+Every command that changes the configuration reaches a running desktop at once
+— widgets appear, move, reconfigure and upgrade without a restart.
+[CLI reference →](https://josunlp.github.io/uniwidged/reference/cli)
 
-Publishing one is `uniwidged registry publish --key <yours> --base-url <where>
-*.wasm`, and then uploading what it wrote. Both halves are
-[**`docs/registries.md`**](docs/registries.md).
+## Stability
+
+**1.0 freezes the widget interface.** A widget built against uniwidged 1.0 —
+widget ABI 9 — runs on every 1.x release. The interface may grow; it does not
+shrink or change before 2.0, and a widget that needs a newer host is refused
+in a sentence that says so.
+[ABI & stability →](https://josunlp.github.io/uniwidged/reference/abi)
+
+## Platforms
+
+| | Status |
+|---|---|
+| Linux · Wayland (`wlr-layer-shell`: sway, Hyprland, KDE, river, labwc, …) | ✅ supported |
+| Linux · X11 with a compositing manager | ✅ supported |
+| Linux · GNOME Wayland (no layer shell) | ⚠️ runs as ordinary windows |
+| Windows | 🛣️ 1.x — milestone M5 |
+| macOS | 🛣️ 1.x — milestone M6 |
+
+## Documentation
+
+| | |
+|---|---|
+| [**Guide**](https://josunlp.github.io/uniwidged/guide/introduction) | introduction, installation, quick start, core concepts, troubleshooting |
+| [**Writing a widget**](https://josunlp.github.io/uniwidged/guide/writing-a-widget) | the authoring guide, from scaffold to publishing |
+| [**API reference**](https://josunlp.github.io/uniwidged/reference/api) | every function, type, limit and refusal on one page |
+| [**Security model**](https://josunlp.github.io/uniwidged/project/security) | what is promised, and what deliberately is not |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | the design document the code is written against |
+| [`ROADMAP.md`](ROADMAP.md) | every milestone, how it was measured, what comes next |
+
+The site is built from [`docs/`](docs) with VitePress:
+`cd docs && npm install && npm run dev`.
 
 ## Layout
 
@@ -349,53 +203,56 @@ crates/
   uniwidged-view       the view tree that crosses the sandbox boundary
   uniwidged-compose    view → layout → text → Vello scene · hit rects · a11y
   uniwidged-render     one wgpu device, many surfaces, swapchain or readback
-  uniwidged-shell      desktop-layer surfaces: wayland · x11 · win32 · appkit
-                       (`platform::linux` picks between the first two at run time)
-  uniwidged-runtime    the WASM sandbox: capabilities, limits, lifecycle
+  uniwidged-shell      desktop-layer surfaces: wayland · x11 (win32 · appkit planned)
+  uniwidged-runtime    the WASM sandbox: capabilities, limits, signatures, registries
   uniwidged-guest      the SDK widget authors compile against
-  uniwidged-host       the daemon: scheduler, configuration, policy
-  uniwidged-cli        `uniwidged run · status · log · new · check · install · …`
-wit/uniwidged.wit      the host/guest contract
-widgets/clock          the reference widget for `locale`
-widgets/system-load    the reference widget for `metrics`, and for settings
-widgets/battery        a battery meter, and the answer "there is none"
-widgets/network        a rate, scaled for a chart that takes fractions
-widgets/counter        the reference widget for `fs`, and a restart it survives
-widgets/uptime         the reference widget for `command`, and the async shape
-widgets/vault          the reference widget for `secrets`, and a credential
-                       that never reaches the view
-widgets/conformance    a widget that tries everything, so the sandbox can be
-                       tested for what it refuses
-docs/writing-a-widget.md  the guide
-docs/api-reference.md     every function, type, limit and refusal, on one page
-docs/registries.md        finding a widget, and publishing one
-packaging/                a `.deb` that CI builds and looks inside, a PKGBUILD,
-                          and the manual page
-spikes/m0_layer_shell  the proof that the whole thing is possible
-spikes/m4_x11          the same question on X11, where it was least certain
+  uniwidged-host       the daemon: scheduler, configuration, supervision
+  uniwidged-cli        `uniwidged run · status · log · new · install · …`
+wit/uniwidged.wit      the host/guest contract — frozen for 1.x
+widgets/               eight reference widgets, one per capability
+docs/                  the documentation site (VitePress)
+assets/                the logo and brand assets
+packaging/             a .deb that CI builds and inspects, a PKGBUILD, the man page
+spikes/                the M0 and M4 proofs that the whole thing is possible
 ```
 
-## Building
+## Building from source
 
 ```sh
 cargo test --workspace
 ```
 
-That is the whole of it: every dependency is on crates.io, and there is no
-sibling checkout to arrange.
+Every dependency is on crates.io; there is no sibling checkout to arrange.
+Some suites need more than a compiler, and say so rather than skipping quietly:
 
-Some tests need more than a compiler, and say so rather than skipping quietly:
+| Suite | Needs | Without it |
+|---|---|---|
+| golden images, live desktop | a Vulkan driver (`mesa-vulkan-drivers` for lavapipe) | skips; `UNIWIDGED_REQUIRE_GPU=1` fails |
+| sandbox conformance | `rustup target add wasm32-wasip2` | — it builds its own widget |
+| layer shell | `sway` (starts its own headless compositor) | skips; `UNIWIDGED_REQUIRE_WAYLAND=1` fails |
+| pointer, two monitors, hotplug | `Xvfb`, `xrandr` | skips; `UNIWIDGED_REQUIRE_X11=1` fails |
+| HTTPS, registries | `openssl` (starts its own TLS server; no internet) | skips; `UNIWIDGED_REQUIRE_NET=1` fails |
 
-| | |
-|---|---|
-| the golden images | a Vulkan driver — `mesa-vulkan-drivers` supplies a software one. Without it they skip; `UNIWIDGED_REQUIRE_GPU=1` turns that into a failure, and CI sets it. |
-| the sandbox conformance suite | `rustup target add wasm32-wasip2`. It builds the conformance widget itself, so there is nothing to skip. |
-| the layer-shell tests | `sway`. They start their own headless compositor, so no session is needed; without it they skip, and `UNIWIDGED_REQUIRE_WAYLAND=1` makes that a failure. CI sets it. |
-| the M0/M1 spike | a wlroots compositor and `grim`; `spikes/m0_layer_shell/run.sh` starts a headless sway if none is running. |
-| the HTTPS tests | `openssl`, to make a certificate for the TLS server they start themselves. No internet is used or needed. Without it they skip, and `UNIWIDGED_REQUIRE_NET=1` makes that a failure. |
-| the registry tests | `openssl`, as above: they start a TLS server, serve a signed index over it and drive the real binary against it. Same bargain — skipped without it, a failure under `UNIWIDGED_REQUIRE_NET=1`. |
-| the pointer tests | `Xvfb`. They start their own nested X server, so no session or display is needed; without it they skip, and `UNIWIDGED_REQUIRE_X11=1` turns that into a failure. CI sets it. |
-| the two-monitor tests | `Xvfb` and `xrandr`, which declares two virtual RandR monitors over the nested server's screen — the same protocol path a docked laptop uses. Same bargain: skipped without them, a failure under `UNIWIDGED_REQUIRE_X11=1`. |
+CI sets every `UNIWIDGED_REQUIRE_*`, so a green run is never a run that proved
+nothing. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Where it comes from
+
+uniwidged is the union of two projects.
+[**Ephemeris**](https://github.com/JosunLP/Ephemeris) worked out how a window
+becomes a *desktop widget* on every platform — that is `uniwidged-shell`.
+[**Ferrum UI**](https://github.com/j-pfalzgraf/ferrumui) is a GPU-rendered UI
+stack on Vello, wgpu, Parley, taffy and AccessKit — that is where the rendering
+techniques come from. Both are adopted, not depended on; [`NOTICE.md`](NOTICE.md)
+records what came from where. What is new is the seam between them, and the
+sandbox boundary that lets somebody else write a widget.
+
+## Contributing
+
+Bug reports, widgets and pull requests are welcome — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Security problems go through
+[private reporting](https://github.com/JosunLP/uniwidged/security/advisories/new),
+see [`SECURITY.md`](SECURITY.md).
 
 ## Licence
 

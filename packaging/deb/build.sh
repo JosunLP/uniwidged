@@ -118,7 +118,7 @@ Architecture: $arch
 Depends: $depends
 Installed-Size: $installed_kb
 Maintainer: uniwidged contributors <noreply@example.invalid>
-Homepage: https://github.com/j-pfalzgraf/uniwidged
+Homepage: https://josunlp.github.io/uniwidged/
 Description: Cross-platform desktop widget framework
  One host process owns one GPU device and every widget's surface. Widgets sit
  below your windows and above your wallpaper, composited per-pixel against it.

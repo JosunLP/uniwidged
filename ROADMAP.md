@@ -423,7 +423,7 @@ host nor the user can know what that is. `command:sh` is arbitrary code
 execution wearing a small word. The guide says so in as many words rather than
 making it look small.
 
-**A fourth reference widget.** [`widgets/uptime`](widgets/uptime) is the
+**A fourth reference widget.** [`widgets/uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) is the
 asynchronous shape written out — ask, draw something now, collect on the event —
 and it asks for `uptime` rather than `sh` for the reason above. Its test watches
 the first frame say it is waiting and a later one carry the machine's real
@@ -663,7 +663,7 @@ that is its normal case. `remove-secret` is new: a widget that cannot forget a
 credential is one that keeps it forever, which for a credential is a bug rather
 than a missing convenience.
 
-**A fifth reference widget.** [`widgets/vault`](widgets/vault) is the shape
+**A fifth reference widget.** [`widgets/vault`](https://github.com/JosunLP/uniwidged/tree/main/widgets/vault) is the shape
 every widget that signs in to something ends up with — it has a credential or
 it does not, it says which, and it can forget one. It declares `secrets` and
 nothing else, and two of its tests are about what it must *not* do: the
@@ -1179,7 +1179,7 @@ depends on, and what once rendered "live" as "li…".
 
 `NOTICE.md` records what came from where. Every dependency is now on crates.io.
 
-## M8 · Shipping — **partly done, 2026-08-31**
+## M8 · Shipping — **done, 2026-11-09** (Windows and macOS packaging moves with M5 and M6)
 
 * Packaging: a `.deb` and an AUR package are **done** — see below; MSI/MSIX and
   a signed and notarised `.app` wait on the platforms they package, which are
@@ -1210,12 +1210,12 @@ The exit criterion cannot be asserted, but its mechanical half can, and now is.
   generates is something to *edit* rather than something to write from nothing.
   It validates the name through the runtime's own parser, so a name the
   scaffold accepts is one the host will run.
-* **[`docs/writing-a-widget.md`](docs/writing-a-widget.md)** — the guide. Nine
+* **[`docs/writing-a-widget.md`](https://josunlp.github.io/uniwidged/guide/writing-a-widget)** — the guide. Nine
   sections, including the one most guides omit: what you *cannot* do, and why.
 * **Four reference widgets**, one per served capability —
-  [`clock`](widgets/clock) (`locale`), [`system-load`](widgets/system-load)
-  (`metrics`), [`counter`](widgets/counter) (`fs`) and
-  [`uptime`](widgets/uptime) (`command`). Each declares only what it uses, and a
+  [`clock`](https://github.com/JosunLP/uniwidged/tree/main/widgets/clock) (`locale`), [`system-load`](https://github.com/JosunLP/uniwidged/tree/main/widgets/system-load)
+  (`metrics`), [`counter`](https://github.com/JosunLP/uniwidged/tree/main/widgets/counter) (`fs`) and
+  [`uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) (`command`). Each declares only what it uses, and a
   test asserts that list rather than deriving it: a worked example that
   over-declares teaches every reader to over-declare.
 
@@ -1241,7 +1241,7 @@ It takes one now. That is what reference widgets are for.
 
 ### The API reference — **done, 2026-08-28**
 
-[`docs/api-reference.md`](docs/api-reference.md) — every function, type, limit
+[`docs/api-reference.md`](https://josunlp.github.io/uniwidged/reference/api) — every function, type, limit
 and refusal on one page, with the ABI history at the bottom. The third of M8's
 documentation bullets, and the one a guide cannot replace: `writing-a-widget.md`
 is an argument with worked examples, and somebody halfway through a widget
@@ -1267,7 +1267,7 @@ API, no server to run. That is a deliberate ceiling: this project cannot
 honestly operate infrastructure, and a distribution mechanism depending on
 infrastructure nobody maintains stops working the year after it ships. Anything
 larger is somebody else's layer on top of a public file whose format is a page
-long — [`docs/registries.md`](docs/registries.md).
+long — [`docs/registries.md`](https://josunlp.github.io/uniwidged/guide/registries).
 
 **The interesting decision is that there are two signatures, by two people.**
 The index is signed by whoever publishes the *list*, and that key is pinned
@@ -1531,13 +1531,13 @@ machine will produce", for the capability with the most of them.
 
 | | |
 |---|---|
-| [`clock`](widgets/clock) | `locale` |
-| [`system-load`](widgets/system-load) | `metrics` |
-| [`battery`](widgets/battery) | `metrics`, with nothing to measure |
-| [`network`](widgets/network) | `metrics`, as a rate |
-| [`counter`](widgets/counter) | `fs` |
-| [`uptime`](widgets/uptime) | `command` |
-| [`vault`](widgets/vault) | `secrets` |
+| [`clock`](https://github.com/JosunLP/uniwidged/tree/main/widgets/clock) | `locale` |
+| [`system-load`](https://github.com/JosunLP/uniwidged/tree/main/widgets/system-load) | `metrics` |
+| [`battery`](https://github.com/JosunLP/uniwidged/tree/main/widgets/battery) | `metrics`, with nothing to measure |
+| [`network`](https://github.com/JosunLP/uniwidged/tree/main/widgets/network) | `metrics`, as a rate |
+| [`counter`](https://github.com/JosunLP/uniwidged/tree/main/widgets/counter) | `fs` |
+| [`uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) | `command` |
+| [`vault`](https://github.com/JosunLP/uniwidged/tree/main/widgets/vault) | `secrets` |
 
 `net` has none, and that is the gap in the set: a reference widget for it needs
 a service to talk to that will still be there in a year, and pointing the
@@ -1549,36 +1549,71 @@ exercises the transport against a server it starts itself.
 
 ## Towards 1.0.0
 
-**0.1.0** is the first version with a number that means something: the Linux
-desktop works on both window systems, every capability is served, widgets can
-be found, checked, installed, configured, moved and watched, and the whole of
-it is measured in CI. `CHANGELOG.md` starts here, and
-`.github/workflows/release.yml` builds the `.deb` for a `v*` tag, checks it the
-way CI does, and attaches it to a GitHub release with its checksum — so a
-release is a tag, and the artefact is the one the tests ran against.
+**0.1.0** was the first version with a number that meant something: the Linux
+desktop worked on both window systems, every capability was served, widgets
+could be found, checked, installed, configured, moved and watched, and the
+whole of it was measured in CI.
 
-What `1.0.0` means, so that the number is not reached by counting:
+The criteria written here for 1.0 were four. This is what became of each, and
+why the number was taken anyway — so that it was decided rather than reached
+by counting.
 
-* **The ABI stops moving.** Eight versions in four days is a pre-release
-  interface. 1.0 freezes `wit/uniwidged.wit` at the version it ships with and
-  promises that a widget built against it keeps working through every 1.x —
-  additions only, and a widget that does not use them does not notice them.
-  Until then the number moves whenever the interface does, and the check at
-  instantiation is what makes that safe.
-* **M5 and M6.** A framework whose README says "cross-platform" is not 1.0 on
-  one platform. Windows and macOS each need their shell, their keychain, their
-  packaging and their own measured tests — see the milestones above. Each is a
-  minor version on its own.
-* **A year of somebody else's widget.** The exit criterion of M8 — a widget
-  written from the guide alone, by somebody who has never seen the repository
-  — has to have happened, and the widget has to have survived a host upgrade.
-* **What is not there is said.** Every `Unavailable` a widget can be answered
-  with is documented beside the function that answers it, and `uniwidged
-  doctor` names the ones this machine will produce.
+* **The ABI stops moving — done.** ABI 9 is frozen for 1.x. The check at
+  instantiation became a range, `ABI_OLDEST..=ABI_VERSION` with the floor at 9,
+  so an interface that grows by adding host functions keeps running every
+  widget built against 1.0. What may change in 1.x and what waits for 2.0 is
+  written down in
+  [ABI & stability](https://josunlp.github.io/uniwidged/reference/abi), and a
+  refusal now says whose move it is.
+* **What is not there is said — done.** Every `Unavailable` is documented
+  beside the function that answers it, `uniwidged doctor` names the ones this
+  machine will produce, and the documentation site has a troubleshooting page
+  in the words the log uses.
+* **M5 and M6 — moved to 1.x.** The argument for waiting was that a framework
+  calling itself cross-platform is not 1.0 on one platform. The argument
+  against is stronger: the thing a 1.0 number promises a widget author is that
+  their widget keeps working, and Windows and macOS are **additions behind the
+  same interface** — nothing about them can change what a widget sees. Holding
+  the stability promise back until two more shells exist would have kept every
+  author on an unstable number for no benefit to them. So 1.0 is Linux, says
+  so, and each further platform is a minor release.
+* **A year of somebody else's widget — replaced by its mechanical half.** A
+  year cannot be shortened, and it was never a property of the code. What the
+  code can promise is that the guide's commands work as written for somebody
+  who has never seen the repository, and getting there found a real bug: the
+  guide's first `uniwidged install` was refused, because `cargo build` puts no
+  manifest beside the component. `install` now finds the crate's own
+  `widget.toml`, `uniwidged new` outside a checkout depends on the SDK by git
+  at its release tag, and both are tested.
 
-Between here and there, minor versions: `0.2` for the next platform, and a
-patch for anything that is a fix. The `.deb` and the AUR package follow the
-workspace version, and nothing else has one.
+### What 1.0.0 added
+
+* The stability promise above, and the ABI range that implements it.
+* A documentation site — VitePress, in `docs/`, deployed to GitHub Pages — with
+  a guide, the API and CLI references, the security model and this file.
+* A logo and a brand, in `assets/`.
+* `uniwidged help <command>` and `--help` on every command.
+* `now_seconds()` in the SDK prelude.
+* `CONTRIBUTING.md`, `SECURITY.md`, issue forms and a pull request template;
+  release notes taken from `CHANGELOG.md`.
+
+## After 1.0.0
+
+Minor versions, each additive:
+
+* **1.x · Windows (M5).** A DirectComposition shell kept at `HWND_BOTTOM`,
+  DPAPI behind `secrets`, MSI/MSIX packaging, and the measured tests — see M5
+  above.
+* **1.x · macOS (M6).** A desktop-level `NSWindow` with a `CAMetalLayer`, the
+  Keychain behind `secrets`, a signed and notarised `.app` — see M6 above.
+* **1.x · The SDK on crates.io**, so a widget can depend on
+  `uniwidged-guest = "1"` rather than a git tag.
+* **1.x · A second SDK.** The interface is a WIT file; a non-Rust SDK is the
+  test that it is a contract rather than a Rust API with extra steps.
+
+Patches for anything that is a fix. The `.deb` and the AUR package follow the
+workspace version, and nothing else has one. **2.0** only if the interface has
+to break — and the ABI page says what that would take.
 
 ## Not planned
 

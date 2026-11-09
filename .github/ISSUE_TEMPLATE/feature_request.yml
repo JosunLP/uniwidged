@@ -1,0 +1,16 @@
+name: Feature request
+description: Something uniwidged should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: An idea
+      description: How might it work? If it touches the widget interface, say how it stays additive — see the stability promise.

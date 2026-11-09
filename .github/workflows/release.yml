@@ -56,13 +56,27 @@ jobs:
           dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
           "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version
           cd "$RUNNER_TEMP/deb" && sha256sum uniwidged_*.deb > SHA256SUMS
+      - name: the release notes are this version's changelog section
+        run: |
+          set -eu
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            $0 ~ "^## " v " " { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          {
+            echo
+            echo "---"
+            echo "The \`.deb\` is built by \`packaging/deb/build.sh\` and checked the way CI checks it;"
+            echo "\`SHA256SUMS\` is its checksum. Documentation: https://josunlp.github.io/uniwidged/"
+          } >> "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ]
       - name: the release
         uses: softprops/action-gh-release@v2
         with:
+          name: uniwidged ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/notes.md
           files: |
             ${{ runner.temp }}/deb/uniwidged_*.deb
             ${{ runner.temp }}/deb/SHA256SUMS
-          body: |
-            See `CHANGELOG.md` for what changed, and `ROADMAP.md` for what is
-            still to come. The `.deb` is built by `packaging/deb/build.sh` and
-            checked the way CI checks it; `SHA256SUMS` is its checksum.

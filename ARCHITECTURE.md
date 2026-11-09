@@ -824,6 +824,6 @@ version of a widget is not a new widget.
 
 uniwidged is MIT OR Apache-2.0. `uniwidged-shell` derives from Ephemeris
 (GPL-3.0-or-later) under a relicence by its sole copyright holder; see
-[`NOTICE.md`](NOTICE.md) for the verification. This is not a detail: a
+[`NOTICE.md`](https://github.com/JosunLP/uniwidged/blob/main/NOTICE.md) for the verification. This is not a detail: a
 framework's licence is the licence its users inherit, and a permissive one is
 what lets a widget author choose their own.
