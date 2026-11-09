@@ -139,8 +139,8 @@ pub struct Renderer {
 /// on its visual (`DxgiFromVisual`), which is the path Ephemeris took by hand
 /// and the only one that offers `PreMultiplied`. DX12 alone, because the other
 /// backends would hand the same window an HWND swapchain and an opaque
-/// rectangle. `WGPU_BACKEND` still overrides it, for somebody debugging a
-/// driver.
+/// rectangle. `WGPU_BACKEND` still overrides it, and `WGPU_DX12_COMPILER`
+/// chooses the shader compiler, for somebody debugging a driver.
 ///
 /// Everywhere else the defaults are already right.
 fn platform_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::InstanceDescriptor {
@@ -150,6 +150,9 @@ fn platform_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::InstanceDesc
         descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
         descriptor.backend_options.dx12.presentation_system =
             wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        if let Some(compiler) = wgpu::Dx12Compiler::from_env() {
+            descriptor.backend_options.dx12.shader_compiler = compiler;
+        }
         descriptor
     }
     #[cfg(not(target_os = "windows"))]
