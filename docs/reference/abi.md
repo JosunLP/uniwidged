@@ -32,7 +32,8 @@ Instantiating a component can run code of its own — a static constructor, in
 languages that have them — before `abi-version` is asked. That code runs under
 the same grants and limits as everything else the widget does, and under a deadline, so
 an incompatible widget can act within what it was granted before it is
-refused. The check protects the host from misreading a widget, not the
+refused — call the host functions its policy permits and, with `fs` or
+`secrets`, write data that stays after the refusal. The check protects the host from misreading a widget, not the
 widget's grants from the widget.
 :::
 
