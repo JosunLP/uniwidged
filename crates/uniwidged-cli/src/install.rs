@@ -185,7 +185,8 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
 /// (staged inside somebody else's build directory, say) and not a build.
 /// In a workspace, whose members share one `target/`, the member that built
 /// the component is found by its artifact name, searching the whole
-/// workspace; if no single crate owns it, there is no answer, and
+/// workspace, hidden directories included; if no single crate owns it, or
+/// part of the workspace cannot be read, there is no answer, and
 /// `--manifest` has to say.
 ///
 /// `None`: not a build. `Some(None)`: a build with no manifest to be sure of.
@@ -250,12 +251,20 @@ fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
         {
             owners.push(dir.join("widget.toml"));
         }
+        // A directory that cannot be read is a part of the workspace not
+        // searched, and an owner found elsewhere might not be the only one.
         let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+            return None;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return None;
+            };
+            // Build output and git's own store hold no members. Every other
+            // directory is searched, hidden ones too: a workspace may list a
+            // member at `.widgets/clock`.
             let name = entry.file_name();
-            let skipped = name == "target" || name.to_string_lossy().starts_with('.');
+            let skipped = name == "target" || name == ".git";
             if !skipped && entry.file_type().is_ok_and(|t| t.is_dir()) {
                 pending.push(entry.path());
             }
@@ -469,7 +478,7 @@ mod tests {
         let space = root.join("space");
         write(
             space.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"members/*\"]\n[package]\nname = \"root-widget\"\n",
+            "[workspace]\nmembers = [\"members/*\", \".widgets/clock\"]\n[package]\nname = \"root-widget\"\n",
         );
         write(space.join("widget.toml"), "");
         write(
@@ -507,6 +516,15 @@ mod tests {
         );
         write(space.join("a/b/c/d/deep/widget.toml"), "");
         assert_eq!(found("root_widget"), None);
+
+        // A member in a hidden directory is as much a member: it and the root
+        // both claim `renamed` here, so neither is the owner.
+        write(
+            space.join(".widgets/clock/Cargo.toml"),
+            "[package]\nname = \"hidden\"\n[lib]\nname = \"renamed\"\n",
+        );
+        write(space.join(".widgets/clock/widget.toml"), "");
+        assert_eq!(found("renamed"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
