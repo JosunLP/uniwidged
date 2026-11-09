@@ -41,14 +41,19 @@ sha256sum --ignore-missing -c SHA256SUMS && \
 # Per-user: installs under %LOCALAPPDATA%\Programs, adds itself to your PATH,
 # and never asks for an administrator.
 $base = "https://github.com/JosunLP/uniwidged/releases/download/v1.1.0"
-Invoke-WebRequest "$base/uniwidged-1.1.0-x64.msi" -OutFile uniwidged.msi
-msiexec /i uniwidged.msi
+Invoke-WebRequest "$base/uniwidged-1.1.0-x64.msi" -OutFile uniwidged-1.1.0-x64.msi
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+$want = (Select-String -Path SHA256SUMS -Pattern 'uniwidged-1.1.0-x64.msi').Line.Split(' ')[0]
+$have = (Get-FileHash uniwidged-1.1.0-x64.msi -Algorithm SHA256).Hash.ToLower()
+if ($have -ne $want) { throw "checksum mismatch: do not install this file" }
+msiexec /i uniwidged-1.1.0-x64.msi
 ```
 
 ```sh [macOS]
 base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
-curl -LO "$base/uniwidged-1.1.0-macos.zip"
-ditto -x -k uniwidged-1.1.0-macos.zip /Applications
+curl -LO "$base/uniwidged-1.1.0-macos.zip" -LO "$base/SHA256SUMS"
+shasum -a 256 --ignore-missing -c SHA256SUMS && \
+  ditto -x -k uniwidged-1.1.0-macos.zip /Applications
 # The command line, from the bundle:
 ln -s /Applications/uniwidged.app/Contents/MacOS/uniwidged /usr/local/bin/uniwidged
 ```
@@ -78,8 +83,11 @@ if you have checked `SHA256SUMS` and trust it.
 
 ## From source
 
-You need a Rust toolchain of **1.95 or newer**. On Linux you also need three
-system libraries; Windows and macOS need nothing else.
+You need a Rust toolchain of **1.95 or newer**, and what Rust itself needs to
+link: on **Windows**, the Visual Studio C++ build tools (which `rustup` offers
+to install for the MSVC toolchain); on **macOS**, the Xcode Command Line Tools
+(`xcode-select --install`). On **Linux** you also need three system
+libraries:
 
 ::: code-group
 

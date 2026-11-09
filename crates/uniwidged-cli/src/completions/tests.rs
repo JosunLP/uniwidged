@@ -104,7 +104,16 @@ fn the_bash_script_parses() {
     // A parse is the whole of what can go wrong in a generated script, and
     // bash is on every machine this test runs on.
     let script = bash();
-    let output = parsed_by("bash", &script).expect("bash is on this machine");
+    // On Windows, `bash` on `PATH` is WSL's launcher, which on a machine with
+    // no distribution installed answers every script with a sentence about
+    // installing one. Git for Windows' bash is the one a Windows user runs
+    // these completions in, so that is the one asked.
+    let shell = if cfg!(windows) {
+        r"C:\Program Files\Git\bin\bash.exe"
+    } else {
+        "bash"
+    };
+    let output = parsed_by(shell, &script).expect("bash is on this machine");
     assert!(
         output.status.success(),
         "bash refused the script: {}\n{script}",

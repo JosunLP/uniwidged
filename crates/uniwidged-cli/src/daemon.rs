@@ -83,8 +83,12 @@ pub fn pid_file() -> PathBuf {
 /// *claim* rather than a fact.
 #[cfg(unix)]
 pub fn listen(wake: &WakePipe) -> io::Result<PidFile> {
-    use std::os::fd::AsRawFd;
-    WAKE_FD.store(wake.as_fd().as_raw_fd(), Ordering::Relaxed);
+    // The *write* end. Until 1.1 this was handed the read end, and the write
+    // in the handler failed with `EBADF` — which went unnoticed on Linux only
+    // because the signal also interrupts the loop's `poll`. On macOS the loop
+    // waits in AppKit, which a signal does not interrupt, so the byte has to
+    // actually arrive for the wake thread to post its event.
+    WAKE_FD.store(wake.write_fd(), Ordering::Relaxed);
     // SAFETY: `handler` is async-signal-safe — a relaxed atomic store and one
     // non-blocking `write`, both on the permitted list. `SA_RESTART` so the
     // loop's `poll` is resumed rather than failing with `EINTR`, which is a

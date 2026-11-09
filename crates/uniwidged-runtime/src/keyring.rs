@@ -423,9 +423,22 @@ impl FileKeyring {
         bytes.try_into().map_err(|_| {
             KeyringError::Unavailable(format!(
                 "{} is not a keychain key: it should be exactly 32 bytes",
-                self.key_path.display()
+                self.key_source()
             ))
         })
+    }
+
+    /// Where the key is, in words a user can go and look for. On macOS there
+    /// is no key file, and naming one would send them to a path that does not
+    /// exist.
+    fn key_source(&self) -> String {
+        match self.custody {
+            #[cfg(target_os = "macos")]
+            Custody::Keychain => {
+                format!("the login keychain item for {}", self.store_path.display())
+            }
+            _ => self.key_path.display().to_string(),
+        }
     }
 
     fn new_key(&self) -> Result<[u8; 32], KeyringError> {
@@ -503,7 +516,7 @@ impl FileKeyring {
                     "{} does not open with {} — it was written by a different \
                      key, or something changed it",
                     self.store_path.display(),
-                    self.key_path.display()
+                    self.key_source()
                 ))
             })?;
         decode(&plain).ok_or_else(|| corrupt(&self.store_path))
@@ -680,8 +693,8 @@ impl SecretStore for FileKeyring {
             #[cfg(target_os = "macos")]
             Custody::Keychain => format!(
                 "an encrypted file at {}, its key held in your login keychain — \
-                 which macOS can lock, and which asks before a program other than \
-                 this one reads it",
+                 which macOS can lock, and which refuses a program other than \
+                 this one",
                 self.store_path.display()
             ),
         }
@@ -950,7 +963,35 @@ mod keychain {
     /// `errSecItemNotFound`.
     const NOT_FOUND: i32 = -25300;
 
+    /// Keychain prompts are switched off for every call here, as DPAPI's are.
+    ///
+    /// These calls run inside a widget's `view`, on its deadline, with the
+    /// store's lock held. A locked keychain, or a binary re-signed since it
+    /// created the item, would otherwise put up a modal dialog and stall the
+    /// whole desktop until somebody answered it; with interaction off it fails
+    /// at once, which is `unavailable` — the truth. The setting is process-wide,
+    /// so one caller holds it at a time.
+    fn no_prompts() -> Result<
+        (
+            std::sync::MutexGuard<'static, ()>,
+            security_framework::os::macos::keychain::KeychainUserInteractionLock,
+        ),
+        KeyringError,
+    > {
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let held = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let quiet =
+            security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+                .map_err(|e| {
+                    KeyringError::Unavailable(format!(
+                        "could not keep the keychain from prompting: {e}"
+                    ))
+                })?;
+        Ok((held, quiet))
+    }
+
     pub(super) fn get(store: &Path) -> Result<Option<Vec<u8>>, KeyringError> {
+        let _quiet = no_prompts()?;
         match security_framework::passwords::get_generic_password(SERVICE, &store.to_string_lossy())
         {
             Ok(bytes) => Ok(Some(bytes)),
@@ -962,6 +1003,7 @@ mod keychain {
     }
 
     pub(super) fn set(store: &Path, key: &[u8]) -> Result<(), KeyringError> {
+        let _quiet = no_prompts()?;
         security_framework::passwords::set_generic_password(SERVICE, &store.to_string_lossy(), key)
             .map_err(|e| {
                 KeyringError::Unavailable(format!(

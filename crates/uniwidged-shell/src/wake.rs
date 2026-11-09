@@ -71,6 +71,13 @@ impl WakePipe {
         self.read.as_fd()
     }
 
+    /// The write end, for a signal handler — which can hold neither a closure
+    /// nor a lock, only a descriptor to `write` one byte to. Valid for as long
+    /// as this pipe is.
+    pub fn write_fd(&self) -> RawFd {
+        self.write.as_raw_fd()
+    }
+
     /// A closure a worker thread can call to wake the loop.
     ///
     /// Deliberately the smallest possible thing: one non-blocking write, no

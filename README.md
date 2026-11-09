@@ -183,10 +183,12 @@ in a sentence that says so.
 | Windows 10 / 11 (DirectComposition, `HWND_BOTTOM`) | 🆕 new in 1.1 — measured in CI |
 | macOS 11+ (desktop-icon level, `CAMetalLayer`) | 🆕 new in 1.1 — measured in CI |
 
-Windows and macOS are new: their exit criteria — below a maximised window, no
-focus stolen, no switcher entry, the wallpaper through the glass, and on macOS
-every Space and Mission Control — are asserted against the real window manager
-on every change, on GitHub's Windows and macOS runners. They have had far less
+Windows and macOS are new. On every change, GitHub's Windows and macOS runners
+assert against the real window manager that a widget stays below an ordinary
+window, takes no focus, has no switcher entry and has a transparent
+swapchain. Following you across Spaces and staying put under Mission Control
+are checked as the window flags that govern them (`.canJoinAllSpaces`,
+`.stationary`) — CI cannot switch a Space or open Mission Control to watch. They have had far less
 use on real desktops than Linux has, and issues are welcome.
 
 ## Documentation

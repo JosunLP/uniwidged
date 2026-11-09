@@ -241,16 +241,27 @@ fn instance() -> HINSTANCE {
     unsafe { GetModuleHandleW(std::ptr::null()) }
 }
 
-/// Registers the class once, and makes the process per-monitor aware first —
-/// which has to precede the first window, or every coordinate after it is
-/// scaled by a DPI the process never asked for.
+/// Makes the process per-monitor aware, once.
+///
+/// Before the first window *and* before the first question about monitors:
+/// the desktop asks for the monitors before it opens anything, and a process
+/// that is not yet aware is answered in virtualised logical pixels — a
+/// 2560×1440 screen at 150 % reads as 1707×960, and every placement resolved
+/// and saved against that is wrong.
+fn dpi_aware() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        // SAFETY: a process-wide setting. It fails only if something already
+        // set it — a manifest, typically — which is the same answer.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    });
+}
+
+/// Registers the class once, after making the process DPI-aware.
 fn class() -> Result<*const u16, DesktopError> {
     static CLASS: OnceLock<Result<Vec<u16>, String>> = OnceLock::new();
     let registered = CLASS.get_or_init(|| {
-        // SAFETY: a process-wide setting, made before any window exists. It
-        // fails only if something already set it — a manifest, typically —
-        // which is the same answer.
-        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        dpi_aware();
         let name = wide("uniwidged.widget");
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -532,6 +543,7 @@ pub fn outputs() -> Vec<Output> {
         }
         1
     }
+    dpi_aware();
     let mut list: Vec<Output> = Vec::new();
     // SAFETY: every monitor of the whole desktop, with a callback that only
     // writes into `list`.

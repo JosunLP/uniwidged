@@ -511,3 +511,41 @@ fn storing_the_same_value_again_does_not_rewrite_the_store() {
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
+
+/// The custody a Windows desktop actually uses. Everything above runs against
+/// [`FileKeyring::new`]; this is the one place [`FileKeyring::system`]'s DPAPI
+/// path is exercised, on the Windows CI runner.
+#[cfg(windows)]
+#[test]
+fn a_dpapi_sealed_key_round_trips_and_is_not_the_key() {
+    let sealed = dpapi::seal(&[7u8; 32]).expect("DPAPI seals");
+    assert_ne!(
+        sealed.as_slice(),
+        &[7u8; 32],
+        "sealing must change the bytes"
+    );
+    assert_eq!(
+        dpapi::unseal(&sealed).expect("DPAPI unseals"),
+        vec![7u8; 32]
+    );
+
+    let scratch = Scratch::new("dpapi");
+    FileKeyring::system(&scratch.0)
+        .set("w", "token", b"s3cret")
+        .expect("a sealed keychain stores");
+    let reopened = FileKeyring::system(&scratch.0);
+    assert_eq!(
+        reopened.get("w", "token").expect("it opens again"),
+        Some(b"s3cret".to_vec())
+    );
+    let on_disk = std::fs::read(scratch.0.join("keyring.dpapi")).expect("the sealed key file");
+    assert_ne!(
+        on_disk.len(),
+        32,
+        "the key file must hold a DPAPI blob, not the key"
+    );
+    assert!(
+        !scratch.0.join("keyring.key").exists(),
+        "no raw key file beside a sealed one"
+    );
+}

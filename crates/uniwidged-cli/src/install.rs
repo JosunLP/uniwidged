@@ -461,6 +461,17 @@ pub fn describe(manifest: &Manifest, signed_by: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    /// Which *file* was found, compared as the system resolves it: a temporary
+    /// directory is `/private/var/…` behind `/var/…` on macOS and has an 8.3
+    /// short name on Windows, and `canonicalize` there adds a `\\?\` prefix. The
+    /// question these tests ask is which manifest, not how its path is spelled.
+    macro_rules! assert_same {
+        ($found:expr, $expected:expr $(,)?) => {{
+            let canon = |p: Option<std::path::PathBuf>| p.map(|p| p.canonicalize().unwrap_or(p));
+            assert_eq!(canon($found), canon($expected));
+        }};
+    }
+
     use super::find_manifest;
 
     #[test]
@@ -480,7 +491,7 @@ mod tests {
         write(krate.join("published/x.wasm"), "");
         write(krate.join("published/x.toml"), "");
         let escaped = krate.join("target/../published/x.wasm");
-        assert_eq!(
+        assert_same!(
             find_manifest(&escaped).0,
             Some(escaped.with_extension("toml"))
         );
@@ -490,7 +501,7 @@ mod tests {
         write(staged.join("Cargo.toml"), "");
         write(staged.join("y.wasm"), "");
         write(staged.join("y.toml"), "");
-        assert_eq!(
+        assert_same!(
             find_manifest(&staged.join("y.wasm")).0,
             Some(staged.join("y.toml"))
         );
@@ -518,17 +529,17 @@ mod tests {
             write(release.join(format!("{artifact}.wasm")), "");
         }
         let found = |artifact: &str| find_manifest(&release.join(format!("{artifact}.wasm"))).0;
-        assert_eq!(
+        assert_same!(
             found("my_clock"),
             Some(space.join("members/clock/widget.toml"))
         );
-        assert_eq!(
+        assert_same!(
             found("renamed"),
             Some(space.join("members/odd/widget.toml"))
         );
-        assert_eq!(found("root_widget"), Some(space.join("widget.toml")));
+        assert_same!(found("root_widget"), Some(space.join("widget.toml")));
         // Built by nobody it can name: no guess, so `--manifest` has to say.
-        assert_eq!(found("nobody"), None);
+        assert_same!(found("nobody"), None);
 
         // Two crates claiming one artifact name — the root, and a member far
         // below it — is no single owner, however deep the member sits.
@@ -537,7 +548,7 @@ mod tests {
             "[package]\nname = \"deep\"\n[lib]\nname = \"root_widget\"\n",
         );
         write(space.join("a/b/c/d/deep/widget.toml"), "");
-        assert_eq!(found("root_widget"), None);
+        assert_same!(found("root_widget"), None);
 
         // A member in a hidden directory is as much a member: it and the root
         // both claim `renamed` here, so neither is the owner.
@@ -546,15 +557,15 @@ mod tests {
             "[package]\nname = \"hidden\"\n[lib]\nname = \"renamed\"\n",
         );
         write(space.join(".widgets/clock/widget.toml"), "");
-        assert_eq!(found("renamed"), None);
+        assert_same!(found("renamed"), None);
 
         // A `Cargo.toml` that is there and cannot be read could be another
         // owner, so the search ends unsure rather than with the one it saw.
         // (A directory by that name: unreadable even to root.)
         std::fs::create_dir_all(space.join("members/unreadable/Cargo.toml")).unwrap();
-        assert_eq!(found("my_clock"), None);
+        assert_same!(found("my_clock"), None);
         std::fs::remove_dir_all(space.join("members/unreadable")).unwrap();
-        assert_eq!(
+        assert_same!(
             found("my_clock"),
             Some(space.join("members/clock/widget.toml"))
         );
@@ -565,7 +576,7 @@ mod tests {
             space.join("members/plain/Cargo.toml"),
             "[package]\nname = \"plain\"\n[lib]\nname = \"my_clock\"\n",
         );
-        assert_eq!(found("my_clock"), None);
+        assert_same!(found("my_clock"), None);
         std::fs::remove_dir_all(space.join("members/plain")).unwrap();
 
         // A member called `target` is a member, not build output: its claim
@@ -575,7 +586,7 @@ mod tests {
             "[package]\nname = \"t\"\n[lib]\nname = \"my_clock\"\n",
         );
         write(space.join("widgets/target/widget.toml"), "");
-        assert_eq!(found("my_clock"), None);
+        assert_same!(found("my_clock"), None);
 
         // A root `Cargo.toml` that cannot be parsed may be a workspace whose
         // manifest belongs to another member: no answer, not the root's.
@@ -583,7 +594,7 @@ mod tests {
         write(broken.join("Cargo.toml"), "[workspace\nmembers = [");
         write(broken.join("widget.toml"), "");
         write(broken.join("target/release/z.wasm"), "");
-        assert_eq!(find_manifest(&broken.join("target/release/z.wasm")).0, None);
+        assert_same!(find_manifest(&broken.join("target/release/z.wasm")).0, None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -602,22 +613,22 @@ mod tests {
         // Nothing yet: and an unrelated manifest *above* the crate root is
         // not somebody else's widget to borrow.
         std::fs::write(root.join("project/widget.toml"), "").unwrap();
-        assert_eq!(find_manifest(&component).0, None);
+        assert_same!(find_manifest(&component).0, None);
 
         std::fs::write(krate.join("widget.toml"), "").unwrap();
-        assert_eq!(find_manifest(&component).0, Some(krate.join("widget.toml")));
+        assert_same!(find_manifest(&component).0, Some(krate.join("widget.toml")));
 
         // A copy left beside the build by an earlier `sign` does not shadow
         // the crate's manifest, which the author may have edited since.
         std::fs::write(release.join("hello.toml"), "").unwrap();
-        assert_eq!(find_manifest(&component).0, Some(krate.join("widget.toml")));
+        assert_same!(find_manifest(&component).0, Some(krate.join("widget.toml")));
 
         // Outside a build directory — a published set — the one beside wins.
         let published = root.join("published");
         std::fs::create_dir_all(&published).unwrap();
         std::fs::write(published.join("hello.wasm"), b"").unwrap();
         std::fs::write(published.join("hello.toml"), "").unwrap();
-        assert_eq!(
+        assert_same!(
             find_manifest(&published.join("hello.wasm")).0,
             Some(published.join("hello.toml"))
         );
@@ -630,7 +641,7 @@ mod tests {
             std::os::unix::fs::symlink(published.join("hello.wasm"), linked.join("mine.wasm"))
                 .unwrap();
             std::fs::write(linked.join("mine.toml"), "").unwrap();
-            assert_eq!(
+            assert_same!(
                 find_manifest(&linked.join("mine.wasm")).0,
                 Some(linked.join("mine.toml"))
             );
@@ -643,12 +654,12 @@ mod tests {
             let into_build = root.join("into-build");
             std::fs::create_dir_all(&into_build).unwrap();
             std::os::unix::fs::symlink(&component, into_build.join("dev.wasm")).unwrap();
-            assert_eq!(
+            assert_same!(
                 find_manifest(&into_build.join("dev.wasm")).0,
                 Some(krate.join("widget.toml"))
             );
             std::fs::write(into_build.join("dev.toml"), "").unwrap();
-            assert_eq!(
+            assert_same!(
                 find_manifest(&into_build.join("dev.wasm")).0,
                 Some(into_build.join("dev.toml"))
             );
@@ -665,7 +676,7 @@ mod tests {
             std::fs::write(other.join("target/release/b.wasm"), b"").unwrap();
             let foreign = release.join("foreign.wasm");
             std::os::unix::fs::symlink(other.join("target/release/b.wasm"), &foreign).unwrap();
-            assert_eq!(find_manifest(&foreign).0, Some(other.join("widget.toml")));
+            assert_same!(find_manifest(&foreign).0, Some(other.join("widget.toml")));
         }
 
         // The same for a link that itself sits inside `target/`.
@@ -673,9 +684,9 @@ mod tests {
         {
             let inside = release.join("linked.wasm");
             std::os::unix::fs::symlink(&component, &inside).unwrap();
-            assert_eq!(find_manifest(&inside).0, Some(krate.join("widget.toml")));
+            assert_same!(find_manifest(&inside).0, Some(krate.join("widget.toml")));
             std::fs::write(release.join("linked.toml"), "").unwrap();
-            assert_eq!(find_manifest(&inside).0, Some(release.join("linked.toml")));
+            assert_same!(find_manifest(&inside).0, Some(release.join("linked.toml")));
         }
 
         let _ = std::fs::remove_dir_all(&root);
