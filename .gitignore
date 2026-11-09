@@ -10,3 +10,8 @@ spikes/*/readback.png
 # Produced next to a reference when a golden image changes, so the failure
 # can be looked at. Never committed.
 *.actual.png
+
+# The documentation site.
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

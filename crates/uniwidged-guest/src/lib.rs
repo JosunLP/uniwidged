@@ -70,8 +70,26 @@ pub use stub::{
 use uniwidged_core::{NodeId, Wake};
 use uniwidged_view::View;
 
-/// The ABI this SDK speaks. Must match the host's, or instantiation is refused.
+/// The ABI this SDK speaks.
+///
+/// A host runs every ABI from 9 — the interface 1.0 shipped with — up to its
+/// own, so a widget built with this SDK runs on this release and every later
+/// 1.x one. On an older host it is refused at instantiation, in a sentence.
 pub const ABI_VERSION: u32 = 9;
+
+/// Seconds since the Unix epoch, by the wall clock.
+///
+/// Not a capability: WASI gives every component a wall clock, and knowing what
+/// time it is reveals nothing about the machine. It is here because nearly
+/// every widget that wakes needs it — `Wake::at_next_multiple_of(60,
+/// now_seconds())` is a clock's whole schedule — and each was writing the same
+/// four lines around `SystemTime`. A clock set before 1970 answers `0`.
+pub fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Something that happened to your widget.
 #[derive(Debug, Clone, PartialEq, Eq)]

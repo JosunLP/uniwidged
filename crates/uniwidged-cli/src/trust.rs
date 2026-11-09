@@ -10,6 +10,7 @@
 //! not have and could not honestly run, and a security mechanism whose
 //! operation nobody can inspect is one nobody should rely on.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use uniwidged_runtime::signature::{PublicKey, SecretKey, SignatureFile, TrustedKeys};
@@ -65,7 +66,6 @@ pub fn keygen(args: &[String]) -> Result<(), String> {
 /// shared machine can read. Set before the bytes are written rather than after,
 /// or there is a window where it is world-readable.
 fn write_private(path: &Path, contents: &str) -> Result<(), String> {
-    use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -93,7 +93,7 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     let key_text = std::fs::read_to_string(&key_path).map_err(|e| format!("{key_path}: {e}"))?;
     let key = SecretKey::from_hex(key_text.trim()).map_err(|e| format!("{key_path}: {e}"))?;
 
-    let manifest_path = component.with_extension("toml");
+    let manifest_path = crate::install::manifest_for(&component, args)?;
     let (bytes, manifest) = read_widget(&component, &manifest_path)?;
 
     // Both, always. A signature over the component alone lets somebody widen
@@ -102,17 +102,178 @@ pub fn sign(args: &[String]) -> Result<(), String> {
         signature: key.sign(&bytes, &manifest),
         key: key.public(),
     };
+    // The manifest copy first, the signature last: if writing the copy fails,
+    // the old signature still matches the old manifest beside it, rather than
+    // a new signature sitting next to a manifest it does not cover.
+    // What a user installs is three files side by side — the component, its
+    // manifest and the signature — and the signature only verifies against
+    // the manifest bytes it covered. When those came from the crate's
+    // `widget.toml`, put that exact text beside the component, so that what
+    // gets published is the triple that verifies rather than two of its three.
+    let beside = component.with_extension("toml");
+    // `sign clock.toml` would write the manifest copy over the very file it
+    // signed. Components are `.wasm`; a `.toml` here is a mistake.
+    if beside == component {
+        return Err(format!(
+            "{} is a manifest, not a component: sign the `.wasm` beside it",
+            component.display()
+        ));
+    }
+    let already_beside = beside
+        .canonicalize()
+        .is_ok_and(|b| manifest_path.canonicalize().is_ok_and(|m| m == b));
     let out = signature_path(&component);
-    std::fs::write(&out, file.to_text()).map_err(|e| format!("{}: {e}", out.display()))?;
-
+    let copy = (!already_beside).then_some((beside.as_path(), manifest.as_bytes()));
+    if put_in_place(copy, (&out, file.to_text().as_bytes()))? {
+        println!("  wrote {} (the manifest it covers)", beside.display());
+    }
     println!(
         "  signed {} and {}",
         component.display(),
         manifest_path.display()
     );
     println!("  wrote {}", out.display());
+
     println!("  with  {}", key.public().to_hex());
+    println!("  publish all three: the .wasm, the .toml and the .sig, side by side");
     Ok(())
+}
+
+/// Puts the manifest copy (when there is one) and the signature in place,
+/// so that the pair beside the component always matches: the new pair, or
+/// the old one. Answers whether the manifest copy was written.
+///
+/// Everything is written in full before anything is replaced — the copy, the
+/// signature, and the old manifest's contents for putting back — so a failure
+/// while writing changes nothing. Then the manifest, then the signature; if
+/// the signature cannot be put in place, the old manifest goes back (or the
+/// new copy goes, if there was none). Should even that fail, the old contents
+/// are left on disk and the error says where.
+fn put_in_place(
+    manifest: Option<(&Path, &[u8])>,
+    signature: (&Path, &[u8]),
+) -> Result<bool, String> {
+    // What is beside the component now, read before anything changes — a
+    // manifest that is there and cannot be read is not one that is absent.
+    let previous = match manifest {
+        None => None,
+        Some((path, _)) => match std::fs::read(path) {
+            Ok(bytes) => Some(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        },
+    };
+    let copy = manifest
+        .map(|(path, bytes)| Staged::new(path, bytes))
+        .transpose()?;
+    let signed = Staged::new(signature.0, signature.1)?;
+    let restore = match (manifest, &previous) {
+        (Some((path, _)), Some(Some(bytes))) => Some(Staged::new(path, bytes)?),
+        _ => None,
+    };
+
+    let Some(copy) = copy else {
+        signed.commit()?;
+        return Ok(false);
+    };
+    let path = copy.path.clone();
+    copy.commit()?;
+    if let Err(why) = signed.commit() {
+        let undone = match restore {
+            Some(restore) => restore.commit_or_keep(),
+            None => std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display())),
+        };
+        return Err(match undone {
+            Ok(()) => why,
+            Err(also) => {
+                format!("{why}\n  and the manifest beside it could not be put back either: {also}")
+            }
+        });
+    }
+    Ok(true)
+}
+
+/// A file written in full beside `path`, not yet in its place.
+///
+/// The temporary file is created new, never opened if something is already
+/// there — a symlink planted at its name in a shared directory cannot turn
+/// the write into one somewhere else — and is removed again unless
+/// [`Staged::commit`] puts it in place with one rename. Until then `path` is
+/// as it was, however the writing went.
+struct Staged {
+    temporary: PathBuf,
+    path: PathBuf,
+    committed: bool,
+}
+
+impl Staged {
+    fn new(path: &Path, bytes: &[u8]) -> Result<Self, String> {
+        Self::with(path, |file| file.write_all(bytes))
+    }
+
+    fn with(
+        path: &Path,
+        fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    ) -> Result<Self, String> {
+        let shown = |e: std::io::Error| format!("{}: {e}", path.display());
+        let mut attempt = 0u32;
+        let (temporary, mut file) = loop {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".{}.{attempt}.tmp", std::process::id()));
+            let temporary = path.with_file_name(name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(shown(e)),
+            }
+        };
+        // Ours from here on, so ours to remove if the writing fails.
+        let staged = Staged {
+            temporary,
+            path: path.to_path_buf(),
+            committed: false,
+        };
+        fill(&mut file)
+            .and_then(|()| file.sync_all())
+            .map_err(shown)?;
+        Ok(staged)
+    }
+
+    fn commit(mut self) -> Result<(), String> {
+        std::fs::rename(&self.temporary, &self.path)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.committed = true;
+        Ok(())
+    }
+
+    /// [`Staged::commit`], except that a failure keeps the written file
+    /// rather than removing it, and says where it is: for contents that
+    /// would otherwise be lost.
+    fn commit_or_keep(mut self) -> Result<(), String> {
+        let renamed = std::fs::rename(&self.temporary, &self.path);
+        self.committed = true;
+        renamed.map_err(|e| {
+            format!(
+                "{}: {e}; its previous contents are kept in {}",
+                self.path.display(),
+                self.temporary.display()
+            )
+        })
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temporary);
+        }
+    }
 }
 
 /// `uniwidged trust <hex key> [--name NAME]`
@@ -220,4 +381,107 @@ pub fn provenance(component: &Path, manifest: &Path) -> Result<Provenance, Strin
         Ok(name) => Provenance::Trusted(name.to_string()),
         Err(why) => Provenance::Refused(why.to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Staged, put_in_place};
+    use std::io::Write;
+
+    #[test]
+    fn a_replacement_is_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("uniwidged-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clock.toml");
+        std::fs::write(&path, "old").unwrap();
+        let count = || std::fs::read_dir(&dir).unwrap().count();
+
+        // Half written, then a failure: the old file is untouched, and the
+        // temporary one is gone.
+        let failed = Staged::with(&path, |file| {
+            file.write_all(b"ne")?;
+            Err(std::io::Error::other("the disk filled up"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(count(), 1);
+
+        // Written but never committed: the same.
+        drop(Staged::new(&path, b"new").unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(count(), 1);
+
+        // Something already at the temporary name is never written through.
+        let decoy = dir.join(format!("clock.toml.{}.0.tmp", std::process::id()));
+        std::fs::write(&decoy, "not yours").unwrap();
+        Staged::new(&path, b"new").unwrap().commit().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(&decoy).unwrap(), "not yours");
+        assert_eq!(count(), 2);
+
+        // A destination that cannot be replaced: nothing changes there either.
+        let blocked = dir.join("blocked");
+        std::fs::create_dir_all(blocked.join("inside")).unwrap();
+        assert!(Staged::new(&blocked, b"new").unwrap().commit().is_err());
+        assert!(blocked.join("inside").is_dir());
+        assert_eq!(count(), 3);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_signature_that_cannot_be_put_in_place_leaves_the_old_pair() {
+        let dir = std::env::temp_dir().join(format!("uniwidged-pair-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("clock.toml");
+        // A `.sig` path no file can be renamed onto: a directory with
+        // something in it.
+        let signature = dir.join("clock.wasm.sig");
+        std::fs::create_dir_all(signature.join("in-the-way")).unwrap();
+        let names = || {
+            let mut names: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+
+        // An old manifest: it is put back, byte for byte.
+        std::fs::write(&manifest, "old").unwrap();
+        let failed = put_in_place(Some((&manifest, b"new")), (&signature, b"sig"));
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), "old");
+        assert_eq!(names(), ["clock.toml", "clock.wasm.sig"]);
+
+        // No old manifest: the new copy does not stay behind on its own.
+        std::fs::remove_file(&manifest).unwrap();
+        assert!(put_in_place(Some((&manifest, b"new")), (&signature, b"sig")).is_err());
+        assert_eq!(names(), ["clock.wasm.sig"]);
+
+        // A manifest that is there and cannot be read stops everything first.
+        std::fs::remove_dir_all(&signature).unwrap();
+        std::fs::create_dir_all(manifest.join("unreadable")).unwrap();
+        assert!(put_in_place(Some((&manifest, b"new")), (&signature, b"sig")).is_err());
+        assert!(!signature.exists(), "nothing was signed");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn contents_that_cannot_be_put_back_are_kept_and_named() {
+        let dir = std::env::temp_dir().join(format!("uniwidged-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let blocked = dir.join("clock.toml");
+        std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+        let why = Staged::new(&blocked, b"old")
+            .unwrap()
+            .commit_or_keep()
+            .unwrap_err();
+        let kept = why.rsplit("kept in ").next().unwrap();
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "old", "{why}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

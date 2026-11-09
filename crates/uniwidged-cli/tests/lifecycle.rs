@@ -107,6 +107,68 @@ fn an_unsigned_widget_is_refused_and_the_message_says_both_ways_out() {
 }
 
 #[test]
+fn the_guides_first_install_works_straight_from_cargos_output() {
+    // `cargo build` writes the component under `target/` and no manifest
+    // beside it. The guide's next command is `uniwidged install` on exactly
+    // that path, and it used to be refused for a file nobody had told the
+    // author to copy.
+    let machine = Machine::new("from-target");
+    reference_widget(&machine.0);
+    let built = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../widgets/clock/target/wasm32-wasip2/release/clock_widget.wasm");
+    assert!(
+        !built.with_extension("toml").exists(),
+        "the premise: nothing is beside it"
+    );
+
+    let said = machine.ok(&["install", built.to_str().unwrap(), "--allow-unsigned"]);
+    assert!(
+        said.contains("manifest:"),
+        "it should say which manifest it used: {said}"
+    );
+    assert!(said.contains("widget.toml"), "{said}");
+    assert!(machine.ok(&["list"]).contains("clock"));
+
+    let config = std::fs::read_to_string(machine.config()).unwrap();
+    assert!(
+        config.contains("manifest = "),
+        "and remember it, since the desktop would not look there: {config}"
+    );
+}
+
+#[test]
+fn a_relative_manifest_is_recorded_as_where_it_actually_is() {
+    // The desktop reads the configuration from wherever it was started, so a
+    // path recorded as typed would name a different file — or none — there.
+    let machine = Machine::new("relative-manifest");
+    let component = reference_widget(&machine.0);
+    let elsewhere = machine.0.join("manifests");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::rename(machine.0.join("clock.toml"), elsewhere.join("clock.toml")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uniwidged"))
+        .current_dir(&machine.0)
+        .args(["install", component.to_str().unwrap(), "--allow-unsigned"])
+        .args(["--manifest", "manifests/clock.toml"])
+        .env("UNIWIDGED_CONFIG", machine.config())
+        .output()
+        .expect("the CLI should be runnable");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(machine.config()).unwrap();
+    let recorded = elsewhere.join("clock.toml").canonicalize().unwrap();
+    assert!(
+        config.contains(&format!("manifest = \"{}\"", recorded.display())),
+        "it should record the absolute path, {}: {config}",
+        recorded.display()
+    );
+}
+
+#[test]
 fn a_developer_can_install_their_own_build_by_saying_so() {
     let machine = Machine::new("allow-unsigned");
     let component = reference_widget(&machine.0);
@@ -152,6 +214,128 @@ fn an_author_signs_a_user_trusts_and_the_widget_installs() {
 
     machine.ok(&["trust", &public, "--name", "jane"]);
     let installed = machine.ok(&["install", component.to_str().unwrap()]);
+    assert!(installed.contains("signed by jane"), "{installed}");
+}
+
+#[test]
+fn signing_a_fresh_build_puts_the_manifest_it_covered_beside_it() {
+    // `sign` finds the crate's `widget.toml`, as `install` does. A signature
+    // only verifies against the manifest bytes it covered, so the published
+    // set has to carry those bytes as `<component>.toml` — otherwise an author
+    // ships the .wasm and the .sig and nobody can install either.
+    let machine = Machine::new("sign-from-target");
+    let built = reference_widget(&machine.0);
+    let krate = machine.0.join("my-widget");
+    let release = krate.join("target/wasm32-wasip2/release");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::write(krate.join("Cargo.toml"), "").unwrap();
+    std::fs::rename(machine.0.join("clock.toml"), krate.join("widget.toml")).unwrap();
+    let component = release.join("clock.wasm");
+    std::fs::rename(&built, &component).unwrap();
+
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    let said = machine.ok(&[
+        "sign",
+        component.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert!(said.contains("publish all three"), "{said}");
+    assert_eq!(
+        std::fs::read(release.join("clock.toml")).unwrap(),
+        std::fs::read(krate.join("widget.toml")).unwrap(),
+        "the exact manifest the signature covers, beside the component"
+    );
+
+    // And the three files, moved anywhere together, install as signed.
+    let published = machine.0.join("published");
+    std::fs::create_dir_all(&published).unwrap();
+    for name in ["clock.wasm", "clock.toml", "clock.wasm.sig"] {
+        std::fs::copy(release.join(name), published.join(name)).unwrap();
+    }
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    let installed = machine.ok(&["install", published.join("clock.wasm").to_str().unwrap()]);
+    assert!(installed.contains("signed by jane"), "{installed}");
+}
+
+#[cfg(unix)]
+#[test]
+fn signing_through_a_link_into_a_build_keeps_the_manifest_beside_the_link() {
+    sign_through_a_link(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn signing_through_a_link_inside_a_build_keeps_the_manifest_beside_the_link() {
+    sign_through_a_link(true);
+}
+
+/// A link kept with its own manifest, pointing at a crate's build — from
+/// outside `target/`, or from inside it: `sign` signs that manifest and
+/// leaves it alone, rather than overwriting it with the crate's `widget.toml`.
+#[cfg(unix)]
+fn sign_through_a_link(inside_target: bool) {
+    let machine = Machine::new(if inside_target {
+        "sign-link-inside"
+    } else {
+        "sign-through-link"
+    });
+    let built = reference_widget(&machine.0);
+    let krate = machine.0.join("my-widget");
+    let release = krate.join("target/wasm32-wasip2/release");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::write(krate.join("Cargo.toml"), "").unwrap();
+    let original = std::fs::read_to_string(machine.0.join("clock.toml")).unwrap();
+    std::fs::write(krate.join("widget.toml"), &original).unwrap();
+    std::fs::rename(&built, release.join("clock.wasm")).unwrap();
+
+    let linked = if inside_target {
+        krate.join("target/linked")
+    } else {
+        machine.0.join("linked")
+    };
+    std::fs::create_dir_all(&linked).unwrap();
+    std::os::unix::fs::symlink(release.join("clock.wasm"), linked.join("clock.wasm")).unwrap();
+    let own = original.replace(
+        "The time and the date, in your locale",
+        "The clock, as published beside the link",
+    );
+    assert_ne!(own, original, "two different manifests");
+    std::fs::write(linked.join("clock.toml"), &own).unwrap();
+
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    machine.ok(&[
+        "sign",
+        linked.join("clock.wasm").to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(linked.join("clock.toml")).unwrap(),
+        own,
+        "the manifest beside the link is untouched"
+    );
+    assert_eq!(
+        std::fs::read_to_string(krate.join("widget.toml")).unwrap(),
+        original,
+        "and so is the crate's"
+    );
+
+    // The signature covers the link's manifest, so the link installs as signed.
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    let installed = machine.ok(&["install", linked.join("clock.wasm").to_str().unwrap()]);
     assert!(installed.contains("signed by jane"), "{installed}");
 }
 
@@ -304,6 +488,81 @@ fn a_widget_can_be_turned_off_without_losing_where_it_was_put() {
     let listed = machine.ok(&["list"]);
     assert!(!listed.contains("(disabled)"), "{listed}");
     assert!(listed.contains("900,40"));
+}
+
+#[test]
+fn a_mistyped_or_incomplete_option_removes_nothing() {
+    // `remove` deletes a widget's placement and settings; an option it could
+    // not read must stop it, not be skipped over.
+    let machine = Machine::new("remove-typo");
+    let component = reference_widget(&machine.0);
+    machine.ok(&["install", component.to_str().unwrap(), "--allow-unsigned"]);
+
+    let said = machine.ok(&["remove", "clock", "--purgee", "--help"]);
+    assert!(said.starts_with("uniwidged remove — "), "{said}");
+    let said = machine.fails(&["remove", "clock", "--purgee"]);
+    assert!(
+        said.contains("`--purgee` is not an option of `remove`"),
+        "{said}"
+    );
+    // Without its value, `--config` would have meant the default configuration.
+    let said = machine.fails(&["remove", "clock", "--config"]);
+    assert!(said.contains("`--config` needs a value"), "{said}");
+
+    assert!(
+        machine
+            .ok(&["list", "--names"])
+            .lines()
+            .any(|l| l == "clock"),
+        "the clock is still installed"
+    );
+}
+
+#[test]
+fn install_writes_to_the_configuration_it_is_given() {
+    let machine = Machine::new("install-config");
+    let component = reference_widget(&machine.0);
+    let other = machine.0.join("other/config.toml");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let other = other.to_str().unwrap();
+    machine.ok(&[
+        "install",
+        component.to_str().unwrap(),
+        "--allow-unsigned",
+        "--config",
+        other,
+    ]);
+    assert!(
+        machine
+            .ok(&["list", "--names", "--config", other])
+            .contains("clock")
+    );
+    assert!(
+        !machine.ok(&["list", "--names"]).contains("clock"),
+        "and not to the default one"
+    );
+}
+
+#[test]
+fn signing_a_manifest_instead_of_the_component_is_refused() {
+    let machine = Machine::new("sign-toml");
+    reference_widget(&machine.0);
+    let key = machine.0.join("signing-key");
+    machine.ok(&["keygen", "--out", key.to_str().unwrap()]);
+    let manifest = machine.0.join("clock.toml");
+    let before = std::fs::read(&manifest).unwrap();
+    let said = machine.fails(&[
+        "sign",
+        manifest.to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert!(said.contains("is a manifest, not a component"), "{said}");
+    assert_eq!(
+        std::fs::read(&manifest).unwrap(),
+        before,
+        "and it is untouched"
+    );
 }
 
 #[test]

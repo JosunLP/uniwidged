@@ -144,9 +144,28 @@ fn server() -> Option<Server> {
 /// present, and there the tests ran and every desktop failed with "the
 /// surface supports no format". Failing here says why; failing there said
 /// nothing about whose fault it was.
+///
+/// **Once per process.** The four tests here start together, and each used
+/// to probe: four Vulkan instances, devices and swapchains made in this one
+/// process. The desktop never does that — it makes one device, once — and
+/// lavapipe did not survive it on a loaded runner: first concurrently
+/// (`malloc(): unaligned tcache chunk detected`), and then, with the probes
+/// taken one at a time, as a plain SIGSEGV. Every test's X server is the same
+/// Xvfb, so a yes is the same for all of them: it is asked the way the
+/// desktop asks it, and remembered.
 fn presentable(server: &Server) -> bool {
     use uniwidged_core::geom::PhysicalRect;
     use uniwidged_shell::platform::x11::{WindowKind, X11Window};
+    // A success is remembered — the probe's whole point is not to repeat it.
+    // A failure is not: it may have been this one server's, and the next test,
+    // on its own server, asks again (one at a time, behind the same lock).
+    static PRESENTS: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    let mut presents = PRESENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *presents {
+        return true;
+    }
     let probe = (|| {
         let window = X11Window::open_on(
             Some(&server.display),
@@ -166,7 +185,10 @@ fn presentable(server: &Server) -> bool {
         Ok::<(), String>(())
     })();
     match probe {
-        Ok(()) => true,
+        Ok(()) => {
+            *presents = true;
+            true
+        }
         Err(why) => {
             assert!(
                 std::env::var("UNIWIDGED_REQUIRE_GPU").is_err(),

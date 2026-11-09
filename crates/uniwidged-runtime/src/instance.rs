@@ -35,7 +35,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::capability::{Denied as PolicyDenied, Policy, Request};
 use crate::limits::Limits;
-use crate::manifest::{ABI_VERSION, Manifest};
+use crate::manifest::{ABI_OLDEST, ABI_VERSION, Manifest, abi_supported};
 use crate::services::{Services, StoreError};
 
 wasmtime::component::bindgen!({
@@ -100,9 +100,18 @@ impl std::fmt::Display for RuntimeError {
         match self {
             RuntimeError::Engine(why) => write!(f, "engine: {why}"),
             RuntimeError::Component(why) => write!(f, "component: {why}"),
+            // Two different fixes, so two different sentences: an old widget
+            // is its author's to rebuild, and a new one is this machine's to
+            // catch up with.
+            RuntimeError::AbiMismatch { widget, host } if widget > host => write!(
+                f,
+                "this widget was built for ABI {widget}, which is newer than this \
+                 host's {host}; upgrading uniwidged will run it"
+            ),
             RuntimeError::AbiMismatch { widget, host } => write!(
                 f,
-                "this widget was built for ABI {widget}; this host speaks {host}"
+                "this widget was built for ABI {widget}; this host runs ABI \
+                 {ABI_OLDEST} to {host}, so it needs rebuilding against a current SDK"
             ),
             RuntimeError::Start(why) => write!(f, "the widget refused to start: {why}"),
             RuntimeError::Trap(why) => write!(f, "the widget stopped: {why}"),
@@ -231,7 +240,7 @@ impl Runtime {
         // A widget built against a different world may still instantiate and
         // then misbehave in ways that look like a host bug.
         let version = instance.run(|w, s| w.uniwidged_widget_guest().call_abi_version(s))?;
-        if version != ABI_VERSION {
+        if !abi_supported(version) {
             return Err(RuntimeError::AbiMismatch {
                 widget: version,
                 host: ABI_VERSION,

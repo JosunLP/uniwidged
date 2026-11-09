@@ -1,0 +1,325 @@
+/* uniwidged — documentation theme.
+ *
+ * The palette is the logo's: a violet → blue → teal wallpaper, glass surfaces
+ * composited over it, and one amber accent used once per composition. */
+
+:root {
+  --uw-violet: #7c5cff;
+  --uw-blue: #4f7bff;
+  --uw-teal: #14c8b0;
+  --uw-amber: #ffb547;
+  --uw-ink: #0c0a1d;
+  --uw-gradient: linear-gradient(120deg, var(--uw-violet) 0%, var(--uw-blue) 50%, var(--uw-teal) 100%);
+
+  --vp-c-brand-1: #4a5fe8;
+  --vp-c-brand-2: #5b70f5;
+  --vp-c-brand-3: #4f7bff;
+  --vp-c-brand-soft: rgba(79, 123, 255, 0.14);
+
+  --vp-c-tip-1: #0f9b89;
+  --vp-c-tip-2: #13b39e;
+  --vp-c-tip-3: #14c8b0;
+  --vp-c-tip-soft: rgba(20, 200, 176, 0.14);
+
+  --vp-c-warning-1: #b7741a;
+  --vp-c-warning-soft: rgba(255, 181, 71, 0.16);
+
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --uw-font-display: 'Space Grotesk', var(--vp-font-family-base);
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: var(--uw-gradient);
+  --vp-home-hero-image-background-image: none;
+
+  --vp-button-brand-bg: var(--uw-blue);
+  --vp-button-brand-hover-bg: #5f88ff;
+  --vp-button-brand-active-bg: #3f6af0;
+
+  --uw-glass-bg: rgba(255, 255, 255, 0.62);
+  --uw-glass-border: rgba(79, 123, 255, 0.16);
+  --uw-glass-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 32px -18px rgba(40, 30, 120, 0.35);
+}
+
+.dark {
+  --vp-c-bg: #0c0a1d;
+  --vp-c-bg-alt: #0a0818;
+  --vp-c-bg-elv: #141129;
+  --vp-c-bg-soft: #141129;
+  --vp-c-divider: rgba(160, 150, 255, 0.12);
+  --vp-c-gutter: #07060f;
+  --vp-c-text-1: #f1efff;
+  --vp-c-text-2: #b9b5da;
+  --vp-c-text-3: #807ca6;
+
+  --vp-c-brand-1: #93a8ff;
+  --vp-c-brand-2: #7f97ff;
+  --vp-c-brand-3: #4f7bff;
+  --vp-c-brand-soft: rgba(124, 92, 255, 0.18);
+
+  --vp-c-tip-1: #4fe3cf;
+  --vp-c-warning-1: #ffc670;
+
+  --vp-code-block-bg: #120f26;
+  --vp-code-bg: rgba(147, 168, 255, 0.1);
+
+  --uw-glass-bg: rgba(255, 255, 255, 0.045);
+  --uw-glass-border: rgba(255, 255, 255, 0.1);
+  --uw-glass-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+}
+
+/* ---- Type --------------------------------------------------------------- */
+
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.VPHero .name,
+.VPHero .text,
+.VPFeature .title,
+.VPNavBarTitle .title,
+.uw-display {
+  font-family: var(--uw-font-display);
+  letter-spacing: -0.02em;
+}
+
+.VPNavBarTitle .title {
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.vp-doc h1 {
+  font-weight: 700;
+}
+
+.vp-doc h2 {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 56px;
+}
+
+.vp-doc h2::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--uw-gradient);
+  margin-bottom: 18px;
+}
+
+/* ---- Home --------------------------------------------------------------- */
+
+.VPHome {
+  background:
+    radial-gradient(800px 420px at 85% -60px, rgba(124, 92, 255, 0.16), transparent 70%),
+    radial-gradient(700px 420px at 0% 220px, rgba(20, 200, 176, 0.1), transparent 70%);
+}
+
+.VPHero .name {
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.VPHero .text {
+  font-weight: 600;
+}
+
+.VPHero .tagline {
+  max-width: 560px;
+}
+
+.VPHero .image-container {
+  transform: none;
+  width: auto !important;
+  height: auto !important;
+}
+
+.VPHero .image-container > .uw-desk {
+  position: relative;
+}
+
+@media (max-width: 959px) {
+  .VPHero .image {
+    margin: 0 0 24px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHero .image {
+    margin-right: -24px;
+  }
+}
+
+.VPFeature {
+  background: var(--uw-glass-bg) !important;
+  border: 1px solid var(--uw-glass-border) !important;
+  box-shadow: var(--uw-glass-shadow);
+  backdrop-filter: blur(10px);
+  transition: transform 0.25s ease, border-color 0.25s ease;
+}
+
+.VPFeature:hover {
+  transform: translateY(-2px);
+  border-color: rgba(79, 123, 255, 0.4) !important;
+}
+
+.VPFeature .icon {
+  background: var(--vp-c-brand-soft) !important;
+}
+
+/* The markdown below the features on the home page. */
+.VPHome .vp-doc {
+  max-width: 1152px;
+  margin: 0 auto;
+}
+
+.uw-section {
+  margin: 96px auto 0;
+}
+
+.uw-kicker {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--vp-c-brand-1);
+}
+
+.uw-section h2.uw-title {
+  font-family: var(--uw-font-display);
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.15;
+  margin: 8px 0 12px;
+  letter-spacing: -0.03em;
+}
+
+.uw-section h2.uw-title::before {
+  display: none;
+}
+
+.uw-lede {
+  font-size: 18px;
+  color: var(--vp-c-text-2);
+  max-width: 720px;
+}
+
+.uw-split {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+@media (min-width: 900px) {
+  .uw-split {
+    grid-template-columns: 1.35fr 1fr;
+  }
+}
+
+.uw-split > div {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.uw-split > div > div[class*='language-'] {
+  margin: 0 !important;
+}
+
+.uw-split > div:first-child > div[class*='language-'] {
+  flex: 1;
+}
+
+.uw-cta {
+  margin: 96px 0 24px;
+  padding: 48px 32px;
+  border-radius: 24px;
+  text-align: center;
+  color: #fff;
+  background:
+    radial-gradient(500px 200px at 20% 0%, rgba(255, 255, 255, 0.22), transparent 70%),
+    var(--uw-gradient);
+  box-shadow: 0 24px 60px -30px rgba(79, 123, 255, 0.8);
+}
+
+.uw-cta h2 {
+  color: #fff;
+  font-family: var(--uw-font-display);
+  font-size: 32px;
+  margin: 0 0 8px;
+}
+
+.uw-cta h2::before {
+  display: none;
+}
+
+.uw-cta p {
+  margin: 0 auto 24px;
+  max-width: 560px;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.uw-cta .uw-cmd {
+  display: inline-block;
+  font-family: var(--vp-font-family-mono);
+  font-size: 15px;
+  background: rgba(12, 10, 29, 0.55);
+  padding: 12px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* ---- Docs --------------------------------------------------------------- */
+
+.vp-doc a {
+  text-underline-offset: 3px;
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+  font-size: 14.5px;
+}
+
+.vp-doc blockquote {
+  border-left: 3px solid transparent;
+  border-image: var(--uw-gradient) 1;
+}
+
+.custom-block {
+  border-radius: 12px;
+}
+
+.VPSidebar .group .text {
+  font-size: 14px;
+}
+
+::selection {
+  background: rgba(79, 123, 255, 0.28);
+}
+
+/* Small helpers usable from markdown. */
+.uw-grad {
+  background: var(--uw-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.uw-pill {
+  display: inline-block;
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--uw-glass-border);
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  white-space: nowrap;
+}
+
+.uw-cta code {
+  color: #fff !important;
+  background: rgba(12, 10, 29, 0.35) !important;
+}

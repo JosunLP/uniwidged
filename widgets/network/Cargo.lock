@@ -290,7 +290,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "uniwidged-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "kurbo",
  "peniko",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-guest"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "uniwidged-core",
  "uniwidged-view",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-view"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "uniwidged-core",
 ]

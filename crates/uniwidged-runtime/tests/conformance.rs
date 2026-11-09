@@ -864,9 +864,19 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
     let (_runtime, mut instance) =
         start_with(everything(), Some(generous_deadline()), served(&scratch));
 
-    let began = std::time::Instant::now();
-    let view = instance.view().expect("render");
-    let took = began.elapsed();
+    // The fastest of three views: an implementation that sleeps to sample is
+    // slow every time, while a loaded runner — other suites building widgets
+    // beside this one — makes a single view slow only now and then. One view
+    // took 170ms on CI that way, with nothing in the host blocking.
+    let mut took = Duration::MAX;
+    let mut view = None;
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        let rendered = instance.view().expect("render");
+        took = took.min(began.elapsed());
+        view = Some(rendered);
+    }
+    let view = view.expect("three views");
 
     // On a platform with no counters wired up the honest answer is a refusal,
     // and the widget reports it as one rather than as a zero.
@@ -891,7 +901,7 @@ fn a_widget_reading_the_machines_load_gets_a_fraction() {
     }
     assert!(
         took < Duration::from_millis(100),
-        "reading a counter took {took:?}; a host function may not block"
+        "reading the counters took {took:?} at best of three views; a host function may not block"
     );
 }
 

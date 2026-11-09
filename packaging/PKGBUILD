@@ -4,11 +4,11 @@
 # project's CI — see packaging/README.md. Run `makepkg -si` locally before
 # publishing anything from it.
 pkgname=uniwidged
-pkgver=0.1.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Cross-platform desktop widget framework: sandboxed WASM widgets on the desktop layer"
 arch=('x86_64' 'aarch64')
-url="https://github.com/j-pfalzgraf/uniwidged"
+url="https://github.com/JosunLP/uniwidged"
 license=('MIT' 'Apache-2.0')
 # libxcb because the X11 surface is created through it — wgpu needs a real
 # xcb_connection_t*, which a pure-Rust connection has no pointer to give it.

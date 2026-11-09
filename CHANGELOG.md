@@ -1,33 +1,104 @@
 # Changelog
 
-What changed, for somebody who upgrades. The commit messages are the long
-version — each milestone is one commit with its reasoning and what was found
-measuring it — and `ROADMAP.md` is where the design decisions live. This is the
-short one.
+All notable changes to uniwidged, for somebody who upgrades. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[semantic versioning](https://semver.org/) — since 1.0, with a
+[stability promise](https://josunlp.github.io/uniwidged/reference/abi) behind it.
 
-The widget ABI is versioned separately from the binary: a widget built against
-a different ABI is refused at instantiation, in a sentence naming both numbers.
-`uniwidged --version` prints both.
+The commit messages are the long version — each milestone is one commit with
+its reasoning and what was found measuring it — and `ROADMAP.md` is where the
+design decisions live. This is the short one.
+
+The widget ABI is versioned separately from the binary. `uniwidged --version`
+prints both, and a widget built against an ABI this host does not run is
+refused at instantiation, in a sentence naming both numbers.
 
 ## Unreleased
 
+Nothing yet.
+
+## 1.0.0 — 2026-11-09
+
+**The first stable release.** The widget interface is frozen, the
+documentation has a home, and the first commands a new author runs work as
+written. Linux — Wayland and X11 — is the supported platform; Windows and macOS
+follow as 1.x minor releases.
+
+### The stability promise
+
+* **ABI 9 is the 1.x interface.** A widget built against uniwidged 1.0 runs on
+  every 1.x host. `wit/uniwidged.wit` may grow — new host functions, which an
+  older widget simply does not import — and never shrinks or changes before
+  2.0. See [ABI & stability](https://josunlp.github.io/uniwidged/reference/abi).
+* The host now runs a **range** of ABIs (`ABI_OLDEST..=ABI_VERSION`) rather
+  than exactly one, so 1.x releases that add to the interface keep running
+  1.0 widgets.
+* A refusal says **whose move it is**: an older widget "needs rebuilding
+  against a current SDK"; a newer one is "newer than this host's; upgrading
+  uniwidged will run it".
+
 ### For users
 
+* **Documentation site** at <https://josunlp.github.io/uniwidged/>, built with
+  VitePress: introduction, installation, quick start, core concepts, running
+  the desktop, registries, troubleshooting, capabilities, a widget gallery, the
+  full API and CLI references, configuration files, the security model, the
+  architecture, the roadmap and a FAQ. Built on every pull request, deployed
+  from `main`.
+* **A logo** and a brand: the mark, wordmarks, favicon, social preview card,
+  and the script that renders them, in `assets/`.
+* `uniwidged help <command>` and `uniwidged <command> --help` show one
+  command's usage and flags. Before, `install --help` went looking for a file
+  called `--help`.
+* An option a command does not know is refused before the command does
+  anything: `remove clock --purgee` used to remove the clock without purging
+  it.
+* The consent screen for `metrics` now names everything the grant covers —
+  CPU, memory, disk, battery **and network**. It had not been updated when ABI
+  9 added the last two.
 * `uniwidged doctor` lists what every machine counter answers here — CPU,
   memory, disk, battery and network — so a meter showing a dash can be traced
   to the machine rather than to the widget.
 * Two new reference widgets: `battery` (charge, time left, an hour of history,
   and "on mains power" on a desktop) and `network` (down and up, a minute of
   each on one shared scale). `system-load` gains a disk meter.
+* The manual page, the packages and the crate metadata point at the
+  documentation and at the repository's real home.
 
 ### For widget authors
 
+* **`uniwidged install` finds the manifest of a fresh build.** `cargo build`
+  writes `target/wasm32-wasip2/release/<name>.wasm` with no manifest beside it,
+  and the guide's next command — `uniwidged install` on that file — was
+  refused. `install`, `check` and `sign` now look beside the component, then
+  for the `widget.toml` of the crate it was built in (never above the crate
+  root), and say which they used. `--manifest <file>` names one explicitly.
+* **`uniwidged new` outside a checkout** depends on the SDK by git, at the tag
+  of the binary that wrote it, so the scaffold builds on any machine. It used
+  to write a crates.io requirement for a crate that is not published there.
+* **`now_seconds()`** is in the prelude: the wall clock, which every widget
+  that wakes needs and each was writing by hand around `SystemTime`. The
+  README's example had been calling it all along.
 * **ABI 9.** `cx.battery()`, `cx.disk_load()` and `cx.network_throughput()`
   join `cpu_load` and `memory_load` under the one `metrics` grant.
   `battery` answers `Ok(None)` for a machine without one; `minutes_left` is
   `None` wherever the kernel gives no rate, rather than a guess. Widgets built
-  against ABI 8 are refused at instantiation, in a sentence naming both
-  numbers — rebuild against this SDK.
+  against ABI 8 are refused at instantiation — rebuild against this SDK.
+
+### For contributors
+
+* `CONTRIBUTING.md`, `SECURITY.md` (private vulnerability reporting), issue
+  forms and a pull request template.
+* A `docs` workflow that builds the site on every change to it and deploys it
+  to GitHub Pages from `main`.
+* The release workflow publishes this file's section for the tag as the
+  release notes.
+
+### Not in this release
+
+* **Windows and macOS** — milestones M5 and M6, each a 1.x minor release.
+* **`uniwidged-guest` on crates.io.** The SDK is reached by git at a release
+  tag, or by path from a checkout.
 
 ## 0.1.0 — 2026-08-31
 

@@ -67,19 +67,19 @@ pub const COMMANDS: &[Command] = &[
         name: "check",
         summary: "is this a widget, and who signed it?",
         takes: Takes::Component,
-        flags: &[],
+        flags: &["--manifest"],
     },
     Command {
         name: "install",
         summary: "install a widget, showing what it asks for",
         takes: Takes::Component,
-        flags: &["--allow-unsigned"],
+        flags: &["--allow-unsigned", "--manifest"],
     },
     Command {
         name: "registry",
         summary: "the registries this machine reads",
         takes: Takes::Subcommand(&["add", "remove", "list", "publish"]),
-        flags: &["--key", "--name", "--base-url", "--out"],
+        flags: &["--key", "--name", "--base-url", "--out", "--names"],
     },
     Command {
         name: "search",
@@ -91,13 +91,13 @@ pub const COMMANDS: &[Command] = &[
         name: "add",
         summary: "install one from a registry",
         takes: Takes::Nothing,
-        flags: &["--registry"],
+        flags: &["--registry", "--allow-unsigned", "--refresh", "--offline"],
     },
     Command {
         name: "update",
         summary: "what is newer, and take it",
         takes: Takes::Widget,
-        flags: &["--check"],
+        flags: &["--check", "--allow-unsigned", "--refresh", "--offline"],
     },
     Command {
         name: "list",
@@ -181,7 +181,7 @@ pub const COMMANDS: &[Command] = &[
         name: "sign",
         summary: "sign a widget you publish",
         takes: Takes::Component,
-        flags: &["--key"],
+        flags: &["--key", "--manifest"],
     },
     Command {
         name: "trust",
@@ -221,7 +221,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "help",
-        summary: "this list",
+        summary: "this list, or more about one command",
         takes: Takes::Nothing,
         flags: &[],
     },

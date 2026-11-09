@@ -23,11 +23,7 @@ use uniwidged_guest::prelude::*;
 /// as often as there is anything new to show — and the host coalesces widgets
 /// that name the same instant, so a screenful of these costs one wake-up.
 fn next_minute() -> Wake {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs() as i64)
-        .unwrap_or(0);
-    Wake::at_next_multiple_of(60, now)
+    Wake::at_next_multiple_of(60, now_seconds())
 }
 
 #[derive(Default)]

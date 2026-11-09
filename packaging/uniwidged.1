@@ -1,7 +1,7 @@
 .\" Manual page for uniwidged. Written by hand rather than generated: the
 .\" interesting half of this program is what it refuses, and a generator emits
 .\" the flags and none of the reasons.
-.TH UNIWIDGED 1 "2026-08-31" "uniwidged 0.1.0" "User Commands"
+.TH UNIWIDGED 1 "2026-11-09" "uniwidged 1.0.0" "User Commands"
 .SH NAME
 uniwidged \- run sandboxed widgets on the desktop layer
 .SH SYNOPSIS
@@ -53,15 +53,17 @@ the rest are reconfigured and moved where the file says \(em all without
 restarting the desktop.
 .SS Installing
 .TP
-.B check " \fIwidget\fR.wasm"
+.B check " \fIwidget\fR.wasm [--manifest \fIfile\fR]"
 Everything \fBinstall\fR would find out, without installing anything: the
 manifest, the signature, the capabilities it will ask for, and the settings it
 declares.
 .TP
-.B install " \fIwidget\fR.wasm [--allow-unsigned]"
+.B install " \fIwidget\fR.wasm [--manifest \fIfile\fR] [--allow-unsigned]"
 Install a widget from a file, after showing what it asks for. A widget with a
 signature that does not verify is never installed; one with no signature at all
-needs \fB--allow-unsigned\fR, which says so out loud.
+needs \fB--allow-unsigned\fR, which says so out loud. The manifest is the one
+named by \fB--manifest\fR, else \fIwidget\fR.toml beside the component, else
+the \fBwidget.toml\fR of the Cargo crate the component was built in.
 .TP
 .B list " [--names]"
 What is installed, where it sits, and what it was granted \(em and, while a
@@ -141,6 +143,10 @@ Render one widget headlessly to a PNG.
 Start with the session. It will not overwrite an autostart entry somebody wrote
 by hand.
 .TP
+.B help " [\fIcommand\fR]"
+Every command, or the usage and flags of one. \fIcommand\fB --help\fR is the
+same.
+.TP
 .B completions " bash|zsh|fish"
 A completion script for that shell, written by this binary from the commands it
 actually has. Widget names complete from what is installed. The packages install
@@ -193,6 +199,9 @@ public trust store has heard of.
 0 when the command did what it said, and 1 with a sentence on standard error
 when it did not.
 .SH SEE ALSO
-The architecture, the roadmap and the authoring guide, at
-.UR https://github.com/j-pfalzgraf/uniwidged
+The documentation \(em guide, API reference and stability promise \(em at
+.UR https://josunlp.github.io/uniwidged/
+.UE ,
+and the source at
+.UR https://github.com/JosunLP/uniwidged
 .UE .

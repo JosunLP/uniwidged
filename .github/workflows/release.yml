@@ -37,7 +37,12 @@ jobs:
             echo "the tag says $tag and Cargo.toml says $version" >&2
             exit 1
           }
-          grep -q "^## $version " CHANGELOG.md || {
+          # Literally: a version is not a pattern, and `1.0.0` must not match `1x0x0`.
+          # After it, the end of the line, a space or a tab; `1.0.0` is not `1.0.01`.
+          awk -v h="## $version" '
+            index($0, h) == 1 && substr($0, length(h) + 1, 1) ~ /^([ \t]|)$/ { found = 1 }
+            END { exit !found }
+          ' CHANGELOG.md || {
             echo "CHANGELOG.md has no entry for $version" >&2
             exit 1
           }
@@ -56,13 +61,61 @@ jobs:
           dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
           "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version
           cd "$RUNNER_TEMP/deb" && sha256sum uniwidged_*.deb > SHA256SUMS
+      - name: the release notes are this version's changelog section
+        run: |
+          set -eu
+          version=${GITHUB_REF_NAME#v}
+          # The section runs to the next level-two heading. Fences are tracked
+          # from the top of the file, so a `## ` inside an example neither starts
+          # nor ends the section; as in CommonMark, a fence closes only with the
+          # character that opened it, at least as many times, and a heading or
+          # fence may be indented by up to three spaces.
+          awk -v v="$version" '
+            {
+              line = $0; sub(/^ */, "", line); indent = length($0) - length(line)
+              if (indent <= 3 && match(line, /^(````*|~~~~*)/)) {
+                run = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH + 1)
+                # The info string of a backtick fence has no backtick: ```foo``` is
+                # inline code, not an opening fence.
+                if (fence == "" && (substr(run, 1, 1) != "`" || index(rest, "`") == 0)) {
+                  fence = run; if (on) print; next
+                }
+                if (substr(run, 1, 1) == substr(fence, 1, 1) &&
+                    length(run) >= length(fence) && rest ~ /^[ \t]*$/) {
+                  fence = ""; if (on) print; next
+                }
+              }
+              if (fence == "" && indent <= 3) {
+                h = "## " v
+                if (!on && index(line, h) == 1 && substr(line, length(h) + 1, 1) ~ /^([ \t]|)$/) {
+                  on = 1; seen = 1; next
+                }
+                if (on && line ~ /^## /) exit
+              }
+              if (on) print
+            }
+            END { exit !seen }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md" || {
+            # Only a heading inside a fenced example matched the check above.
+            echo "CHANGELOG.md has no section for $version outside an example" >&2
+            exit 1
+          }
+          # A heading with nothing under it is no release notes at all.
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || {
+            echo "CHANGELOG.md has an empty section for $version" >&2
+            exit 1
+          }
+          {
+            echo
+            echo "---"
+            echo "The \`.deb\` is built by \`packaging/deb/build.sh\` and checked the way CI checks it;"
+            echo "\`SHA256SUMS\` is its checksum. Documentation: https://josunlp.github.io/uniwidged/"
+          } >> "$RUNNER_TEMP/notes.md"
       - name: the release
         uses: softprops/action-gh-release@v2
         with:
+          name: uniwidged ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/notes.md
           files: |
             ${{ runner.temp }}/deb/uniwidged_*.deb
             ${{ runner.temp }}/deb/SHA256SUMS
-          body: |
-            See `CHANGELOG.md` for what changed, and `ROADMAP.md` for what is
-            still to come. The `.deb` is built by `packaging/deb/build.sh` and
-            checked the way CI checks it; `SHA256SUMS` is its checksum.

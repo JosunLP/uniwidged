@@ -74,7 +74,31 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let command = args.next();
     let rest: Vec<String> = args.collect();
-    let result = match command.as_deref() {
+    // `<command> --help` anywhere on the line is a question about the command,
+    // never an argument to it: no command here takes a value spelled that way.
+    // And an option the command does not know stops it before it does
+    // anything — `remove clock --purgee` must not remove the clock.
+    let known = command
+        .as_deref()
+        .and_then(|name| completions::COMMANDS.iter().find(|c| c.name == name));
+    let result = match (command.as_deref(), known.map(|c| read_options(c, &rest))) {
+        (Some(name), Some(Ok(true))) => command_help(name),
+        (_, Some(Err(unknown))) => Err(unknown),
+        _ => run_command(command.as_deref(), &rest),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("uniwidged: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_command(command: Option<&str>, rest: &[String]) -> Result<(), String> {
+    let rest = rest.to_vec();
+    match command {
+        Some("help") if !rest.is_empty() => command_help(&rest[0]),
         Some("run") => command_run(&rest),
         Some("new") => new::create(&rest),
         Some("check") => check::check(&rest),
@@ -107,11 +131,21 @@ fn main() -> ExitCode {
             // The ABI version too, because "which uniwidged is this" is nearly
             // always asked about a widget that will not load, and the answer is
             // the number in its manifest against the number here.
-            println!(
-                "uniwidged {} (widget ABI {})",
-                env!("CARGO_PKG_VERSION"),
-                uniwidged_runtime::ABI_VERSION
+            let (oldest, newest) = (
+                uniwidged_runtime::ABI_OLDEST,
+                uniwidged_runtime::ABI_VERSION,
             );
+            if oldest == newest {
+                println!(
+                    "uniwidged {} (widget ABI {newest})",
+                    env!("CARGO_PKG_VERSION")
+                );
+            } else {
+                println!(
+                    "uniwidged {} (widget ABI {newest}, runs {oldest} to {newest})",
+                    env!("CARGO_PKG_VERSION")
+                );
+            }
             Ok(())
         }
         Some("--help" | "-h" | "help") | None => {
@@ -119,30 +153,24 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some(other) => Err(format!("`{other}` is not a command. Try `uniwidged help`.")),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(why) => {
-            eprintln!("uniwidged: {why}");
-            ExitCode::FAILURE
-        }
     }
 }
 
-fn print_usage() {
-    println!(
-        "uniwidged — a cross-platform desktop widget framework\n\n\
+/// The whole command line, one usage per line. `help <command>` reads its
+/// lines out of this, so a command's usage is written once.
+const USAGE: &str = "uniwidged — a cross-platform desktop widget framework\n\n\
          USAGE:\n  \
            uniwidged run [--config PATH]     start the desktop in the foreground\n  \
            uniwidged new <name> [--dir D] [--sdk P] [--capability C]…\n  \
-           uniwidged check <widget.wasm>     is this a widget, and who signed it?\n  \
+           uniwidged check <widget.wasm> [--manifest F]  is this a widget, and who signed it?\n  \
            uniwidged enable|disable <name>   turn one on or off\n  \
            uniwidged remove <name> [--purge] uninstall it\n  \
            uniwidged keygen [--out F]        a signing key of your own\n  \
-           uniwidged sign <w.wasm> --key F   sign a widget you publish\n  \
+           uniwidged sign <w.wasm> --key F [--manifest F]  sign a widget you publish\n  \
            uniwidged trust <key> [--name N]  accept that key's signatures\n  \
-           uniwidged untrust <key> | trusted\n  \
-           uniwidged install <widget.wasm> [--allow-unsigned]\n  \
+           uniwidged untrust <key>           stop accepting that key\n  \
+           uniwidged trusted                 the keys this machine accepts\n  \
+           uniwidged install <widget.wasm> [--manifest F] [--allow-unsigned]\n  \
            uniwidged registry add <url> --key <key> [--name N]\n  \
            uniwidged registry remove <name> | list\n  \
            uniwidged registry publish --key F --base-url U <w.wasm>…\n  \
@@ -161,8 +189,94 @@ fn print_usage() {
            uniwidged doctor                  what this session can and cannot do\n  \
            uniwidged snapshot <name> [-o F]  render one widget headlessly to a PNG\n  \
            uniwidged completions <shell>     a completion script for bash, zsh or fish\n  \
-           uniwidged --version\n"
+           uniwidged help [command]          every command, or more about one\n  \
+           uniwidged --version\n";
+
+fn print_usage() {
+    println!("{USAGE}");
+    println!("  `uniwidged help <command>` says more about one of them.\n");
+}
+
+/// Reads `args` against the options `command` knows: `Ok(true)` when it asks
+/// for help, `Err` naming the first option it does not know.
+///
+/// Only a known option that takes a value consumes the token after it, so
+/// `--config -h` is a file called `-h` while `--purgee --help` is a typo and
+/// then a question. Help wins over an unknown option: somebody asking what
+/// the options are is told, rather than told off.
+fn read_options(command: &completions::Command, args: &[String]) -> Result<bool, String> {
+    const SWITCHES: &[&str] = &[
+        "--allow-unsigned",
+        "--purge",
+        "--names",
+        "--refresh",
+        "--offline",
+        "--check",
+        "--reset-all",
+        "-f",
+        "--follow",
+    ];
+    let mut unknown = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            return Ok(true);
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            continue;
+        }
+        let known = arg == "--config" || command.flags.contains(&arg.as_str());
+        if !known {
+            unknown.get_or_insert_with(|| arg.clone());
+        } else if !SWITCHES.contains(&arg.as_str()) && args.next().is_none() {
+            // `remove clock --config` must not fall back to the default
+            // configuration and remove the clock from there.
+            return Err(format!("`{arg}` needs a value"));
+        }
+    }
+    match unknown {
+        Some(option) => Err(format!(
+            "`{option}` is not an option of `{name}`. `uniwidged help {name}` lists them.",
+            name = command.name
+        )),
+        None => Ok(false),
+    }
+}
+
+/// `uniwidged help <command>`, and `uniwidged <command> --help`.
+///
+/// The summary and flags come from the completion table and the usage from
+/// [`USAGE`], so nothing here is a third copy of either that could drift.
+fn command_help(name: &str) -> Result<(), String> {
+    let command = completions::COMMANDS
+        .iter()
+        .find(|c| c.name == name)
+        .ok_or_else(|| format!("`{name}` is not a command. Try `uniwidged help`."))?;
+    println!("uniwidged {} — {}\n", command.name, command.summary);
+    let usage: Vec<&str> = USAGE
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.strip_prefix("uniwidged ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .is_some_and(|word| word.split('|').any(|w| w == name))
+        })
+        .collect();
+    if !usage.is_empty() {
+        println!("USAGE:");
+        for line in usage {
+            println!("  {line}");
+        }
+        println!();
+    }
+    if !command.flags.is_empty() {
+        println!("FLAGS:\n  {}  --config PATH\n", command.flags.join("  "));
+    }
+    println!(
+        "More in `man uniwidged`, and at\n  https://josunlp.github.io/uniwidged/reference/cli#{}",
+        command.name
     );
+    Ok(())
 }
 
 pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
@@ -638,7 +752,7 @@ fn command_snapshot(args: &[String]) -> Result<(), String> {
         .ok_or("which widget? `uniwidged snapshot <name>`")?;
     let out = flag(args, "-o").unwrap_or_else(|| format!("{name}.png"));
 
-    let path = paths::config_file();
+    let path = config_path(args);
     let config = Config::read(&path).map_err(|e| e.to_string())?;
     let widget = config
         .widget(name)

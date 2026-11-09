@@ -13,25 +13,12 @@
 
 use uniwidged_guest::prelude::*;
 
-/// Seconds since the Unix epoch.
-///
-/// `SystemTime` works on `wasm32-wasip2` — WASI provides a wall clock, and it
-/// is not a capability: knowing what time it is reveals nothing about the
-/// machine, and a widget that could not would be unable to ask to be woken at
-/// a sensible moment.
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 #[derive(Default)]
 pub struct Clock;
 
 impl Widget for Clock {
     fn view(&mut self, cx: &Cx) -> View {
-        let now = now();
+        let now = now_seconds();
         // A refusal is shown, not hidden. A user who declined `locale` should
         // see why the clock is blank rather than a widget that looks broken.
         let time = cx.format_time(now).unwrap_or_else(|_| "--:--".to_string());
@@ -55,7 +42,7 @@ impl Widget for Clock {
 
     /// The top of the next minute — not "in sixty seconds".
     fn wake(&self) -> Wake {
-        Wake::at_next_multiple_of(60, now())
+        Wake::at_next_multiple_of(60, now_seconds())
     }
 }
 
@@ -85,7 +72,7 @@ mod tests {
             .expect("after 1970")
             .as_secs() as i64;
         assert_eq!(seconds % 60, 0, "{seconds} is not a whole minute");
-        assert!(seconds > now(), "and it is in the future");
-        assert!(seconds - now() <= 60);
+        assert!(seconds > now_seconds(), "and it is in the future");
+        assert!(seconds - now_seconds() <= 60);
     }
 }

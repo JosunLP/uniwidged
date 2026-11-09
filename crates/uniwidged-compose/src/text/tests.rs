@@ -114,24 +114,65 @@ fn text_that_does_not_fit_is_ellipsised_to_fit() {
     );
 }
 
+/// The font the golden images use, so a test about widths measures the same
+/// glyphs on every machine rather than whatever fontconfig found here.
+fn pinned() -> TextEngine {
+    TextEngine::with_font(
+        include_bytes!("../../tests/fonts/DejaVuSans.ttf").to_vec(),
+        "DejaVu Sans",
+    )
+}
+
+/// The property behind `ellipsise`: the longest prefix it kept still fits with
+/// an ellipsis, and the next one would not.
+///
+/// "The prefix it kept" is not simply the result minus its ellipsis, because a
+/// cut that lands just after a word has its trailing spaces dropped. Counting
+/// only what is left would test a prefix one or more characters shorter than
+/// the one actually chosen — which fits, by construction — and fail for a
+/// correct bisection. That is the mistake this test made for as long as the
+/// system font happened not to put the cut after a space.
+fn assert_keeps_as_much_as_will_fit(engine: &mut TextEngine, text: &str, limit: f32) {
+    let cut = engine.ellipsise(text, body(), limit);
+    let chars: Vec<char> = text.chars().collect();
+    let mut kept = cut.chars().count() - 1;
+    while chars.get(kept) == Some(&' ') {
+        kept += 1;
+    }
+    if kept >= chars.len() {
+        return;
+    }
+    let one_more: String = chars[..=kept].iter().chain(std::iter::once(&'…')).collect();
+    assert!(
+        engine.measure(&one_more, body()).0 > limit,
+        "{cut:?} at {limit}: one more character would still have fitted: {one_more:?}"
+    );
+}
+
 #[test]
 fn ellipsising_keeps_as_much_as_will_fit() {
     // A bisection that is off by one throws away a character that fits, and
-    // over a column of rows that reads as a rendering fault.
-    let mut engine = TextEngine::new();
+    // over a column of rows that reads as a rendering fault. Every limit from
+    // a few characters to nearly the whole line, so that some cuts land
+    // mid-word and some just after a space.
+    let mut engine = pinned();
     let text = "Standup with the platform team";
-    let limit = 120.0;
+    for limit in (30..=180).step_by(5) {
+        assert_keeps_as_much_as_will_fit(&mut engine, text, limit as f32);
+    }
+}
+
+#[test]
+fn a_cut_after_a_word_drops_the_space_and_keeps_the_word() {
+    // The case the old version of the test above could not tell from a bug:
+    // the longest prefix that fits ends in a space. Found by asking the pinned
+    // font for exactly that width, so it does not depend on this machine.
+    let mut engine = pinned();
+    let text = "Standup with the platform team";
+    let limit = engine.measure("Standup with the …", body()).0;
     let cut = engine.ellipsise(text, body(), limit);
-    let kept = cut.chars().count() - 1;
-    let one_more: String = text
-        .chars()
-        .take(kept + 1)
-        .chain(std::iter::once('…'))
-        .collect();
-    assert!(
-        engine.measure(&one_more, body()).0 > limit,
-        "one more character would still have fitted: {one_more:?}"
-    );
+    assert_eq!(cut, "Standup with the…");
+    assert_keeps_as_much_as_will_fit(&mut engine, text, limit);
 }
 
 #[test]

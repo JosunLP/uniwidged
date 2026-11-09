@@ -66,7 +66,7 @@ pub mod test_server;
 pub use capability::{Capability, Policy, Request};
 pub use keyring::{FileKeyring, Keyring, MemoryKeyring, SecretStore};
 pub use limits::Limits;
-pub use manifest::{ABI_VERSION, Manifest, ManifestError};
+pub use manifest::{ABI_OLDEST, ABI_VERSION, Manifest, ManifestError, abi_supported};
 pub use net::Http;
 pub use registry::{Entry, Index, RegistryError};
 pub use services::{DataDir, Locale, Services};

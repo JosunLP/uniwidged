@@ -1,7 +1,7 @@
 # API reference
 
 Everything a widget can call, name or be told, in one page. It is the companion
-to [`writing-a-widget.md`](writing-a-widget.md): that one is the argument and
+to [`writing-a-widget.md`](../guide/writing-a-widget.md): that one is the argument and
 the worked examples, this one is the surface.
 
 The authority is `wit/uniwidged.wit` — the interface itself, vendored so that a
@@ -10,8 +10,9 @@ makes of it. A widget written in another language that targets the component
 model implements the same world and gets the same guarantees; the names change
 and nothing else does.
 
-**ABI 9.** Checked at instantiation, before anything else runs — see
-[ABI history](#abi-history).
+**ABI 9 — stable for 1.x.** Checked at instantiation, before anything else
+runs. A widget built against it runs on every 1.x host — see
+[ABI & stability](./abi.md) and the [ABI history](#abi-history).
 
 ---
 
@@ -234,6 +235,15 @@ cx.log(message: &str)
 
 Goes to the host's log, prefixed with the widget's name. Never a place for a
 secret. Bounded: 256 lines per call, 512 bytes per line.
+
+```rust
+now_seconds() -> i64
+```
+
+Seconds since the Unix epoch, by the wall clock. A free function in the
+prelude, not a method on `Cx`, and not a capability: knowing the time reveals
+nothing about the machine. Pair it with `Wake::at_next_multiple_of(60,
+now_seconds())` to be woken at the top of each minute. *New in 1.0.*
 
 ### `timer`
 
@@ -603,7 +613,7 @@ with a signature that still verified.
 
 The same digest is what a registry index names for an entry, so an index and a
 signature speak about the same object — see
-[`registries.md`](registries.md), and note that the key a registry is pinned to
+[`registries.md`](../guide/registries.md), and note that the key a registry is pinned to
 signs *lists* and can never be made to sign a widget: the two digests are
 domain-separated.
 
@@ -629,8 +639,10 @@ domain-separated.
 
 ## ABI history
 
-`abi-version` is checked at instantiation, before `start`, and a mismatch is
-refused in a sentence naming both numbers.
+`abi-version` is checked at instantiation, before `start`. Before 1.0 the host
+ran exactly one ABI; since 1.0 it runs every ABI from 9 up to its own, and a
+widget outside that range is refused in a sentence naming both numbers and
+saying whether the widget or the host needs to move.
 
 | | |
 |---|---|
@@ -642,3 +654,4 @@ refused in a sentence naming both numbers.
 | **6 → 7** | `sparkline` joins `content`, and `memory_load` joins `cpu_load` under `metrics`. A variant added to `content` is a view an older host cannot decode at all, which is exactly the mismatch the version number exists to turn into a sentence naming both numbers. |
 | **7 → 8** | `register_image` and `release_image`. `image(u32)` had been in `content` since the first version with no way to obtain a handle, so every `image` node ever built drew nothing. |
 | **8 → 9** | `battery`, `disk_load` and `network_throughput` join the counters under `metrics`. New imports are ones an older host cannot satisfy, so a widget using them would fail to link there — the number turns that into a sentence. |
+| **9 · 1.0** | Frozen. The interface uniwidged 1.0 shipped with, and the floor every 1.x host runs. |

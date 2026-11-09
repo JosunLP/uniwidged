@@ -286,7 +286,7 @@ answering `Ok(false)` if there was nothing to forget, so signing out twice is
 not something to guard against. A key is at most 64 characters of
 `[A-Za-z0-9._-]`, a value at most 64 KiB, and you may keep 64 keys.
 
-Four things to do, and they are what [`widgets/vault`](../widgets/vault) is
+Four things to do, and they are what [`widgets/vault`](https://github.com/JosunLP/uniwidged/tree/main/widgets/vault) is
 for:
 
 * **Read it in `start`, not in `view`.** `view` runs on a deadline and may run
@@ -383,7 +383,7 @@ runs on a deadline and may run sixty times a second for a value that changes
 when a person changes it.
 
 Your users run `uniwidged configure <your-widget>`.
-[`widgets/system-load`](../widgets/system-load) is the worked example, and
+[`widgets/system-load`](https://github.com/JosunLP/uniwidged/tree/main/widgets/system-load) is the worked example, and
 `uniwidged new` scaffolds one for you.
 
 ## 7. Asking for something that takes time
@@ -455,7 +455,7 @@ path; almost no environment, because a desktop's environment holds session
 tokens; no standard input; and bounds on time and output.
 
 Ask for the smallest command that answers your question.
-[`widgets/uptime`](../widgets/uptime) is the worked example, and it asks for
+[`widgets/uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) is the worked example, and it asks for
 `uptime` rather than `sh` for exactly this reason.
 
 ## 8. Testing your widget
@@ -505,8 +505,12 @@ uniwidged sign target/wasm32-wasip2/release/my_widget.wasm \
     --key ~/.uniwidged-signing-key                # each release
 ```
 
-That writes `my_widget.wasm.sig` beside the component. Ship both, and put your
-public key in your README. People install it with:
+That writes `my_widget.wasm.sig` beside the component, and a copy of your
+crate's `widget.toml` as `my_widget.toml` — the exact bytes the signature
+covers. **Ship all three** side by side, and put your public key in your
+README. Inside `target/` the crate's `widget.toml` is always the one signed and
+installed, so a copy left by an earlier signing never stands in for a manifest
+you have since edited. People install it with:
 
 ```sh
 uniwidged trust <your public key> --name "your name"
@@ -546,7 +550,7 @@ trusted your code, and somebody who takes over your web host cannot sign a
 widget as you. Give your version a `version` in `widget.toml` while you are
 here — without one, nothing can tell your users that a newer build exists.
 
-[`docs/registries.md`](registries.md) is both halves in full.
+[Finding widgets](registries.md) is both halves in full.
 
 ## 10. What the host does to you
 
@@ -573,15 +577,15 @@ enough to read in a sitting:
 
 | | |
 |---|---|
-| [`widgets/clock`](../widgets/clock) | `locale`. The smallest useful widget: asks for an instant, redraws once a minute. |
-| [`widgets/system-load`](../widgets/system-load) | `metrics` and **settings**. How often to sample, how to show a reading you could not take, and the two numbers a widget cannot pick for its user. |
-| [`widgets/battery`](../widgets/battery) | `metrics`, when there may be **nothing to measure**. A desktop has no battery, and `Ok(None)` is "on mains power", not an empty meter — and an estimate the host does not have is not one the widget invents. |
-| [`widgets/network`](../widgets/network) | `metrics` for a **rate**. A sparkline takes fractions and bytes per second are not one: scale against the busiest moment, with a floor, and say what the top of the chart means. |
-| [`widgets/counter`](../widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
-| [`widgets/uptime`](../widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
-| [`widgets/vault`](../widgets/vault) | `secrets`. Keeping a credential, and keeping it out of the view. |
+| [`widgets/clock`](https://github.com/JosunLP/uniwidged/tree/main/widgets/clock) | `locale`. The smallest useful widget: asks for an instant, redraws once a minute. |
+| [`widgets/system-load`](https://github.com/JosunLP/uniwidged/tree/main/widgets/system-load) | `metrics` and **settings**. How often to sample, how to show a reading you could not take, and the two numbers a widget cannot pick for its user. |
+| [`widgets/battery`](https://github.com/JosunLP/uniwidged/tree/main/widgets/battery) | `metrics`, when there may be **nothing to measure**. A desktop has no battery, and `Ok(None)` is "on mains power", not an empty meter — and an estimate the host does not have is not one the widget invents. |
+| [`widgets/network`](https://github.com/JosunLP/uniwidged/tree/main/widgets/network) | `metrics` for a **rate**. A sparkline takes fractions and bytes per second are not one: scale against the busiest moment, with a floor, and say what the top of the chart means. |
+| [`widgets/counter`](https://github.com/JosunLP/uniwidged/tree/main/widgets/counter) | `fs`. Loading in `start`, saving on change, surviving a restart. |
+| [`widgets/uptime`](https://github.com/JosunLP/uniwidged/tree/main/widgets/uptime) | `command`. The asynchronous shape: ask, draw, collect on the event. |
+| [`widgets/vault`](https://github.com/JosunLP/uniwidged/tree/main/widgets/vault) | `secrets`. Keeping a credential, and keeping it out of the view. |
 
-And [`widgets/conformance`](../widgets/conformance), which tries every
+And [`widgets/conformance`](https://github.com/JosunLP/uniwidged/tree/main/widgets/conformance), which tries every
 capability and reports what happened — the fastest way to see what the sandbox
 actually does.
 
@@ -608,7 +612,8 @@ Named so nobody has to find out the hard way:
 
 ---
 
-[`api-reference.md`](api-reference.md) is every function, type and refusal in
-one page. `ARCHITECTURE.md` has the reasoning behind all of this, and
-`ROADMAP.md` says what is not built yet — every capability in the table above
-is served on Linux; what is missing is Windows and macOS.
+[The API reference](../reference/api.md) is every function, type and refusal in
+one page. [The architecture](../project/architecture.md) has the reasoning behind
+all of this, and [the roadmap](../project/roadmap.md) says what is not built yet —
+every capability in the table above is served on Linux; what is missing is
+Windows and macOS.

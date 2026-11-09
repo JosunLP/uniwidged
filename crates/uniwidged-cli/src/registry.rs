@@ -259,6 +259,7 @@ pub fn add(args: &[String]) -> Result<(), String> {
     let (component, manifest_path) = store(&entry, &download)?;
 
     install::install(
+        &crate::config_path(args),
         &component,
         &manifest_path,
         args.iter().any(|a| a == "--allow-unsigned"),
@@ -276,7 +277,7 @@ pub fn update(args: &[String]) -> Result<(), String> {
     let only = args.first().filter(|a| !a.starts_with('-')).cloned();
     let check_only = args.iter().any(|a| a == "--check");
 
-    let config = Config::read(&crate::paths::config_file()).map_err(|e| e.to_string())?;
+    let config = Config::read(&crate::config_path(args)).map_err(|e| e.to_string())?;
     let installed: Vec<&uniwidged_host::config::WidgetConfig> = config
         .widgets
         .iter()
@@ -344,6 +345,7 @@ pub fn update(args: &[String]) -> Result<(), String> {
         // The granted list, not the declared one: an update may not quietly
         // widen what a user agreed to.
         match install::install(
+            &crate::config_path(args),
             &component,
             &manifest_path,
             args.iter().any(|a| a == "--allow-unsigned"),
