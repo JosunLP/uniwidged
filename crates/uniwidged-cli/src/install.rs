@@ -207,13 +207,13 @@ fn crate_of(component: &Path) -> Option<Option<PathBuf>> {
 }
 
 fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
-    let read = |dir: &Path| -> Option<toml::Table> {
-        std::fs::read_to_string(dir.join("Cargo.toml"))
-            .ok()?
-            .parse()
-            .ok()
-    };
-    let is_workspace = read(krate).is_some_and(|t| t.contains_key("workspace"));
+    // A root that cannot be read or parsed might be a workspace, and then its
+    // manifest might belong to some other member: no answer, rather than one.
+    let root: toml::Table = std::fs::read_to_string(krate.join("Cargo.toml"))
+        .ok()?
+        .parse()
+        .ok()?;
+    let is_workspace = root.contains_key("workspace");
     if !is_workspace {
         let manifest = krate.join("widget.toml");
         return manifest.is_file().then_some(manifest);
@@ -539,6 +539,14 @@ mod tests {
         // (A directory by that name: unreadable even to root.)
         std::fs::create_dir_all(space.join("members/unreadable/Cargo.toml")).unwrap();
         assert_eq!(found("my_clock"), None);
+
+        // A root `Cargo.toml` that cannot be parsed may be a workspace whose
+        // manifest belongs to another member: no answer, not the root's.
+        let broken = root.join("broken");
+        write(broken.join("Cargo.toml"), "[workspace\nmembers = [");
+        write(broken.join("widget.toml"), "");
+        write(broken.join("target/release/z.wasm"), "");
+        assert_eq!(find_manifest(&broken.join("target/release/z.wasm")).0, None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
