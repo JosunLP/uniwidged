@@ -102,3 +102,23 @@ fn a_flag_value_that_looks_like_help_is_still_a_value() {
     let (ok, said) = uniwidged(&["list", "--names", "--help"]);
     assert!(ok && said.starts_with("uniwidged list — "), "{said}");
 }
+
+#[test]
+fn an_option_a_command_does_not_know_stops_it_before_it_runs() {
+    // A typo is not a value: `--purgee` takes nothing, so the `--help` after
+    // it is a question, and nothing is removed.
+    let (ok, said) = uniwidged(&["remove", "clock", "--purgee", "--help"]);
+    assert!(ok && said.starts_with("uniwidged remove — "), "{said}");
+    // On its own it is refused by name, before the command does anything.
+    let (ok, said) = uniwidged(&["remove", "clock", "--purgee"]);
+    assert!(!ok);
+    assert!(
+        said.contains("`--purgee` is not an option of `remove`"),
+        "{said}"
+    );
+    // `--config` is an option of every command.
+    for command in ["install", "sign", "move", "log", "configure"] {
+        let (_, said) = uniwidged(&[command, "--config", "/nonexistent/config.toml"]);
+        assert!(!said.contains("is not an option"), "{command}: {said}");
+    }
+}

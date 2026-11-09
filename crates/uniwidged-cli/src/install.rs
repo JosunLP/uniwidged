@@ -73,9 +73,13 @@ pub fn command(args: &[String]) -> Result<(), String> {
 ///    `widget.toml`. That is the source of truth while somebody is developing:
 ///    `sign` leaves a copy beside the component for publishing, and a copy
 ///    from the last signing must never shadow the manifest the author has
-///    since edited. Only for the path as named: a symlink into `target/`
-///    with a manifest beside the link uses that manifest (rule 2), and one
-///    with nothing beside it falls back to the crate's.
+///    since edited. Only for the path as named (`..` resolved): a symlink
+///    into `target/` with a manifest beside the link uses that manifest
+///    (rule 2), and one with nothing beside it falls back to the crate's. In a
+///    workspace the member is found by artifact name; a build no single crate
+///    owns, with nothing beside it, has no manifest until `--manifest` names
+///    one. A `Cargo.toml` between the component and `target/` makes it part
+///    of that crate, not a build.
 /// 2. **`<component>.toml` beside it**, as named — what a registry download
 ///    or a published set looks like. Checked by the name given rather than a
 ///    resolved symlink, so a linked component is read with the manifest
@@ -125,20 +129,20 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         .unwrap_or_else(|_| resolved.clone());
     let beside = resolved.with_extension("toml");
 
-    // A crate's build output: the crate's manifest, whatever lies beside.
-    let crate_of = |start: &Path| {
-        start.ancestors().skip(1).find_map(|dir| {
-            let krate = dir.parent()?;
-            let manifest = krate.join("widget.toml");
-            (dir.file_name()? == "target"
-                && krate.join("Cargo.toml").is_file()
-                && manifest.is_file())
-            .then_some(manifest)
-        })
+    // The directory as the system resolves it, the file name as given: `..`
+    // means what it means on disk (`target/../published/x.wasm` is not in
+    // `target/`), while a symlinked *file* is still read as named.
+    let located = match (
+        resolved.parent().map(Path::canonicalize),
+        resolved.file_name(),
+    ) {
+        (Some(Ok(dir)), Some(name)) => dir.join(name),
+        _ => resolved.clone(),
     };
 
     // 1. Named by a path inside `target/`: the crate's manifest.
-    if let Some(manifest) = crate_of(&resolved) {
+    let build = crate_of(&located);
+    if let Some(Some(manifest)) = build {
         return (Some(manifest), beside);
     }
 
@@ -148,9 +152,14 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         return (Some(beside.clone()), beside);
     }
 
+    // A build that no single crate manifest owns has no answer to guess at.
+    if build.is_some() {
+        return (None, beside);
+    }
+
     // 1, again, for a symlink into a crate's `target/` with nothing beside it.
     if let Some(manifest) = crate_of(&real) {
-        return (Some(manifest), beside);
+        return (manifest, beside);
     }
 
     // 3. The crate it sits in, without leaving that crate.
@@ -164,6 +173,85 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         }
     }
     (None, beside)
+}
+
+/// The manifest of the crate whose build output `component` is, if it is one.
+///
+/// The nearest `target/` directory with a `Cargo.toml` beside it — unless a
+/// `Cargo.toml` comes first, which makes the component part of *that* crate
+/// (staged inside somebody else's build directory, say) and not a build.
+/// In a workspace, whose members share one `target/`, the member that built
+/// the component is found by its artifact name; if no single member owns
+/// it, there is no answer, and `--manifest` has to say.
+///
+/// `None`: not a build. `Some(None)`: a build with no manifest to be sure of.
+fn crate_of(component: &Path) -> Option<Option<PathBuf>> {
+    let stem = component.file_stem()?.to_str()?;
+    for dir in component.ancestors().skip(1) {
+        if dir.file_name().is_some_and(|name| name == "target")
+            && let Some(krate) = dir.parent()
+            && krate.join("Cargo.toml").is_file()
+        {
+            return Some(manifest_of_crate(krate, stem));
+        }
+        if dir.join("Cargo.toml").is_file() {
+            return None;
+        }
+    }
+    None
+}
+
+fn manifest_of_crate(krate: &Path, artifact: &str) -> Option<PathBuf> {
+    let read = |dir: &Path| -> Option<toml::Table> {
+        std::fs::read_to_string(dir.join("Cargo.toml"))
+            .ok()?
+            .parse()
+            .ok()
+    };
+    let is_workspace = read(krate).is_some_and(|t| t.contains_key("workspace"));
+    if !is_workspace {
+        let manifest = krate.join("widget.toml");
+        return manifest.is_file().then_some(manifest);
+    }
+    // What cargo calls the artifact: `[lib] name`, else the package name with
+    // `-` as `_`.
+    let builds = |table: &toml::Table| {
+        let lib = table
+            .get("lib")
+            .and_then(|l| l.get("name"))
+            .and_then(|n| n.as_str());
+        let package = table
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str());
+        lib.map(str::to_string)
+            .or_else(|| package.map(|p| p.replace('-', "_")))
+            .is_some_and(|name| name == artifact)
+    };
+    let mut owners = Vec::new();
+    let mut pending = vec![(krate.to_path_buf(), 0)];
+    while let Some((dir, depth)) = pending.pop() {
+        if let Some(table) = read(&dir)
+            && builds(&table)
+            && dir.join("widget.toml").is_file()
+        {
+            owners.push(dir.join("widget.toml"));
+        }
+        if depth == 3 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let skipped = name == "target" || name.to_string_lossy().starts_with('.');
+            if !skipped && entry.file_type().is_ok_and(|t| t.is_dir()) {
+                pending.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    (owners.len() == 1).then(|| owners.remove(0))
 }
 
 /// Installs a widget that is already on disk, and reports what was recorded.
@@ -333,6 +421,76 @@ pub fn describe(manifest: &Manifest, signed_by: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::find_manifest;
+
+    #[test]
+    fn only_a_build_of_the_crate_takes_the_crates_manifest() {
+        let root = std::env::temp_dir().join(format!("uniwidged-builds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |path: std::path::PathBuf, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+
+        // `..` out of `target/` is out of it: the published copy's own wins.
+        let krate = root.join("plain");
+        write(krate.join("Cargo.toml"), "");
+        write(krate.join("widget.toml"), "");
+        write(krate.join("target/release/x.wasm"), "");
+        write(krate.join("published/x.wasm"), "");
+        write(krate.join("published/x.toml"), "");
+        let escaped = krate.join("target/../published/x.wasm");
+        assert_eq!(
+            find_manifest(&escaped).0,
+            Some(escaped.with_extension("toml"))
+        );
+
+        // A crate staged inside another's `target/` is that crate's, not a build.
+        let staged = krate.join("target/package/staged");
+        write(staged.join("Cargo.toml"), "");
+        write(staged.join("y.wasm"), "");
+        write(staged.join("y.toml"), "");
+        assert_eq!(
+            find_manifest(&staged.join("y.wasm")).0,
+            Some(staged.join("y.toml"))
+        );
+
+        // A workspace: the member that built the artifact, by its name — not
+        // the root's manifest, though the root is a widget too.
+        let space = root.join("space");
+        write(
+            space.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"members/*\"]\n[package]\nname = \"root-widget\"\n",
+        );
+        write(space.join("widget.toml"), "");
+        write(
+            space.join("members/clock/Cargo.toml"),
+            "[package]\nname = \"my-clock\"\n",
+        );
+        write(space.join("members/clock/widget.toml"), "");
+        write(
+            space.join("members/odd/Cargo.toml"),
+            "[package]\nname = \"odd\"\n[lib]\nname = \"renamed\"\n",
+        );
+        write(space.join("members/odd/widget.toml"), "");
+        let release = space.join("target/wasm32-wasip2/release");
+        for artifact in ["my_clock", "renamed", "root_widget", "nobody"] {
+            write(release.join(format!("{artifact}.wasm")), "");
+        }
+        let found = |artifact: &str| find_manifest(&release.join(format!("{artifact}.wasm"))).0;
+        assert_eq!(
+            found("my_clock"),
+            Some(space.join("members/clock/widget.toml"))
+        );
+        assert_eq!(
+            found("renamed"),
+            Some(space.join("members/odd/widget.toml"))
+        );
+        assert_eq!(found("root_widget"), Some(space.join("widget.toml")));
+        // Built by nobody it can name: no guess, so `--manifest` has to say.
+        assert_eq!(found("nobody"), None);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn a_cargo_build_finds_the_crates_own_manifest_and_stops_at_its_root() {

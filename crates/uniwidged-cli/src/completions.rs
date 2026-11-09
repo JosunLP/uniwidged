@@ -79,7 +79,7 @@ pub const COMMANDS: &[Command] = &[
         name: "registry",
         summary: "the registries this machine reads",
         takes: Takes::Subcommand(&["add", "remove", "list", "publish"]),
-        flags: &["--key", "--name", "--base-url", "--out"],
+        flags: &["--key", "--name", "--base-url", "--out", "--names"],
     },
     Command {
         name: "search",
@@ -91,13 +91,13 @@ pub const COMMANDS: &[Command] = &[
         name: "add",
         summary: "install one from a registry",
         takes: Takes::Nothing,
-        flags: &["--registry"],
+        flags: &["--registry", "--allow-unsigned", "--refresh", "--offline"],
     },
     Command {
         name: "update",
         summary: "what is newer, and take it",
         takes: Takes::Widget,
-        flags: &["--check"],
+        flags: &["--check", "--allow-unsigned", "--refresh", "--offline"],
     },
     Command {
         name: "list",

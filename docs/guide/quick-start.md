@@ -1,8 +1,9 @@
 # Quick start
 
 Five minutes from nothing to your own widget on the desktop. You need
-`uniwidged` [installed](./installation.md) and
-`rustup target add wasm32-wasip2`.
+`uniwidged` 1.0.0 or newer [installed](./installation.md) (`uniwidged --version`
+says which), and `rustup target add wasm32-wasip2`. Earlier hosts cannot find a
+widget's manifest next to a fresh build, so the install below fails on them.
 
 ## 1. Install a widget
 

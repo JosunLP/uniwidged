@@ -76,11 +76,28 @@ fn main() -> ExitCode {
     let rest: Vec<String> = args.collect();
     // `<command> --help` anywhere on the line is a question about the command,
     // never an argument to it: no command here takes a value spelled that way.
-    let asks_for_help = asks_for_help(&rest);
-    let result = match command.as_deref() {
-        Some(name) if asks_for_help && completions::COMMANDS.iter().any(|c| c.name == name) => {
-            command_help(name)
+    // And an option the command does not know stops it before it does
+    // anything — `remove clock --purgee` must not remove the clock.
+    let known = command
+        .as_deref()
+        .and_then(|name| completions::COMMANDS.iter().find(|c| c.name == name));
+    let result = match (command.as_deref(), known.map(|c| read_options(c, &rest))) {
+        (Some(name), Some(Ok(true))) => command_help(name),
+        (_, Some(Err(unknown))) => Err(unknown),
+        _ => run_command(command.as_deref(), &rest),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("uniwidged: {e}");
+            ExitCode::FAILURE
         }
+    }
+}
+
+fn run_command(command: Option<&str>, rest: &[String]) -> Result<(), String> {
+    let rest = rest.to_vec();
+    match command {
         Some("help") if !rest.is_empty() => command_help(&rest[0]),
         Some("run") => command_run(&rest),
         Some("new") => new::create(&rest),
@@ -136,13 +153,6 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some(other) => Err(format!("`{other}` is not a command. Try `uniwidged help`.")),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(why) => {
-            eprintln!("uniwidged: {why}");
-            ExitCode::FAILURE
-        }
     }
 }
 
@@ -187,13 +197,14 @@ fn print_usage() {
     println!("  `uniwidged help <command>` says more about one of them.\n");
 }
 
-/// Whether `-h` or `--help` appears as a flag of its own, rather than as the
-/// value of the flag before it — `--config -h` names a file called `-h`.
+/// Reads `args` against the options `command` knows: `Ok(true)` when it asks
+/// for help, `Err` naming the first option it does not know.
 ///
-/// The flags that take no value are listed; every other flag takes one. A new
-/// switch missing from this list makes `--switch --help` read as a value, which
-/// is the harmless way round: the command runs and says what it thinks of it.
-fn asks_for_help(args: &[String]) -> bool {
+/// Only a known option that takes a value consumes the token after it, so
+/// `--config -h` is a file called `-h` while `--purgee --help` is a typo and
+/// then a question. Help wins over an unknown option: somebody asking what
+/// the options are is told, rather than told off.
+fn read_options(command: &completions::Command, args: &[String]) -> Result<bool, String> {
     const SWITCHES: &[&str] = &[
         "--allow-unsigned",
         "--purge",
@@ -205,18 +216,29 @@ fn asks_for_help(args: &[String]) -> bool {
         "-f",
         "--follow",
     ];
+    let mut unknown = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            return true;
+            return Ok(true);
         }
-        // A flag that takes a value consumes the next token, whatever it is:
-        // `--config -h --help` is a file called `-h`, then a question.
-        if arg.starts_with('-') && !SWITCHES.contains(&arg.as_str()) {
+        if !arg.starts_with('-') || arg == "-" {
+            continue;
+        }
+        let known = arg == "--config" || command.flags.contains(&arg.as_str());
+        if !known {
+            unknown.get_or_insert_with(|| arg.clone());
+        } else if !SWITCHES.contains(&arg.as_str()) {
             args.next();
         }
     }
-    false
+    match unknown {
+        Some(option) => Err(format!(
+            "`{option}` is not an option of `{name}`. `uniwidged help {name}` lists them.",
+            name = command.name
+        )),
+        None => Ok(false),
+    }
 }
 
 /// `uniwidged help <command>`, and `uniwidged <command> --help`.

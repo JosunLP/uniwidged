@@ -50,6 +50,9 @@ follow as 1.x minor releases.
 * `uniwidged help <command>` and `uniwidged <command> --help` show one
   command's usage and flags. Before, `install --help` went looking for a file
   called `--help`.
+* An option a command does not know is refused before the command does
+  anything: `remove clock --purgee` used to remove the clock without purging
+  it.
 * The consent screen for `metrics` now names everything the grant covers —
   CPU, memory, disk, battery **and network**. It had not been updated when ABI
   9 added the last two.

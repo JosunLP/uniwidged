@@ -10,6 +10,7 @@
 //! not have and could not honestly run, and a security mechanism whose
 //! operation nobody can inspect is one nobody should rely on.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use uniwidged_runtime::signature::{PublicKey, SecretKey, SignatureFile, TrustedKeys};
@@ -65,7 +66,6 @@ pub fn keygen(args: &[String]) -> Result<(), String> {
 /// shared machine can read. Set before the bytes are written rather than after,
 /// or there is a window where it is world-readable.
 fn write_private(path: &Path, contents: &str) -> Result<(), String> {
-    use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -114,12 +114,30 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     let already_beside = beside
         .canonicalize()
         .is_ok_and(|b| manifest_path.canonicalize().is_ok_and(|m| m == b));
-    if !already_beside {
-        write_replacing(&beside, &manifest)?;
+    let out = signature_path(&component);
+    // Both written in full before either is put in place, so a failure while
+    // writing changes nothing. Then the manifest, then the signature; and if
+    // the signature cannot be put in place, the old manifest goes back, so
+    // the pair beside the component always matches.
+    let manifest_copy = (!already_beside)
+        .then(|| Staged::new(&beside, manifest.as_bytes()))
+        .transpose()?;
+    let signature = Staged::new(&out, file.to_text().as_bytes())?;
+    let previous = std::fs::read(&beside).ok();
+    if let Some(copy) = manifest_copy {
+        copy.commit()?;
         println!("  wrote {} (the manifest it covers)", beside.display());
     }
-    let out = signature_path(&component);
-    write_replacing(&out, file.to_text())?;
+    if let Err(why) = signature.commit() {
+        if !already_beside {
+            match &previous {
+                Some(bytes) => Staged::new(&beside, bytes)?.commit()?,
+                None => std::fs::remove_file(&beside)
+                    .map_err(|e| format!("{}: {e}", beside.display()))?,
+            }
+        }
+        return Err(why);
+    }
     println!(
         "  signed {} and {}",
         component.display(),
@@ -132,20 +150,72 @@ pub fn sign(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes `path` whole or not at all: the bytes go to a temporary file in the
-/// same directory, which then replaces `path` in one rename. A write that
-/// fails halfway leaves the old file as it was, never a truncated one.
-fn write_replacing(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(), String> {
-    let shown = |e: std::io::Error| format!("{}: {e}", path.display());
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.tmp", std::process::id()));
-    let temporary = path.with_file_name(name);
-    let written =
-        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+/// A file written in full beside `path`, not yet in its place.
+///
+/// The temporary file is created new, never opened if something is already
+/// there — a symlink planted at its name in a shared directory cannot turn
+/// the write into one somewhere else — and is removed again unless
+/// [`Staged::commit`] puts it in place with one rename. Until then `path` is
+/// as it was, however the writing went.
+struct Staged {
+    temporary: PathBuf,
+    path: PathBuf,
+    committed: bool,
+}
+
+impl Staged {
+    fn new(path: &Path, bytes: &[u8]) -> Result<Self, String> {
+        Self::with(path, |file| file.write_all(bytes))
     }
-    written.map_err(shown)
+
+    fn with(
+        path: &Path,
+        fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    ) -> Result<Self, String> {
+        let shown = |e: std::io::Error| format!("{}: {e}", path.display());
+        let mut attempt = 0u32;
+        let (temporary, mut file) = loop {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".{}.{attempt}.tmp", std::process::id()));
+            let temporary = path.with_file_name(name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(shown(e)),
+            }
+        };
+        // Ours from here on, so ours to remove if the writing fails.
+        let staged = Staged {
+            temporary,
+            path: path.to_path_buf(),
+            committed: false,
+        };
+        fill(&mut file)
+            .and_then(|()| file.sync_all())
+            .map_err(shown)?;
+        Ok(staged)
+    }
+
+    fn commit(mut self) -> Result<(), String> {
+        std::fs::rename(&self.temporary, &self.path)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temporary);
+        }
+    }
 }
 
 /// `uniwidged trust <hex key> [--name NAME]`
@@ -257,26 +327,47 @@ pub fn provenance(component: &Path, manifest: &Path) -> Result<Provenance, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::write_replacing;
+    use super::Staged;
+    use std::io::Write;
 
     #[test]
-    fn a_replacement_is_whole_and_leaves_nothing_behind() {
+    fn a_replacement_is_whole_or_not_at_all() {
         let dir = std::env::temp_dir().join(format!("uniwidged-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("clock.toml");
         std::fs::write(&path, "old").unwrap();
+        let count = || std::fs::read_dir(&dir).unwrap().count();
 
-        write_replacing(&path, "new").unwrap();
+        // Half written, then a failure: the old file is untouched, and the
+        // temporary one is gone.
+        let failed = Staged::with(&path, |file| {
+            file.write_all(b"ne")?;
+            Err(std::io::Error::other("the disk filled up"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(count(), 1);
+
+        // Written but never committed: the same.
+        drop(Staged::new(&path, b"new").unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(count(), 1);
+
+        // Something already at the temporary name is never written through.
+        let decoy = dir.join(format!("clock.toml.{}.0.tmp", std::process::id()));
+        std::fs::write(&decoy, "not yours").unwrap();
+        Staged::new(&path, b"new").unwrap().commit().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
-        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
-        assert_eq!(left.len(), 1, "the temporary file is gone");
+        assert_eq!(std::fs::read_to_string(&decoy).unwrap(), "not yours");
+        assert_eq!(count(), 2);
 
-        // A destination that cannot be replaced: the old contents survive.
+        // A destination that cannot be replaced: nothing changes there either.
         let blocked = dir.join("blocked");
         std::fs::create_dir_all(blocked.join("inside")).unwrap();
-        assert!(write_replacing(&blocked, "new").is_err());
+        assert!(Staged::new(&blocked, b"new").unwrap().commit().is_err());
         assert!(blocked.join("inside").is_dir());
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        assert_eq!(count(), 3);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
