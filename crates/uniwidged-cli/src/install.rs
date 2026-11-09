@@ -49,9 +49,11 @@ pub fn command(args: &[String]) -> Result<(), String> {
         .first()
         .filter(|a| !a.starts_with('-'))
         .ok_or("which widget? `uniwidged install <widget.wasm>`")?;
-    let component = PathBuf::from(component)
-        .canonicalize()
-        .map_err(|e| format!("{component}: {e}"))?;
+    // Absolute, because it is recorded — but not resolved: a symlink is read
+    // with the manifest and signature beside the link, as `sign` wrote them.
+    let named = PathBuf::from(component);
+    std::fs::metadata(&named).map_err(|e| format!("{component}: {e}"))?;
+    let component = std::path::absolute(&named).map_err(|e| format!("{component}: {e}"))?;
     let manifest_path = manifest_for(&component, args)?;
     let allow_unsigned = args.iter().any(|a| a == "--allow-unsigned");
     install(
@@ -71,7 +73,9 @@ pub fn command(args: &[String]) -> Result<(), String> {
 ///    `widget.toml`. That is the source of truth while somebody is developing:
 ///    `sign` leaves a copy beside the component for publishing, and a copy
 ///    from the last signing must never shadow the manifest the author has
-///    since edited.
+///    since edited. Only for the path as named: a symlink into `target/`
+///    with a manifest beside the link uses that manifest (rule 2), and one
+///    with nothing beside it falls back to the crate's.
 /// 2. **`<component>.toml` beside it**, as named — what a registry download
 ///    or a published set looks like. Checked by the name given rather than a
 ///    resolved symlink, so a linked component is read with the manifest
@@ -121,23 +125,32 @@ pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
         .unwrap_or_else(|_| resolved.clone());
     let beside = resolved.with_extension("toml");
 
-    // 1. A crate's build output: the crate's manifest, whatever lies beside.
-    for start in [&resolved, &real] {
-        for dir in start.ancestors().skip(1) {
-            if dir.file_name().is_some_and(|name| name == "target")
-                && let Some(krate) = dir.parent()
-            {
-                let manifest = krate.join("widget.toml");
-                if krate.join("Cargo.toml").is_file() && manifest.is_file() {
-                    return (Some(manifest), beside);
-                }
-            }
-        }
+    // A crate's build output: the crate's manifest, whatever lies beside.
+    let crate_of = |start: &Path| {
+        start.ancestors().skip(1).find_map(|dir| {
+            let krate = dir.parent()?;
+            let manifest = krate.join("widget.toml");
+            (dir.file_name()? == "target"
+                && krate.join("Cargo.toml").is_file()
+                && manifest.is_file())
+            .then_some(manifest)
+        })
+    };
+
+    // 1. Named by a path inside `target/`: the crate's manifest.
+    if let Some(manifest) = crate_of(&resolved) {
+        return (Some(manifest), beside);
     }
 
-    // 2. Beside it, as named.
+    // 2. Beside it, as named — before following a symlink, so a link kept
+    //    with its own manifest is read (and signed) with that one.
     if beside.is_file() {
         return (Some(beside.clone()), beside);
+    }
+
+    // 1, again, for a symlink into a crate's `target/` with nothing beside it.
+    if let Some(manifest) = crate_of(&real) {
+        return (Some(manifest), beside);
     }
 
     // 3. The crate it sits in, without leaving that crate.
@@ -366,6 +379,24 @@ mod tests {
             assert_eq!(
                 find_manifest(&linked.join("mine.wasm")).0,
                 Some(linked.join("mine.toml"))
+            );
+        }
+
+        // A link into a crate's `target/`: the manifest beside the link wins
+        // when there is one, and the crate's is the fallback when there is not.
+        #[cfg(unix)]
+        {
+            let into_build = root.join("into-build");
+            std::fs::create_dir_all(&into_build).unwrap();
+            std::os::unix::fs::symlink(&component, into_build.join("dev.wasm")).unwrap();
+            assert_eq!(
+                find_manifest(&into_build.join("dev.wasm")).0,
+                Some(krate.join("widget.toml"))
+            );
+            std::fs::write(into_build.join("dev.toml"), "").unwrap();
+            assert_eq!(
+                find_manifest(&into_build.join("dev.wasm")).0,
+                Some(into_build.join("dev.toml"))
             );
         }
 

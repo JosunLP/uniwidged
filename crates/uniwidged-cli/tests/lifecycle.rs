@@ -264,6 +264,62 @@ fn signing_a_fresh_build_puts_the_manifest_it_covered_beside_it() {
     assert!(installed.contains("signed by jane"), "{installed}");
 }
 
+#[cfg(unix)]
+#[test]
+fn signing_through_a_link_into_a_build_keeps_the_manifest_beside_the_link() {
+    // A link kept with its own manifest, pointing into a crate's `target/`:
+    // `sign` signs that manifest and leaves it alone, rather than overwriting
+    // it with the crate's `widget.toml`.
+    let machine = Machine::new("sign-through-link");
+    let built = reference_widget(&machine.0);
+    let krate = machine.0.join("my-widget");
+    let release = krate.join("target/wasm32-wasip2/release");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::write(krate.join("Cargo.toml"), "").unwrap();
+    let original = std::fs::read_to_string(machine.0.join("clock.toml")).unwrap();
+    std::fs::write(krate.join("widget.toml"), &original).unwrap();
+    std::fs::rename(&built, release.join("clock.wasm")).unwrap();
+
+    let linked = machine.0.join("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::os::unix::fs::symlink(release.join("clock.wasm"), linked.join("clock.wasm")).unwrap();
+    let own = original.replace(
+        "The time and the date, in your locale",
+        "The clock, as published beside the link",
+    );
+    assert_ne!(own, original, "two different manifests");
+    std::fs::write(linked.join("clock.toml"), &own).unwrap();
+
+    let key = machine.0.join("signing-key");
+    let public = machine
+        .ok(&["keygen", "--out", key.to_str().unwrap()])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("public key: "))
+        .expect("a public key")
+        .to_string();
+    machine.ok(&[
+        "sign",
+        linked.join("clock.wasm").to_str().unwrap(),
+        "--key",
+        key.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(linked.join("clock.toml")).unwrap(),
+        own,
+        "the manifest beside the link is untouched"
+    );
+    assert_eq!(
+        std::fs::read_to_string(krate.join("widget.toml")).unwrap(),
+        original,
+        "and so is the crate's"
+    );
+
+    // The signature covers the link's manifest, so the link installs as signed.
+    machine.ok(&["trust", &public, "--name", "jane"]);
+    let installed = machine.ok(&["install", linked.join("clock.wasm").to_str().unwrap()]);
+    assert!(installed.contains("signed by jane"), "{installed}");
+}
+
 #[test]
 fn changing_the_manifest_after_signing_is_caught() {
     // **The reason a signature covers the manifest too.** Without it, this
