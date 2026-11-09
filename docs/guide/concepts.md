@@ -73,9 +73,11 @@ its event sources with no timer at all in between. Three rules keep it honest:
 
 A widget is a `wasm32-wasip2` **component** instantiated by Wasmtime. WASI
 Preview 2 grants **no ambient authority**: the component has no files, sockets
-or environment of its own. What it can reach is uniwidged's host functions,
-and every one of them checks the grant on every call — an ungranted call
-answers `NotGranted` and does nothing.
+or environment of its own. What it can reach is uniwidged's host functions.
+Those behind a capability check the grant on every call — an ungranted call
+answers `NotGranted` and does nothing; the few that reach nothing outside the
+widget (`log`, `setting`, the image functions) need no grant and are bounded
+instead.
 
 What a widget can reach is the list in its manifest, approved by the user:
 

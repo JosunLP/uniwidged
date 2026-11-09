@@ -27,6 +27,15 @@ Every widget exports `abi-version`, and the host calls it as soon as the
 component is instantiated — before `start` and before the first view. A host
 runs every ABI from **9**, the interface 1.0 shipped with, up to its own:
 
+::: info What runs before the check
+Instantiating a component can run code of its own — a static constructor, in
+languages that have them — before `abi-version` is asked. That code runs under
+the same grants and limits as everything else the widget does, and under a deadline, so
+an incompatible widget can act within what it was granted before it is
+refused. The check protects the host from misreading a widget, not the
+widget's grants from the widget.
+:::
+
 ```text
  widget ABI      host 1.0 (runs 9…9)     host 1.x (runs 9…N)
  ──────────      ───────────────────     ───────────────────
