@@ -65,17 +65,25 @@ pub fn command(args: &[String]) -> Result<(), String> {
 
 /// Where the manifest for `component` is.
 ///
-/// `--manifest` if it was given; otherwise `<component>.toml` beside it, which
-/// is what a registry download and a published widget look like; otherwise the
-/// `widget.toml` of the crate the component was built in.
+/// `--manifest` if it was given. Otherwise, in order:
 ///
-/// The last one is the case the authoring guide's first commands produce:
-/// `cargo build` writes `target/wasm32-wasip2/release/my_widget.wasm` and puts
-/// no manifest beside it. Refusing that — the very first thing somebody runs
-/// after `uniwidged new` — sent every new author to copy a file by hand for a
-/// reason nothing explained. The search stops at the crate root, the first
-/// directory above with a `Cargo.toml` in it, so it can never wander off and
-/// find some other project's manifest. Whatever it finds is said out loud.
+/// 1. **A build in a crate's `target/` directory** takes the crate's own
+///    `widget.toml`. That is the source of truth while somebody is developing:
+///    `sign` leaves a copy beside the component for publishing, and a copy
+///    from the last signing must never shadow the manifest the author has
+///    since edited.
+/// 2. **`<component>.toml` beside it**, as named — what a registry download
+///    or a published set looks like. Checked by the name given rather than a
+///    resolved symlink, so a linked component is read with the manifest
+///    beside the link.
+/// 3. **The `widget.toml` of the crate the component sits in**, searching
+///    upward and stopping at the first directory with a `Cargo.toml`, so it
+///    never wanders into some other project's manifest.
+///
+/// The first case is the one the authoring guide's first commands produce:
+/// `cargo build` puts no manifest beside its output, and refusing that sent
+/// every new author to copy a file by hand. Whatever is found is said out
+/// loud when it is not the file beside the component.
 pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String> {
     if let Some(explicit) = crate::flag(args, "--manifest") {
         // Absolute, because `install` records it: the desktop reads the
@@ -85,13 +93,7 @@ pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String
             .canonicalize()
             .map_err(|e| format!("{explicit}: {e}"));
     }
-    // Absolute first: a bare `my_widget.wasm` run from `target/…/release/`
-    // has no ancestors to search, and `check` and `sign` are handed the path
-    // as typed.
-    let component = component
-        .canonicalize()
-        .unwrap_or_else(|_| component.to_path_buf());
-    let (found, beside) = find_manifest(&component);
+    let (found, beside) = find_manifest(component);
     match found {
         Some(path) => {
             if path != beside {
@@ -109,13 +111,37 @@ pub fn manifest_for(component: &Path, args: &[String]) -> Result<PathBuf, String
 }
 
 /// The search behind [`manifest_for`], without the printing. Answers what was
-/// found, and the path beside the component that was tried first.
+/// found, and the path beside the component as it was named.
 pub fn find_manifest(component: &Path) -> (Option<PathBuf>, PathBuf) {
-    let beside = component.with_extension("toml");
+    // Absolute for the searches upward: a bare `my_widget.wasm` run from
+    // `target/…/release/` has no ancestors to search otherwise.
+    let resolved = std::path::absolute(component).unwrap_or_else(|_| component.to_path_buf());
+    let real = component
+        .canonicalize()
+        .unwrap_or_else(|_| resolved.clone());
+    let beside = resolved.with_extension("toml");
+
+    // 1. A crate's build output: the crate's manifest, whatever lies beside.
+    for start in [&resolved, &real] {
+        for dir in start.ancestors().skip(1) {
+            if dir.file_name().is_some_and(|name| name == "target")
+                && let Some(krate) = dir.parent()
+            {
+                let manifest = krate.join("widget.toml");
+                if krate.join("Cargo.toml").is_file() && manifest.is_file() {
+                    return (Some(manifest), beside);
+                }
+            }
+        }
+    }
+
+    // 2. Beside it, as named.
     if beside.is_file() {
         return (Some(beside.clone()), beside);
     }
-    for dir in component.ancestors().skip(1) {
+
+    // 3. The crate it sits in, without leaving that crate.
+    for dir in real.ancestors().skip(1) {
         let candidate = dir.join("widget.toml");
         if candidate.is_file() {
             return (Some(candidate), beside);
@@ -314,12 +340,34 @@ mod tests {
         std::fs::write(krate.join("widget.toml"), "").unwrap();
         assert_eq!(find_manifest(&component).0, Some(krate.join("widget.toml")));
 
-        // One beside the component wins: that is what was published.
+        // A copy left beside the build by an earlier `sign` does not shadow
+        // the crate's manifest, which the author may have edited since.
         std::fs::write(release.join("hello.toml"), "").unwrap();
+        assert_eq!(find_manifest(&component).0, Some(krate.join("widget.toml")));
+
+        // Outside a build directory — a published set — the one beside wins.
+        let published = root.join("published");
+        std::fs::create_dir_all(&published).unwrap();
+        std::fs::write(published.join("hello.wasm"), b"").unwrap();
+        std::fs::write(published.join("hello.toml"), "").unwrap();
         assert_eq!(
-            find_manifest(&component).0,
-            Some(release.join("hello.toml"))
+            find_manifest(&published.join("hello.wasm")).0,
+            Some(published.join("hello.toml"))
         );
+
+        // A link is read with the manifest beside the link, not the target's.
+        #[cfg(unix)]
+        {
+            let linked = root.join("linked");
+            std::fs::create_dir_all(&linked).unwrap();
+            std::os::unix::fs::symlink(published.join("hello.wasm"), linked.join("mine.wasm"))
+                .unwrap();
+            std::fs::write(linked.join("mine.toml"), "").unwrap();
+            assert_eq!(
+                find_manifest(&linked.join("mine.wasm")).0,
+                Some(linked.join("mine.toml"))
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }

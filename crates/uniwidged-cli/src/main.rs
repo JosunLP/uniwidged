@@ -205,13 +205,18 @@ fn asks_for_help(args: &[String]) -> bool {
         "-f",
         "--follow",
     ];
-    args.iter().enumerate().any(|(i, arg)| {
-        (arg == "--help" || arg == "-h")
-            && match i.checked_sub(1).map(|p| args[p].as_str()) {
-                Some(previous) if previous.starts_with('-') => SWITCHES.contains(&previous),
-                _ => true,
-            }
-    })
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            return true;
+        }
+        // A flag that takes a value consumes the next token, whatever it is:
+        // `--config -h --help` is a file called `-h`, then a question.
+        if arg.starts_with('-') && !SWITCHES.contains(&arg.as_str()) {
+            args.next();
+        }
+    }
+    false
 }
 
 /// `uniwidged help <command>`, and `uniwidged <command> --help`.

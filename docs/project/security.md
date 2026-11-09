@@ -47,6 +47,9 @@ problem.
   grant on every call: an ungranted one answers `NotGranted` and does nothing.
   The few that reach nothing outside the widget — `log`, `setting`,
   `register_image`, `release_image` — need no grant and are bounded instead.
+  `log` is still an output: what a widget logs lands in the desktop's log,
+  which `uniwidged log` shows and people paste into bug reports. A widget can
+  log anything it can read, so treat a log as you would the widget's view.
 * **`fs`** is checked twice: textually, and again after the filesystem has
   resolved the path, because only the second sees a symlink somebody planted.
   Writes land through a rename. Per-file and per-widget quotas.

@@ -505,10 +505,12 @@ uniwidged sign target/wasm32-wasip2/release/my_widget.wasm \
     --key ~/.uniwidged-signing-key                # each release
 ```
 
-That writes `my_widget.wasm.sig` beside the component, and — when the manifest
-it signed was your crate's `widget.toml` — a copy of it as `my_widget.toml`, the
-exact bytes the signature covers. **Ship all three** side by side, and put your
-public key in your README. People install it with:
+That writes `my_widget.wasm.sig` beside the component, and a copy of your
+crate's `widget.toml` as `my_widget.toml` — the exact bytes the signature
+covers. **Ship all three** side by side, and put your public key in your
+README. Inside `target/` the crate's `widget.toml` is always the one signed and
+installed, so a copy left by an earlier signing never stands in for a manifest
+you have since edited. People install it with:
 
 ```sh
 uniwidged trust <your public key> --name "your name"

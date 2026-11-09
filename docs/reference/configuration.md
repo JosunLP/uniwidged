@@ -10,9 +10,10 @@ remembered.
 | Override | `UNIWIDGED_CONFIG=/path/to/config.toml` moves the whole directory to that file's parent — keys, data, keychain, log and the running desktop's state with it |
 
 `--config PATH`, which `run` and the commands that edit placements and
-settings accept, selects **only** the configuration file; everything else stays
-in the default directory. To keep a second desktop, or a test, entirely apart
-from yours, use `UNIWIDGED_CONFIG`.
+settings accept, selects **only** the configuration file. Everything else stays
+where it was: beside `UNIWIDGED_CONFIG` when that is set, and in the default
+directory otherwise. To keep a second desktop, or a test, entirely apart from
+yours, use `UNIWIDGED_CONFIG`.
 
 ```text
 ~/.config/uniwidged/
@@ -29,6 +30,13 @@ from yours, use `UNIWIDGED_CONFIG`.
 ```
 
 All of it is plain text where it can be, and meant to be read.
+
+::: info Widgets installed from elsewhere
+`uniwidged add` copies a widget into `store/`, so a backup carries it. A widget
+installed with `uniwidged install path/to/widget.wasm` is recorded **by path**
+and not copied: back up those files too, and keep them at the same paths or
+update `component` and `manifest` in `config.toml` after restoring.
+:::
 
 ::: warning A backup of this directory contains your widgets' secrets
 `keyring.enc` and `keyring.key` sit side by side, so anybody who can read both

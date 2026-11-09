@@ -102,16 +102,9 @@ pub fn sign(args: &[String]) -> Result<(), String> {
         signature: key.sign(&bytes, &manifest),
         key: key.public(),
     };
-    let out = signature_path(&component);
-    std::fs::write(&out, file.to_text()).map_err(|e| format!("{}: {e}", out.display()))?;
-
-    println!(
-        "  signed {} and {}",
-        component.display(),
-        manifest_path.display()
-    );
-    println!("  wrote {}", out.display());
-
+    // The manifest copy first, the signature last: if writing the copy fails,
+    // the old signature still matches the old manifest beside it, rather than
+    // a new signature sitting next to a manifest it does not cover.
     // What a user installs is three files side by side — the component, its
     // manifest and the signature — and the signature only verifies against
     // the manifest bytes it covered. When those came from the crate's
@@ -125,6 +118,15 @@ pub fn sign(args: &[String]) -> Result<(), String> {
         std::fs::write(&beside, &manifest).map_err(|e| format!("{}: {e}", beside.display()))?;
         println!("  wrote {} (the manifest it covers)", beside.display());
     }
+    let out = signature_path(&component);
+    std::fs::write(&out, file.to_text()).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!(
+        "  signed {} and {}",
+        component.display(),
+        manifest_path.display()
+    );
+    println!("  wrote {}", out.display());
+
     println!("  with  {}", key.public().to_hex());
     println!("  publish all three: the .wasm, the .toml and the .sig, side by side");
     Ok(())

@@ -55,11 +55,12 @@ this widget was built for ABI 10, which is newer than this host's 9;
 upgrading uniwidged will run it
 ```
 
-A widget built for a newer 1.x can also be stopped one step earlier. Its
-component imports the whole host interface it was built against, so if that
-includes a function this host does not have, the component **fails to link**
-and is refused with a component error naming the missing import, before
-`abi-version` can be asked. The remedy is the same: upgrade uniwidged.
+A widget built for a newer 1.x is refused in one of two ways. If it **uses** a
+host function this host does not have, its component imports that function and
+**fails to link** — refused with a component error naming the missing import,
+before `abi-version` can be asked. If it uses none of the new functions, it
+links and is refused **at the ABI check**, with the sentence above. Either way
+the remedy is the same: upgrade uniwidged.
 
 ## What may change in 1.x
 

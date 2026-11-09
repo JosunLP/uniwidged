@@ -6,15 +6,16 @@ Five minutes from nothing to your own widget on the desktop. You need
 
 ## 1. Install a widget
 
-Reference widgets live in the `widgets/` folder of the repository. If you
-installed a release package rather than building from source, get a checkout
-first:
+Reference widgets live in the `widgets/` folder of the repository. Build them
+from the release you installed, so the widget speaks the same interface as your
+host. With no checkout yet:
 
 ```sh
-git clone https://github.com/JosunLP/uniwidged
+git clone --branch v1.0.0 https://github.com/JosunLP/uniwidged
 cd uniwidged
 ```
 
+If you built `uniwidged` from source, go to the root of that checkout instead.
 Then build the clock and install it:
 
 ```sh

@@ -95,6 +95,9 @@ fn a_flag_value_that_looks_like_help_is_still_a_value() {
     // printing its help and claiming success.
     let (_, said) = uniwidged(&["list", "--config", "-h"]);
     assert!(!said.starts_with("uniwidged list — "), "{said}");
+    // A value consumed, and then a question: help, and nothing run.
+    let (ok, said) = uniwidged(&["remove", "clock", "--config", "-h", "--help"]);
+    assert!(ok && said.starts_with("uniwidged remove — "), "{said}");
     // After a switch, though, it is a question.
     let (ok, said) = uniwidged(&["list", "--names", "--help"]);
     assert!(ok && said.starts_with("uniwidged list — "), "{said}");

@@ -48,7 +48,7 @@ And, if you touched a widget in `widgets/`, in that widget's directory:
 
 ```sh
 cargo fmt --check && RUSTFLAGS="-D warnings" cargo clippy --all-targets && cargo test
-cargo build --release --target wasm32-wasip2
+RUSTFLAGS="-D warnings" cargo build --release --target wasm32-wasip2
 ```
 
 ### Golden images

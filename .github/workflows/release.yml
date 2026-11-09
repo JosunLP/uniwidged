@@ -61,18 +61,25 @@ jobs:
         run: |
           set -eu
           version=${GITHUB_REF_NAME#v}
+          # The section runs to the next level-two heading — outside a fenced
+          # block, so an example containing `## ` does not cut it short.
           awk -v v="$version" '
             index($0, "## " v " ") == 1 { on = 1; next }
-            on && /^## / { exit }
+            on && /^(```|~~~)/ { fenced = !fenced }
+            on && !fenced && /^## / { exit }
             on { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          # A heading with nothing under it is no release notes at all.
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || {
+            echo "CHANGELOG.md has an empty section for $version" >&2
+            exit 1
+          }
           {
             echo
             echo "---"
             echo "The \`.deb\` is built by \`packaging/deb/build.sh\` and checked the way CI checks it;"
             echo "\`SHA256SUMS\` is its checksum. Documentation: https://josunlp.github.io/uniwidged/"
           } >> "$RUNNER_TEMP/notes.md"
-          [ -s "$RUNNER_TEMP/notes.md" ]
       - name: the release
         uses: softprops/action-gh-release@v2
         with:
