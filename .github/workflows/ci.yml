@@ -277,41 +277,32 @@ jobs:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets
-      # Where a D3D12 crash on the runner's WARP device comes from: each of the
-      # renderer's tests on its own, then the first that crashes under cdb for
-      # a native stack. Informational; the step after it has to pass.
-      - name: the renderer's own tests, one at a time, and a stack for a crash
-        continue-on-error: true
+      # The runner has no GPU, so D3D12 is WARP. WARP's own JIT faults
+      # compiling vello's compute shaders from FXC's DXBC (an access violation
+      # in d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets, the
+      # system WARP and the current NuGet one alike), so the suite renders
+      # through DXC and DXIL instead — what wgpu's own CI does on WARP.
+      # `WGPU_DX12_COMPILER=dxc` makes a missing DLL an error, not a quiet
+      # fall back to FXC.
+      - name: DXC, the shader compiler WARP can run vello through
         shell: pwsh
         run: |
-          $exe = (cargo test -p uniwidged-render --lib --no-run --message-format=json |
-            ForEach-Object { $_ | ConvertFrom-Json } |
-            Where-Object { $_.executable } | Select-Object -Last 1).executable
-          $crashed = $null
-          foreach ($t in (& $exe --list --format=terse | ForEach-Object { $_ -replace ': test$', '' })) {
-            & $exe --exact $t --test-threads=1 *> $null
-            "$t -> $LASTEXITCODE"
-            if ($LASTEXITCODE -lt 0 -and -not $crashed) { $crashed = $t }
-          }
-          $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($crashed -and $cdb) {
-            # The symbol path goes in -y: `.sympath` would read every `;` after it as
-            # another directory.
-            & $cdb.FullName -lines -y "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols" -c "g;.echo ==== CRASH;r;kb 80;!analyze -v;q" $exe --exact $crashed --test-threads=1
-          } else { "crashed: $crashed; cdb: $cdb" }
-          # The same tests against a current WARP, the one wgpu's own CI uses,
-          # loaded from beside the executable instead of System32's.
-          Invoke-WebRequest https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP/1.0.13 -OutFile "$env:RUNNER_TEMP\warp.zip"
-          Expand-Archive "$env:RUNNER_TEMP\warp.zip" "$env:RUNNER_TEMP\warp" -Force
-          Copy-Item "$env:RUNNER_TEMP\warp\build\native\bin\x64\d3d10warp.dll" (Split-Path $exe)
-          foreach ($t in (& $exe --list --format=terse | ForEach-Object { $_ -replace ': test$', '' })) {
-            & $exe --exact $t --test-threads=1 *> $null
-            "newer WARP: $t -> $LASTEXITCODE"
-          }
-          Remove-Item (Join-Path (Split-Path $exe) d3d10warp.dll)
+          $api = 'https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases'
+          $auth = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+          # wgpu needs v1.8.2502 or later; this one, or the latest if it is gone.
+          try { $release = Invoke-RestMethod "$api/tags/v1.8.2505" -Headers $auth }
+          catch { $release = Invoke-RestMethod "$api/latest" -Headers $auth }
+          "DXC $($release.tag_name)"
+          $asset = $release.assets | Where-Object { $_.name -match '^dxc_.*\.zip$' } | Select-Object -First 1
+          Invoke-WebRequest $asset.browser_download_url -OutFile "$env:RUNNER_TEMP\dxc.zip"
+          Expand-Archive "$env:RUNNER_TEMP\dxc.zip" "$env:RUNNER_TEMP\dxc" -Force
+          "$env:RUNNER_TEMP\dxc\bin\x64" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: cargo test --workspace --no-fail-fast
         env:
           UNIWIDGED_REQUIRE_WIN32: "1"
+          WGPU_DX12_COMPILER: dxc
       - run: dotnet tool install --global wix --version 5.0.2
       - name: the installer
         shell: pwsh

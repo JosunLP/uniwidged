@@ -89,6 +89,13 @@ platforms.
   Animation as premultiplied; the blit now premultiplies there, where it would
   otherwise have drawn every translucent pixel too bright.
 
+### Known limitations
+
+* **Windows with no GPU** — a virtual machine, a remote session — has only
+  WARP, whose shader compiler faults on the compute shaders uniwidged renders
+  with when FXC compiled them. With DXC's `dxcompiler.dll` beside
+  `uniwidged.exe` it renders; CI renders that way. See troubleshooting.
+
 ## 1.0.0 — 2026-11-09
 
 **The first stable release.** The widget interface is frozen, the

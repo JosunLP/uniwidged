@@ -9,7 +9,7 @@ start-up and says which it chose; on the other two there is only one.
 | | |
 |---|---|
 | A compositor | **Wayland:** one that implements `wlr-layer-shell` — sway, Hyprland, river, labwc, KDE Plasma, Wayfire and others. **X11:** any window manager with a compositing manager running, for per-pixel alpha. **Windows and macOS:** always there (DWM, the window server). |
-| A GPU | **Linux:** anything with a Vulkan, OpenGL ES or GL driver that wgpu supports; a software driver (lavapipe) works too. **Windows:** a DirectX 12 adapter — WARP, the software one every Windows has, counts. **macOS:** Metal, which every supported Mac has. |
+| A GPU | **Linux:** anything with a Vulkan, OpenGL ES or GL driver that wgpu supports; a software driver (lavapipe) works too. **Windows:** a DirectX 12 adapter; WARP, the software one every Windows has, needs DXC beside the binary — see [troubleshooting](./troubleshooting#windows-without-a-gpu-the-desktop-exits-as-soon-as-it-draws). **macOS:** Metal, which every supported Mac has. |
 | Fonts | Whatever fontconfig finds. The host uses your session's fonts. |
 
 Not sure what your session offers? After installing, run:

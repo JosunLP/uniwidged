@@ -82,8 +82,7 @@ pub enum RenderError {
 /// What to do about a missing adapter, for the backend this platform uses.
 #[cfg(target_os = "windows")]
 const NO_ADAPTER_HINT: &str = "uniwidged draws through Direct3D 12, which Windows 10 and later \
-     provide (WARP, its software rasteriser, included); check `dxdiag`, and that \
-     `WGPU_BACKEND` is unset or names dx12";
+     provide; check `dxdiag`, and that `WGPU_BACKEND` is unset or names dx12";
 #[cfg(target_os = "macos")]
 const NO_ADAPTER_HINT: &str = "uniwidged draws through Metal, which every supported Mac has; \
      check that `WGPU_BACKEND` is unset or names metal";
