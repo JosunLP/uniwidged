@@ -55,7 +55,7 @@ pub const COMMANDS: &[Command] = &[
         name: "run",
         summary: "start the desktop in the foreground",
         takes: Takes::Nothing,
-        flags: &[],
+        flags: &["--background"],
     },
     Command {
         name: "new",

@@ -9,13 +9,15 @@
 //!
 //! ## The SDK dependency
 //!
-//! `uniwidged-guest` is not on crates.io, so a generated widget reaches it
-//! either by path or by git. When `new` is run inside a checkout it finds one
-//! and uses it by path, which is what somebody working on uniwidged itself
-//! wants; when it is run anywhere else it depends on this repository **at the
-//! tag of the binary that wrote it**, so a scaffold written by 1.0.0 builds
-//! against the 1.0.0 SDK on any machine with network access and nothing else
-//! arranged. `--sdk <path>` settles it explicitly. Guessing silently — or
+//! From 1.1 the SDK is on crates.io, so a scaffold written by a released
+//! binary depends on it **by version** — `uniwidged-guest = "1.1"`, the
+//! major and minor of the binary that wrote it — which is what any other Rust
+//! dependency looks like and what `cargo` can resolve with nothing arranged.
+//! When `new` is run inside a checkout it finds one and uses it by path, which
+//! is what somebody working on uniwidged itself wants. A pre-release binary
+//! (`1.2.0-dev`) is a build from between releases whose version is on no
+//! registry yet, so it follows this repository's `main` by git instead.
+//! `--sdk <path>` settles it explicitly. Guessing silently — or
 //! writing a path that does not exist — would produce a project whose first
 //! `cargo build` fails for a reason nothing in it explains.
 
@@ -23,30 +25,33 @@ use std::path::{Path, PathBuf};
 
 use uniwidged_runtime::manifest::Manifest;
 
-/// Where a generated widget gets the SDK from.
-/// Where the SDK is published from, and the tag this binary was released as.
+/// Where the SDK's source lives, for a build from between releases.
 const REPOSITORY: &str = "https://github.com/JosunLP/uniwidged";
-const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
-/// Which revision of the SDK a scaffold outside a checkout depends on.
-///
-/// A release's tag, which the release workflow refuses to publish without —
-/// so every released binary names a tag that exists. A pre-release version
-/// (`1.1.0-dev`, `2.0.0-rc.1`) is a build from between releases, whose tag may
-/// not exist yet, and it follows `main` instead: newer than any tag, and
-/// never missing.
-fn git_reference() -> String {
-    if env!("CARGO_PKG_VERSION").contains('-') {
-        "branch = \"main\"".to_string()
-    } else {
-        format!("tag = \"{TAG}\"")
+/// `1.1` for a 1.1.x binary: what a scaffold asks crates.io for. A caret
+/// requirement, so a widget written today picks up every 1.x SDK — which the
+/// ABI promise is what makes safe — and never 2.0.
+fn registry_requirement() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut parts = version.split('.');
+    match (parts.next(), parts.next()) {
+        (Some(major), Some(minor)) => format!("{major}.{minor}"),
+        _ => version.to_string(),
     }
 }
 
+/// Whether this binary is a release, whose version is on crates.io.
+fn is_release() -> bool {
+    !env!("CARGO_PKG_VERSION").contains('-')
+}
+
+/// Where a generated widget gets the SDK from.
 enum Sdk {
     /// A checkout, found by walking up from here.
     Checkout(PathBuf),
-    /// No checkout nearby: this repository, by git, at this binary's tag.
+    /// No checkout nearby, and a released binary: crates.io, by version.
+    Registry,
+    /// No checkout nearby, and a build from between releases: `main`, by git.
     Git,
 }
 
@@ -79,48 +84,67 @@ impl Sdk {
                 }
             }
         }
-        Sdk::Git
+        if is_release() {
+            Sdk::Registry
+        } else {
+            Sdk::Git
+        }
     }
 
     /// The `[dependencies]` block for a widget at `widget_dir`.
     fn dependencies(&self, widget_dir: &Path) -> String {
         match self {
             Sdk::Checkout(crates) => {
+                // Quoted by the TOML writer rather than by hand: an absolute
+                // Windows path is full of backslashes, and inside a basic
+                // string each one starts an escape — `D:\a\uniwidged` is not
+                // a path Cargo can read. Found by the scaffold test on the
+                // Windows runner, where the checkout and the temporary
+                // directory are on different drives and there is no relative
+                // path to fall back on.
                 let relative = |name: &str| {
                     let target = crates.join(name);
-                    relative_path(widget_dir, &target)
-                        .unwrap_or_else(|| target.display().to_string())
+                    let path = relative_path(widget_dir, &target)
+                        .unwrap_or_else(|| target.display().to_string());
+                    toml::Value::String(path).to_string()
                 };
                 format!(
-                    "uniwidged-guest = {{ path = \"{}\" }}\n\
-                     uniwidged-core = {{ path = \"{}\" }}\n\
-                     uniwidged-view = {{ path = \"{}\" }}\n",
+                    "uniwidged-guest = {{ path = {} }}\n\
+                     uniwidged-core = {{ path = {} }}\n\
+                     uniwidged-view = {{ path = {} }}\n",
                     relative("uniwidged-guest"),
                     relative("uniwidged-core"),
                     relative("uniwidged-view"),
                 )
             }
             // The version this binary was built from, so a scaffold written by
-            // 1.3 asks for 1.3 rather than for whatever was typed here once —
-            // and a tag rather than a branch, so the build is the same one
-            // next year.
-            Sdk::Git => {
-                let reference = git_reference();
+            // 1.3 asks for 1.3 rather than for whatever was typed here once.
+            Sdk::Registry => {
+                let version = registry_requirement();
                 format!(
-                    "# The SDK, at the release this scaffold was written by. A path to a\n\
-                     # checkout works too:  path = \"/path/to/uniwidged/crates/uniwidged-guest\"\n\
-                     uniwidged-guest = {{ git = \"{REPOSITORY}\", {reference} }}\n\
-                     uniwidged-core = {{ git = \"{REPOSITORY}\", {reference} }}\n\
-                     uniwidged-view = {{ git = \"{REPOSITORY}\", {reference} }}\n"
+                    "# The SDK, from crates.io, at the release this scaffold was written\n\
+                     # by or any later 1.x. A path to a checkout works too:\n\
+                     #   uniwidged-guest = {{ path = \"/path/to/uniwidged/crates/uniwidged-guest\" }}\n\
+                     uniwidged-guest = \"{version}\"\n\
+                     uniwidged-core = \"{version}\"\n\
+                     uniwidged-view = \"{version}\"\n"
                 )
             }
+            Sdk::Git => format!(
+                "# The SDK from `main`: this scaffold was written by a build from\n\
+                 # between releases, whose version is on no registry yet.\n\
+                 uniwidged-guest = {{ git = \"{REPOSITORY}\", branch = \"main\" }}\n\
+                 uniwidged-core = {{ git = \"{REPOSITORY}\", branch = \"main\" }}\n\
+                 uniwidged-view = {{ git = \"{REPOSITORY}\", branch = \"main\" }}\n"
+            ),
         }
     }
 
     fn describe(&self) -> String {
         match self {
             Sdk::Checkout(crates) => format!("the SDK at {}", crates.display()),
-            Sdk::Git => format!("the SDK from {REPOSITORY} ({})", git_reference()),
+            Sdk::Registry => format!("the SDK from crates.io ({})", registry_requirement()),
+            Sdk::Git => format!("the SDK from {REPOSITORY} (main)"),
         }
     }
 }
@@ -487,6 +511,30 @@ fn readme(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_released_binary_asks_crates_io_for_its_own_minor() {
+        let requirement = registry_requirement();
+        let mut ours = env!("CARGO_PKG_VERSION").split('.');
+        assert_eq!(
+            requirement,
+            format!("{}.{}", ours.next().unwrap(), ours.next().unwrap())
+        );
+        let block = Sdk::Registry.dependencies(Path::new("/tmp/w"));
+        assert!(block.contains(&format!("uniwidged-guest = \"{requirement}\"")));
+        assert!(!block.contains("git ="), "{block}");
+    }
+
+    #[test]
+    fn a_checkout_on_another_drive_is_written_as_a_toml_string_cargo_can_read() {
+        // What the Windows runner produces: no relative path between two
+        // drives, so the absolute one is written, backslashes and all.
+        let crates = PathBuf::from(r"D:\a\uniwidged\crates");
+        let block = Sdk::Checkout(crates).dependencies(Path::new(r"C:\Temp\demo"));
+        let parsed: toml::Table = toml::from_str(&block).expect("the block is valid TOML");
+        let guest = parsed["uniwidged-guest"]["path"].as_str().expect("a path");
+        assert!(guest.ends_with("uniwidged-guest"), "{guest}");
+    }
 
     #[test]
     fn a_relative_path_climbs_out_and_back_in() {

@@ -311,6 +311,11 @@ fn the_alpha_conversion_follows_the_surface_mode() {
     assert_eq!(C::for_mode(M::PreMultiplied), C::Premultiply);
     assert_eq!(C::for_mode(M::Auto), C::Premultiply);
     assert_eq!(C::for_mode(M::Inherit), C::Premultiply);
+    // Core Animation composites every layer premultiplied, whatever wgpu's
+    // Metal backend calls the mode — see `blit::AlphaConversion::for_mode`.
+    #[cfg(target_os = "macos")]
+    assert_eq!(C::for_mode(M::PostMultiplied), C::Premultiply);
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(C::for_mode(M::PostMultiplied), C::Straight);
     assert_eq!(C::for_mode(M::Opaque), C::Straight);
 }

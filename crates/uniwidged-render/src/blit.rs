@@ -40,9 +40,17 @@ impl AlphaConversion {
             // `Auto` and `Inherit` leave the platform to decide, and every
             // platform this runs on decides premultiplied.
             wgpu::CompositeAlphaMode::Auto | wgpu::CompositeAlphaMode::Inherit => Self::Premultiply,
-            wgpu::CompositeAlphaMode::PostMultiplied | wgpu::CompositeAlphaMode::Opaque => {
-                Self::Straight
-            }
+            // `CAMetalLayer` is the exception, and it is a naming one. wgpu's
+            // Metal backend offers only `Opaque` and `PostMultiplied`, and
+            // "post-multiplied" there means nothing more than `opaque = NO` on
+            // the layer — Core Animation composites every layer as
+            // premultiplied, whatever wgpu calls it. Copying straight alpha
+            // through would be the too-bright glass this file exists to stop.
+            #[cfg(target_os = "macos")]
+            wgpu::CompositeAlphaMode::PostMultiplied => Self::Premultiply,
+            #[cfg(not(target_os = "macos"))]
+            wgpu::CompositeAlphaMode::PostMultiplied => Self::Straight,
+            wgpu::CompositeAlphaMode::Opaque => Self::Straight,
         }
     }
 

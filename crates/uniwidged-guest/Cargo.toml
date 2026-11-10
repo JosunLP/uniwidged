@@ -9,6 +9,14 @@ homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
 description = "The SDK widget authors write against. Compiles to wasm32-wasip2."
+readme = "README.md"
+keywords = ["widget", "desktop", "wasm", "component-model", "sdk"]
+categories = ["gui", "wasm", "api-bindings"]
+# The interface is vendored *into this crate* — `wit/uniwidged.wit` — because
+# a package on crates.io cannot reach a file outside its own directory. It is
+# a byte-for-byte copy of the workspace's `wit/uniwidged.wit`, and
+# `uniwidged-runtime`'s tests fail if the two ever differ.
+include = ["src/**/*.rs", "wit/uniwidged.wit", "README.md"]
 
 [dependencies]
 uniwidged-core.workspace = true

@@ -332,11 +332,16 @@ fn anything_that_is_not_the_aggregate_line_is_refused() {
 #[test]
 fn a_load_is_a_fraction_and_a_second_reading_is_stable() {
     let sampler = Counters::new();
-    let Ok(first) = sampler.cpu_load() else {
-        // Not Linux. The refusal is the documented answer, and it carries a
+    let first = match sampler.cpu_load() {
+        Ok(first) => first,
+        // Linux, macOS and Windows all read CPU counters, so a refusal there
+        // is a bug rather than a platform without one.
+        Err(why) if cfg!(any(target_os = "linux", target_os = "macos", windows)) => {
+            panic!("this platform should read CPU counters: {why}")
+        }
+        // Elsewhere the refusal is the documented answer, and it carries a
         // reason rather than a zero a widget would draw as an idle machine.
-        assert!(sampler.cpu_load().is_err());
-        return;
+        Err(_) => return,
     };
     assert!(
         (0.0..=1.0).contains(&first),
@@ -462,6 +467,13 @@ fn a_command_gets_almost_no_environment() {
         .lines()
         .filter_map(|line| line.split('=').next())
         .filter(|name| !name.is_empty())
+        .collect();
+    // On Windows `env` is Git's, and the MSYS runtime it starts on gives
+    // itself a `HOME` and a `TERM` when it finds none. Those are the child's
+    // own, not anything this process handed over.
+    let names: Vec<&str> = names
+        .into_iter()
+        .filter(|name| !(cfg!(windows) && matches!(*name, "HOME" | "TERM")))
         .collect();
     assert_eq!(
         names,
@@ -670,6 +682,10 @@ fn an_ordinary_write_does_not_walk_the_directory() {
         std::fs::set_permissions(&root, readable).expect("restore");
         wrote.expect("a write under quota should not need a walk");
     }
+    // Nowhere to make a directory unlistable: the write, at least, lands.
+    #[cfg(not(unix))]
+    dir.write("second", &[0u8; 100])
+        .expect("a write under quota lands");
     assert_eq!(dir.used_bytes(), Ok(200));
 }
 

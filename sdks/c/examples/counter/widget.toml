@@ -1,0 +1,15 @@
+# The C SDK's example. It asks for nothing: drawing, clicking, its own settings
+# and the log need no capability.
+name = "c-counter"
+version = "1.0.0"
+description = "Counts clicks — a widget written in C"
+capabilities = []
+memory-mb = 8
+
+[[setting]]
+key = "start"
+label = "Start counting from"
+type = "number"
+default = 0
+min = 0
+max = 1000

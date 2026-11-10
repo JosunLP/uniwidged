@@ -37,9 +37,43 @@ wayland-client = { version = "0.31", features = ["dlopen"] }
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-# For `poll` on the X11 connection: blocking with a timeout is what makes an
-# idle desktop cost nothing, and there is no portable std equivalent.
+
+[target.'cfg(unix)'.dependencies]
+# `pipe`, `read`, `write` and `poll` for the wake pipe — see `wake`.
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+block2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSDate",
+    "NSGeometry",
+    "NSNotification",
+    "NSObjCRuntime",
+    "NSOperation",
+    "NSRunLoop",
+    "NSString",
+    "block2",
+] }
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSColor",
+    "NSEvent",
+    "NSGraphics",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSVisualEffectView",
+    "NSWindow",
+    "objc2-quartz-core",
+] }
+objc2-quartz-core = { workspace = true, features = ["CALayer", "CAMetalLayer", "objc2-core-foundation"] }
 
 [dev-dependencies]
 # What turns the feature above on for tests, and only for tests.
@@ -48,6 +82,12 @@ uniwidged-shell = { path = ".", features = ["test-support"] }
 # a copy of it — a measurement of a reimplementation measures the
 # reimplementation.
 uniwidged-host.workspace = true
+# The Windows and macOS suites put a real swapchain on a widget window and read
+# back what it can blend — the one way to measure "the wallpaper shows through
+# its glass" rather than assert it.
+uniwidged-render.workspace = true
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dev-dependencies]
 # `tests/wayland_input.rs` creates a `zwlr_virtual_pointer_v1` — a mouse that
 # does not exist — because headless sway has no input device and there is
 # otherwise nothing to move. Test-only: nothing that ships synthesises input,
@@ -57,3 +97,9 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # `xtest` fakes pointer input, which is the only way to measure a drag rather
 # than assert one. Test-only: nothing that ships synthesises input.
 x11rb = { workspace = true, features = ["xtest"] }
+
+# AppKit is driven from the main thread, and libtest gives every test a thread
+# of its own — so this suite is a plain `main`. It does nothing off macOS.
+[[test]]
+name = "appkit_desktop"
+harness = false

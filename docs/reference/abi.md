@@ -12,13 +12,13 @@ grow, and it will never shrink or change, before 2.0.
 
 | Number | What it versions | Where you see it |
 |---|---|---|
-| **uniwidged** `1.0.0` | The binary, the host crates and the SDK, together. Semantic versioning. | `uniwidged --version`, `Cargo.toml`, the release tag |
+| **uniwidged** `1.1.0` | The binary, the host crates and the SDK, together. Semantic versioning. | `uniwidged --version`, `Cargo.toml`, the release tag |
 | **Widget ABI** `9` | The interface between host and widget. One integer, raised with every addition. | `uniwidged --version`, `uniwidged_guest::ABI_VERSION` |
 | **Widget version** | Your widget, in its manifest. Semantic versioning; orders registry updates. | `widget.toml` |
 
 ```sh
 $ uniwidged --version
-uniwidged 1.0.0 (widget ABI 9)
+uniwidged 1.1.0 (widget ABI 9)
 ```
 
 ## How the check works

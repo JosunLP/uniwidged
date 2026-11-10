@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the hardened runtime has to allow for uniwidged to do its job, and
+  nothing else.
+
+  Wasmtime compiles each widget to machine code when it is installed into the
+  desktop, and maps that code executable. The hardened runtime forbids writable
+  memory becoming executable unless the binary says it needs to, so it says so
+  here. That is the whole list: no network client entitlement (that is the App
+  Sandbox's, which this is not in), no library validation exception, no
+  debugger.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 # 1.95 because the Wasmtime 48.x releases that fix its 2026 security advisories
 # (see `cargo deny`) need it, and this process runs other people's code.
@@ -61,6 +61,39 @@ raw-window-handle = "0.6.2"
 # reports outputs by *name*, and a name is the only identifier that does not
 # renumber when the hardware changes.
 x11rb = { version = "0.14", features = ["allow-unsafe-code", "randr"] }
+
+# Windows and macOS, called directly rather than through a toolkit, for the
+# reason above: the flags that make a window a widget are the ones toolkits
+# abstract away. Both are already in the graph through wgpu (`windows-sys` via
+# its DX12 backend's dependencies, `objc2` via Metal), so they cost the build
+# almost nothing; `objc2-app-kit` is the one crate new to it.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-quartz-core = "0.3"
 
 # --- WASM guests ----------------------------------------------------------
 wasmtime = { version = "48.0.8", default-features = false, features = [
@@ -120,14 +153,14 @@ toml = "0.9"
 # from elsewhere and how.
 
 # --- Internal crates ------------------------------------------------------
-uniwidged-core = { path = "crates/uniwidged-core", version = "1.0.0" }
-uniwidged-view = { path = "crates/uniwidged-view", version = "1.0.0" }
-uniwidged-compose = { path = "crates/uniwidged-compose", version = "1.0.0" }
-uniwidged-render = { path = "crates/uniwidged-render", version = "1.0.0" }
-uniwidged-shell = { path = "crates/uniwidged-shell", version = "1.0.0" }
-uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "1.0.0" }
-uniwidged-guest = { path = "crates/uniwidged-guest", version = "1.0.0" }
-uniwidged-host = { path = "crates/uniwidged-host", version = "1.0.0" }
+uniwidged-core = { path = "crates/uniwidged-core", version = "1.1.0" }
+uniwidged-view = { path = "crates/uniwidged-view", version = "1.1.0" }
+uniwidged-compose = { path = "crates/uniwidged-compose", version = "1.1.0" }
+uniwidged-render = { path = "crates/uniwidged-render", version = "1.1.0" }
+uniwidged-shell = { path = "crates/uniwidged-shell", version = "1.1.0" }
+uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "1.1.0" }
+uniwidged-guest = { path = "crates/uniwidged-guest", version = "1.1.0" }
+uniwidged-host = { path = "crates/uniwidged-host", version = "1.1.0" }
 
 # The host is an always-on desktop process. Size and steady-state cost matter
 # more than throughput, but not at the price of the render path — hence `s`

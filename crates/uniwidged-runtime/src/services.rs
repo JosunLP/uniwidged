@@ -775,9 +775,14 @@ fn read_cpu_counters() -> Result<(u64, u64), String> {
     parse_cpu_line(line).ok_or_else(|| format!("/proc/stat begins with {line:?}"))
 }
 
+#[cfg(any(target_os = "macos", windows))]
+fn read_cpu_counters() -> Result<(u64, u64), String> {
+    crate::native::cpu()
+}
+
 /// Platforms whose counters are not wired up say so rather than answering
 /// zero, which a widget would draw as an idle machine.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn read_cpu_counters() -> Result<(u64, u64), String> {
     Err(format!(
         "this host reads no CPU counters on {}",
@@ -860,7 +865,12 @@ fn read_memory_counters() -> Result<(u64, u64), String> {
     parse_meminfo(&meminfo).ok_or_else(|| "/proc/meminfo has no MemTotal and MemAvailable".into())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", windows))]
+fn read_memory_counters() -> Result<(u64, u64), String> {
+    crate::native::memory()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn read_memory_counters() -> Result<(u64, u64), String> {
     Err(format!(
         "this host reads no memory counters on {}",

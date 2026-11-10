@@ -54,16 +54,13 @@ mod autostart;
 mod check;
 mod completions;
 mod configure;
-#[cfg(unix)]
 mod daemon;
 mod install;
 mod log;
 mod new;
 mod paths;
 mod registry;
-#[cfg(all(unix, not(target_os = "macos")))]
 mod run;
-#[cfg(unix)]
 mod state;
 mod trust;
 
@@ -215,6 +212,7 @@ fn read_options(command: &completions::Command, args: &[String]) -> Result<bool,
         "--reset-all",
         "-f",
         "--follow",
+        "--background",
     ];
     let mut unknown = None;
     let mut args = args.iter();
@@ -293,33 +291,20 @@ pub(crate) fn config_path(args: &[String]) -> PathBuf {
 }
 
 fn command_run(args: &[String]) -> Result<(), String> {
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        run::run(&config_path(args))
+    // Started by the session rather than by a person: on Windows the binary is
+    // a console program, and a console window open on the desktop for as long
+    // as the widgets are is not something anybody asked for. Everything a
+    // desktop says still reaches the log. See `autostart`.
+    #[cfg(windows)]
+    if args.iter().any(|a| a == "--background") {
+        // SAFETY: detaches this process from its console, if it has one.
+        unsafe { windows_sys::Win32::System::Console::FreeConsole() };
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
-    {
-        let _ = args;
-        Err("this build has no shell for the current platform yet — \
-             Windows is milestone M5 and macOS is M6, see ROADMAP.md"
-            .into())
-    }
+    run::run(&config_path(args))
 }
 
 fn command_reload(args: &[String]) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        daemon::command(args)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = args;
-        Err(
-            "telling a running desktop to reload is a Unix signal, and this \
-             build has no equivalent yet — see ROADMAP.md"
-                .into(),
-        )
-    }
+    daemon::command(args)
 }
 
 /// Tells a running desktop that the configuration it read has changed.
@@ -327,7 +312,6 @@ fn command_reload(args: &[String]) -> Result<(), String> {
 /// Called by every command that writes one. Quiet when there is no desktop:
 /// most of the time there is not, and a line every time would be noise.
 pub(crate) fn nudge_desktop() {
-    #[cfg(unix)]
     daemon::nudge_quietly();
 }
 
@@ -353,10 +337,7 @@ fn command_list(args: &[String]) -> Result<(), String> {
     // and a widget that is enabled here and missing there is exactly the case
     // somebody running this is trying to explain. `None` when no desktop is
     // running, which is most of the time and is not worth a word.
-    #[cfg(unix)]
     let running = state::current().ok().flatten();
-    #[cfg(not(unix))]
-    let running: Option<()> = None;
     for widget in &config.widgets {
         let placement = &widget.placement;
         println!(
@@ -392,7 +373,6 @@ fn command_list(args: &[String]) -> Result<(), String> {
 /// noise. `not running` only for a widget the file says is *enabled*: a
 /// disabled one is already labelled, and saying both would be saying the same
 /// thing twice.
-#[cfg(unix)]
 fn live(running: Option<&state::State>, name: &str, enabled: bool) -> String {
     let Some(state) = running else {
         return String::new();
@@ -406,11 +386,6 @@ fn live(running: Option<&state::State>, name: &str, enabled: bool) -> String {
     }
 }
 
-#[cfg(not(unix))]
-fn live(_running: Option<&()>, _name: &str, _enabled: bool) -> String {
-    String::new()
-}
-
 /// `uniwidged status` — what is on the screen right now.
 ///
 /// The question `list` cannot answer, because `list` reads a file that says
@@ -418,7 +393,6 @@ fn live(_running: Option<&()>, _name: &str, _enabled: bool) -> String {
 /// what it managed to do — which widget is drawing, which one it has given up
 /// on, where each of them actually is, and what kind of surface this session
 /// gave it.
-#[cfg(unix)]
 fn command_status(_args: &[String]) -> Result<(), String> {
     let state = match state::current()? {
         Some(state) => state,
@@ -458,15 +432,6 @@ fn command_status(_args: &[String]) -> Result<(), String> {
     }
     println!("\n  what it has been saying: `uniwidged log`");
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn command_status(_args: &[String]) -> Result<(), String> {
-    Err(
-        "a running desktop records itself through a pid file, and this build \
-         has no equivalent yet — see ROADMAP.md"
-            .into(),
-    )
 }
 
 /// Pins a widget where it is, or lets it be dragged again.
@@ -699,12 +664,7 @@ fn command_remove(args: &[String]) -> Result<(), String> {
 
 fn command_doctor() -> Result<(), String> {
     println!("uniwidged doctor\n");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        run::doctor();
-    }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
-    println!("  no shell for this platform yet — see ROADMAP.md");
+    run::doctor();
 
     // The renderer is platform-independent, so it can always be asked.
     match uniwidged_render::Renderer::new() {

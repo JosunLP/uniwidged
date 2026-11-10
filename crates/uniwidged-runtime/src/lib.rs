@@ -44,6 +44,8 @@ pub mod keyring;
 pub mod limits;
 pub mod machine;
 pub mod manifest;
+#[cfg(any(target_os = "macos", windows))]
+mod native;
 pub mod net;
 pub mod registry;
 pub mod services;

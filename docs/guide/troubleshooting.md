@@ -84,6 +84,16 @@ and asks.
 uniwidged before believing it. If a desktop was killed outright, the next
 `run` takes over cleanly.
 
+## Windows without a GPU: the desktop exits as soon as it draws
+
+A virtual machine or a remote session with no GPU gives Direct3D 12 only WARP,
+Windows' software rasteriser. WARP's own shader compiler faults on the compute
+shaders uniwidged renders with when they come from FXC, the compiler Windows
+ships. Put DXC's `dxcompiler.dll` (v1.8.2502 or later, from
+[DirectXShaderCompiler's releases](https://github.com/microsoft/DirectXShaderCompiler/releases),
+`bin\x64`) beside `uniwidged.exe`: uniwidged uses it when it is there, and WARP
+runs what it produces. That is how the project's own CI renders on Windows.
+
 ## Still stuck?
 
 Open an issue with the output of `uniwidged --version`, `uniwidged doctor` and

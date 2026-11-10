@@ -9,6 +9,8 @@ homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
 description = "Core types for uniwidged: geometry, colour, ids, input events and the wake model."
+keywords = ["widget", "desktop", "wasm"]
+categories = ["gui"]
 
 [dependencies]
 kurbo.workspace = true

@@ -6,7 +6,7 @@
 //! which is the difference between a framework people try and one they do not.
 
 wit_bindgen::generate!({
-    path: "../../wit",
+    path: "wit",
     world: "widget",
     pub_export_macro: true,
 });

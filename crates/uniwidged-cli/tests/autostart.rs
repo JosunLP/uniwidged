@@ -10,6 +10,12 @@
 //! a machine outside uniwidged's own configuration, so the interesting cases
 //! are the ones where it stops.
 
+// XDG autostart, which is Linux's. On macOS and Windows the entry is a
+// LaunchAgent or a `Run` value outside any directory a test can redirect, so
+// running this there would write the real one; their formats are unit-tested
+// in `src/autostart.rs` instead.
+#![cfg(all(unix, not(target_os = "macos")))]
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 

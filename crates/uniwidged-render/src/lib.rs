@@ -79,14 +79,23 @@ pub enum RenderError {
     NoSuchSurface(SurfaceId),
 }
 
+/// What to do about a missing adapter, for the backend this platform uses.
+#[cfg(target_os = "windows")]
+const NO_ADAPTER_HINT: &str = "uniwidged draws through Direct3D 12, which Windows 10 and later \
+     provide; check `dxdiag`, and that `WGPU_BACKEND` is unset or names dx12";
+#[cfg(target_os = "macos")]
+const NO_ADAPTER_HINT: &str = "uniwidged draws through Metal, which every supported Mac has; \
+     check that `WGPU_BACKEND` is unset or names metal";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const NO_ADAPTER_HINT: &str =
+    "install a Vulkan driver (mesa-vulkan-drivers provides a software one)";
+
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RenderError::NoAdapter(why) => write!(
-                f,
-                "no GPU or software adapter: {why} — install a Vulkan driver \
-                 (mesa-vulkan-drivers provides a software one)"
-            ),
+            RenderError::NoAdapter(why) => {
+                write!(f, "no GPU or software adapter: {why} — {NO_ADAPTER_HINT}")
+            }
             RenderError::Device(why) => write!(f, "device: {why}"),
             RenderError::Surface(why) => write!(f, "surface: {why}"),
             RenderError::Vello(why) => write!(f, "vello: {why}"),
@@ -129,6 +138,39 @@ pub struct Renderer {
     next_id: u32,
 }
 
+/// What this platform's swapchains need from the instance.
+///
+/// **Windows.** A widget window is created with `WS_EX_NOREDIRECTIONBITMAP`,
+/// which is what lets DWM blend it per-pixel against the wallpaper — and also
+/// what makes an ordinary HWND swapchain show *nothing at all*, because there
+/// is no redirection surface for it to land in. wgpu's DX12 backend can instead
+/// make a DirectComposition target for the window and a composition swapchain
+/// on its visual (`DxgiFromVisual`), which is the path Ephemeris took by hand
+/// and the only one that offers `PreMultiplied`. DX12 alone, because the other
+/// backends would hand the same window an HWND swapchain and an opaque
+/// rectangle. `WGPU_BACKEND` still overrides it.
+///
+/// Everywhere else the defaults are already right.
+fn platform_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::InstanceDescriptor {
+    // wgpu's own variables — `WGPU_BACKEND`, `WGPU_VALIDATION`,
+    // `WGPU_DX12_COMPILER` and the rest — for somebody debugging a driver.
+    #[cfg(target_os = "windows")]
+    {
+        let backend_chosen = wgpu::Backends::from_env().is_some();
+        let mut descriptor = descriptor.with_env();
+        if !backend_chosen {
+            descriptor.backends = wgpu::Backends::DX12;
+        }
+        descriptor.backend_options.dx12.presentation_system =
+            wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        descriptor
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        descriptor.with_env()
+    }
+}
+
 impl Renderer {
     /// A renderer with no surface yet.
     ///
@@ -138,7 +180,9 @@ impl Renderer {
     /// [`Renderer::new_compatible_with`] so that the adapter is chosen against
     /// a real surface — on a hybrid-graphics laptop the two can differ.
     pub fn new() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(platform_instance(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+        ));
         Self::build(instance, None)
     }
 

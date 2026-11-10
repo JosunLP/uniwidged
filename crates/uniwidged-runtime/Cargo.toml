@@ -44,6 +44,13 @@ rustls = { version = "0.23", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+# The key behind the `secrets` store, held by the OS — see `keyring`.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
 [dev-dependencies]
 # A TLS server the transport tests point at. `default-features = false` with
 # `ring` because the default provider is `aws-lc-rs`, which needs cmake — and a

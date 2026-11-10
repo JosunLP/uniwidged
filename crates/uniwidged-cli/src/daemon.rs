@@ -32,12 +32,27 @@
 //! starting. Two desktops on one configuration is already a mistake — they
 //! would fight over placements — and this is not the layer that should be
 //! detecting it.
-
-#![cfg(unix)]
+//!
+//! ## Windows
+//!
+//! Has no signals worth the name, and needs none. The desktop creates a named
+//! auto-reset event, `Local\uniwidged-reload-<pid>`, and a thread that waits
+//! on it; `reload` opens the event by that name and sets it. The bit sent is
+//! the same bit, and it reaches the loop the same way — the thread sets the
+//! flag and wakes the loop through `uniwidged_shell::WakePipe`.
+//!
+//! It is also the *safer* half: there is no default action to fear. Setting an
+//! event cannot terminate anything, and an event by that name exists only
+//! while a desktop with that pid is running, so opening it is the liveness
+//! check and the identity check at once.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use uniwidged_shell::WakePipe;
 
 /// Set by the signal handler; read and cleared by the loop.
 ///
@@ -52,6 +67,7 @@ static PENDING: AtomicBool = AtomicBool::new(false);
 /// A raw descriptor in a static because a handler has no arguments and cannot
 /// take a lock. `-1` means no pipe has been registered, which is the state
 /// every process that is not `uniwidged run` stays in.
+#[cfg(unix)]
 static WAKE_FD: AtomicI32 = AtomicI32::new(-1);
 
 /// Where the running desktop records itself.
@@ -65,8 +81,14 @@ pub fn pid_file() -> PathBuf {
 /// `Drop`-only type by accident: a desktop killed with `SIGKILL` leaves the
 /// file behind, which is exactly why every reader treats a pid file as a
 /// *claim* rather than a fact.
-pub fn listen(wake_fd: std::os::fd::RawFd) -> io::Result<PidFile> {
-    WAKE_FD.store(wake_fd, Ordering::Relaxed);
+#[cfg(unix)]
+pub fn listen(wake: &WakePipe) -> io::Result<PidFile> {
+    // The *write* end. Until 1.1 this was handed the read end, and the write
+    // in the handler failed with `EBADF` — which went unnoticed on Linux only
+    // because the signal also interrupts the loop's `poll`. On macOS the loop
+    // waits in AppKit, which a signal does not interrupt, so the byte has to
+    // actually arrive for the wake thread to post its event.
+    WAKE_FD.store(wake.write_fd(), Ordering::Relaxed);
     // SAFETY: `handler` is async-signal-safe — a relaxed atomic store and one
     // non-blocking `write`, both on the permitted list. `SA_RESTART` so the
     // loop's `poll` is resumed rather than failing with `EINTR`, which is a
@@ -83,6 +105,48 @@ pub fn listen(wake_fd: std::os::fd::RawFd) -> io::Result<PidFile> {
     PidFile::claim(pid_file())
 }
 
+/// Claims the pid file and starts waiting on this desktop's reload event.
+#[cfg(windows)]
+pub fn listen(wake: &WakePipe) -> io::Result<PidFile> {
+    use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
+
+    let name = event_name(std::process::id() as i32);
+    // SAFETY: default security, auto-reset, initially clear, and a name that
+    // outlives the call.
+    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+    if event.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // A handle is a pointer, and a pointer is not `Send`; the number is.
+    let event = event as usize;
+    let notify = wake.notifier();
+    std::thread::Builder::new()
+        .name("uniwidged-reload".into())
+        .spawn(move || {
+            loop {
+                // SAFETY: an event this process owns for its whole life — it is
+                // never closed, because the desktop never stops listening.
+                let woke = unsafe { WaitForSingleObject(event as _, INFINITE) };
+                if woke != 0 {
+                    return;
+                }
+                PENDING.store(true, Ordering::Relaxed);
+                notify();
+            }
+        })?;
+    PidFile::claim(pid_file())
+}
+
+/// `Local\uniwidged-reload-<pid>`, as a wide string.
+#[cfg(windows)]
+fn event_name(pid: i32) -> Vec<u16> {
+    format!("Local\\uniwidged-reload-{pid}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(unix)]
 extern "C" fn handler(_signal: libc::c_int) {
     PENDING.store(true, Ordering::Relaxed);
     let fd = WAKE_FD.load(Ordering::Relaxed);
@@ -183,10 +247,10 @@ pub fn running_desktop(path: &Path) -> Result<i32, NotRunning> {
 /// `SIGHUP`'s default action is to terminate, so signalling a stranger on the
 /// strength of a stale file is a way to kill somebody's editor.
 ///
-/// The name check reads `/proc`, which is Linux. Where there is no `/proc` the
-/// answer is liveness alone and this is documented as weaker rather than
-/// pretended to be the same — and the platforms without `/proc` are the ones
-/// that have no desktop shell here yet either.
+/// The name check reads `/proc` on Linux and asks `proc_name` on macOS. Where
+/// neither exists the answer is liveness alone, and this is documented as
+/// weaker rather than pretended to be the same.
+#[cfg(unix)]
 fn is_uniwidged(pid: i32) -> bool {
     // SAFETY: signal 0 sends nothing; it only performs the permission and
     // existence checks. This is the documented way to ask whether a pid is
@@ -194,6 +258,15 @@ fn is_uniwidged(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
+    #[cfg(target_os = "macos")]
+    {
+        let mut name = [0u8; 256];
+        // SAFETY: a buffer of the length given; `proc_name` writes at most that
+        // and answers how much it wrote.
+        let len = unsafe { libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) };
+        len > 0 && &name[..len as usize] == b"uniwidged"
+    }
+    #[cfg(not(target_os = "macos"))]
     match std::fs::read_to_string(format!("/proc/{pid}/comm")) {
         Ok(comm) => comm.trim() == "uniwidged",
         // No `/proc`. Liveness is all there is, and it is what this platform
@@ -208,6 +281,45 @@ fn is_uniwidged(pid: i32) -> bool {
 /// calls this, and most of the time no desktop is running. A message every time
 /// somebody ran `uniwidged configure` on a server would be noise, and noise is
 /// how a real message gets missed.
+/// Is there a desktop with this pid? Its reload event exists exactly while it
+/// does — see the module notes.
+#[cfg(windows)]
+fn is_uniwidged(pid: i32) -> bool {
+    open_event(pid).is_some()
+}
+
+#[cfg(windows)]
+fn open_event(pid: i32) -> Option<windows_sys::Win32::Foundation::HANDLE> {
+    use windows_sys::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW};
+    let name = event_name(pid);
+    // SAFETY: a name that outlives the call; only the right to set it.
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    (!event.is_null()).then_some(event)
+}
+
+#[cfg(windows)]
+pub fn nudge(path: &Path) -> Result<i32, NotRunning> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::SetEvent;
+    let pid = running_desktop(path)?;
+    let Some(event) = open_event(pid) else {
+        return Err(NotRunning::Stale(pid));
+    };
+    // SAFETY: a handle just opened, closed straight after.
+    let set = unsafe {
+        let set = SetEvent(event);
+        CloseHandle(event);
+        set
+    };
+    if set == 0 {
+        return Err(NotRunning::Unreadable(
+            io::Error::last_os_error().to_string(),
+        ));
+    }
+    Ok(pid)
+}
+
+#[cfg(unix)]
 pub fn nudge(path: &Path) -> Result<i32, NotRunning> {
     let pid = running_desktop(path)?;
     // SAFETY: a pid this function has just checked is alive and is uniwidged.
@@ -242,5 +354,5 @@ pub fn nudge_quietly() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

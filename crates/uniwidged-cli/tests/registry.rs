@@ -244,7 +244,12 @@ fn a_widget_is_found_and_installed_from_a_registry() {
     let stored = machine.root.join("store/clock-1.0.0.wasm");
     assert!(stored.exists(), "{} should exist", stored.display());
     let recorded = std::fs::read_to_string(machine.config()).unwrap();
-    assert!(recorded.contains("store/clock-1.0.0.wasm"), "{recorded}");
+    // Whatever separator this platform writes between the two.
+    let stored_as = std::path::Path::new("store").join("clock-1.0.0.wasm");
+    assert!(
+        recorded.contains(&*stored_as.to_string_lossy()),
+        "{recorded}"
+    );
 }
 
 #[test]

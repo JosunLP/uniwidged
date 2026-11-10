@@ -385,15 +385,15 @@ fn the_uptime_widget_runs_a_command_and_shows_what_it_said() {
     // says it is waiting, an answer arrives on a later turn, and the frame
     // after that has the machine's real uptime in it.
     //
-    // Skipped where `uptime` is not installed, because the widget's job here is
-    // to demonstrate the *mechanism* and a missing binary would only be
+    // Skipped where `uptime -p` does not work, because the widget's job here is
+    // to demonstrate the *mechanism* and a command that fails would only be
     // demonstrating the failure path — which its own unit tests already cover.
-    if std::process::Command::new("uptime")
-        .arg("-p")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipping: no `uptime` on this machine");
+    // "Does not work" includes a binary that runs and refuses the flag: `-p` is
+    // procps's, and the BSD `uptime` on macOS exits with a usage message, so
+    // there the widget says `unavailable`, which is the truth.
+    let pretty = std::process::Command::new("uptime").arg("-p").output();
+    if !pretty.is_ok_and(|o| o.status.success()) {
+        eprintln!("skipping: no `uptime -p` on this machine");
         return;
     }
 

@@ -511,3 +511,72 @@ fn storing_the_same_value_again_does_not_rewrite_the_store() {
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
+
+/// The custody a Windows desktop actually uses. Everything above runs against
+/// [`FileKeyring::new`]; this is the one place [`FileKeyring::system`]'s DPAPI
+/// path is exercised, on the Windows CI runner.
+#[cfg(windows)]
+#[test]
+fn a_dpapi_sealed_key_round_trips_and_is_not_the_key() {
+    let sealed = dpapi::seal(&[7u8; 32]).expect("DPAPI seals");
+    assert_ne!(
+        sealed.as_slice(),
+        &[7u8; 32],
+        "sealing must change the bytes"
+    );
+    assert_eq!(
+        dpapi::unseal(&sealed).expect("DPAPI unseals"),
+        vec![7u8; 32]
+    );
+
+    let scratch = Scratch::new("dpapi");
+    FileKeyring::system(&scratch.0)
+        .set("w", "token", b"s3cret")
+        .expect("a sealed keychain stores");
+    let reopened = FileKeyring::system(&scratch.0);
+    assert_eq!(
+        reopened.get("w", "token").expect("it opens again"),
+        Some(b"s3cret".to_vec())
+    );
+    let on_disk = std::fs::read(scratch.0.join("keyring.dpapi")).expect("the sealed key file");
+    assert_ne!(
+        on_disk.len(),
+        32,
+        "the key file must hold a DPAPI blob, not the key"
+    );
+    assert!(
+        !scratch.0.join("keyring.key").exists(),
+        "no raw key file beside a sealed one"
+    );
+}
+
+/// A store whose key is a raw file — copied over from a Linux machine — is
+/// still the user's store once the OS holds keys: the key is handed to DPAPI
+/// and the raw file goes, rather than a new key orphaning every secret.
+#[cfg(windows)]
+#[test]
+fn a_raw_key_beside_the_store_is_taken_into_dpapi_custody() {
+    let scratch = Scratch::new("dpapi-adopt");
+    scratch
+        .keyring()
+        .set("w", "token", b"from linux")
+        .expect("a raw-key store");
+    assert!(scratch.0.join("keyring.key").exists());
+
+    let system = FileKeyring::system(&scratch.0);
+    assert_eq!(
+        system.get("w", "token").expect("the copied store opens"),
+        Some(b"from linux".to_vec())
+    );
+    assert!(
+        !scratch.0.join("keyring.key").exists(),
+        "the raw key must not outlive its adoption"
+    );
+    let sealed = std::fs::read(scratch.0.join("keyring.dpapi")).expect("the sealed key");
+    assert_eq!(dpapi::unseal(&sealed).expect("it unseals").len(), 32);
+    assert_eq!(
+        FileKeyring::system(&scratch.0).get("w", "token"),
+        Ok(Some(b"from linux".to_vec())),
+        "and it opens again from the sealed key alone"
+    );
+}

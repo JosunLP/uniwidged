@@ -16,7 +16,7 @@ from the release you installed, so the widget speaks the same interface as your
 host. With no checkout yet:
 
 ```sh
-git clone --branch v1.0.0 https://github.com/JosunLP/uniwidged
+git clone --branch v1.1.0 https://github.com/JosunLP/uniwidged
 cd uniwidged
 ```
 

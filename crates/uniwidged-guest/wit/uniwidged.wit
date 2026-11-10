@@ -1,0 +1,440 @@
+// The interface between the host and a widget.
+//
+// Vendored rather than referenced: the component model is still moving, and a
+// widget built last month must keep working. `abi-version` is checked at
+// instantiation and refused outside the range the host runs, rather than being
+// allowed to fail confusingly later.
+//
+// ## Stability
+//
+// ABI 9 is the interface uniwidged 1.0 shipped with, and it is frozen for 1.x:
+// nothing here is removed or changed, and a widget built against ABI 9 runs on
+// every 1.x host. The interface may grow — a new host function is an import an
+// older widget simply does not have — and every addition raises the number. A
+// widget built against a newer interface is refused by an older host: at
+// linking, if it imports a function the host lacks, or at this check. A change
+// that is not an addition is 2.0.
+
+package uniwidged:widget@0.1.0;
+
+/// What a widget describes.
+///
+/// ## Why the tree is flat
+///
+/// WIT has no recursive types — a `record node` cannot contain a
+/// `list<node>` — so the tree crosses the boundary as an arena: a flat list of
+/// nodes, each naming its children by index. Node 0 is the root.
+///
+/// This is not only a workaround. A flat list is one allocation on each side
+/// rather than one per node, and it is what lets the host validate the whole
+/// structure before touching it: indices in range, no cycles, no second root,
+/// a bounded size. A recursive decoder would have had to discover a cycle by
+/// running out of stack.
+interface types {
+    /// A whole view. Empty means the widget has nothing to show yet, which is
+    /// a normal state before its first data arrives.
+    record tree {
+        nodes: list<node>,
+    }
+
+    record node {
+        /// The author's own id, or 0 for decoration. See `NodeId` on the host.
+        id: u32,
+        content: content,
+        style: style,
+        semantics: semantics,
+        /// Indices into `tree.nodes`. Must be greater than this node's own
+        /// index — see the host's validation, which is what makes a cycle
+        /// impossible rather than merely unlikely.
+        children: list<u32>,
+    }
+
+    variant content {
+        group,
+        text(string),
+        icon(icon),
+        image(u32),
+        divider,
+        spacer,
+        progress(f32),
+        /// A small chart, drawn by the host from the values alone — the
+        /// widget names no pixel, no colour and no stroke. Oldest first, each
+        /// clamped to `0.0..=1.0`, and at most 256 of them: past that the
+        /// view is refused, because a chart is the one node that asks the
+        /// host to do work proportional to what the widget sent.
+        sparkline(list<f32>),
+    }
+
+    enum icon { refresh, settings, close, chevron, check, alert, offline }
+
+    /// A named style. The theme decides what it is; the widget only names it.
+    enum role {
+        plain, panel, card, chip,
+        title, display, section, body, body-strong, caption,
+    }
+
+    /// A semantic colour. Named by meaning, never by hue.
+    variant accent {
+        neutral, brand, positive, warning, critical,
+        series(u8),
+    }
+
+    enum direction { column, row }
+    enum align { start, center, end, stretch }
+    enum justify { start, center, end, space-between }
+
+    record layout {
+        direction: direction,
+        /// In theme steps, not pixels.
+        gap: u8,
+        padding: u8,
+        align: align,
+        justify: justify,
+        grow: u8,
+        wrap: bool,
+    }
+
+    record style {
+        role: role,
+        accent: accent,
+        layout: layout,
+        muted: bool,
+    }
+
+    variant interaction {
+        none, button, toggle, list-item,
+        link(string),
+    }
+
+    record state {
+        disabled: bool,
+        selected: bool,
+        checked: option<bool>,
+    }
+
+    record semantics {
+        label: option<string>,
+        interaction: interaction,
+        state: state,
+        tooltip: option<string>,
+    }
+
+    /// When the widget would like to be called again.
+    variant wake {
+        /// Only external events. The right answer more often than it looks.
+        never,
+        /// A wall-clock instant, as seconds since the Unix epoch. What a clock
+        /// asks for: it stays correct across a suspend or an NTP step, which
+        /// a delay does not.
+        %at(s64),
+        /// A delay from now.
+        after-ms(u32),
+        /// The display's refresh rate, while something is genuinely moving.
+        animating,
+    }
+
+    /// Something that happened to the widget.
+    variant event {
+        /// A node marked interactive was activated, reported by *id* — never
+        /// by coordinate. The host did the layout, so the host hit-tests.
+        clicked(u32),
+        toggled(tuple<u32, bool>),
+        /// A capability request has an answer, correlated by its token.
+        delivered(u32),
+        /// The user changed one of this widget's settings. Read them again.
+        configured,
+        environment-changed,
+    }
+}
+
+/// What the host offers.
+///
+/// Every function here is gated by a capability the manifest declared and the
+/// user approved. Calling an ungranted one returns `denied` rather than
+/// trapping, so a widget can degrade — a weather widget without `net` should
+/// show its last reading and say it is stale, not disappear.
+interface host {
+    use types.{role};
+
+    variant denied {
+        not-granted,
+        malformed(string),
+        unavailable(string),
+    }
+
+    /// Locale-formatted output — needs `locale`.
+    format-time: func(epoch-seconds: s64) -> result<string, denied>;
+    format-date: func(epoch-seconds: s64) -> result<string, denied>;
+
+    /// How wide a string is in a named role, in logical pixels — needs
+    /// `measure`. The host owns the fonts; this is the only window onto them.
+    ///
+    /// It answers what the *layout* will do with that string, in this
+    /// desktop's current theme: the same font, size, weight and digit spacing
+    /// the compose pass would use. A widget deciding its own truncation
+    /// against a different number would be deciding against a guess.
+    measure-text: func(text: string, role: role) -> result<f32, denied>;
+
+    /// What a finished command left behind.
+    record command-output {
+        /// The process's exit code, or -1 where it was killed — by its own
+        /// timeout, or by a signal.
+        status: s32,
+        stdout: list<u8>,
+        stderr: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        body: list<u8>,
+    }
+
+    /// The answer to one asynchronous request.
+    ///
+    /// One variant per kind of work, and one `take-result` for all of them,
+    /// because there is one token space and one `delivered` event. A widget
+    /// that started two different kinds of request tells them apart by the
+    /// token it kept, not by which function it calls to collect them.
+    variant task-result {
+        command(command-output),
+        http(http-response),
+        /// The work did not happen: the command could not be started, the
+        /// name resolved to nothing, the request timed out. Distinct from a
+        /// non-zero exit status, which *is* a result.
+        failed(string),
+    }
+
+    /// An HTTPS request to a granted host — needs `net:<host>`.
+    ///
+    /// Returns immediately with a token; the answer arrives as a `delivered`
+    /// event. A widget never blocks, because a blocked widget is a widget
+    /// holding its deadline open.
+    fetch: func(url: string) -> result<u32, denied>;
+
+    /// Runs one command the manifest declared — needs `command:<name>`.
+    ///
+    /// Asynchronous for the same reason `fetch` is: a process that takes two
+    /// seconds would otherwise be two seconds of a widget holding its deadline
+    /// open, and the host would interrupt it.
+    ///
+    /// `name` must equal the granted name exactly. It is looked up on `PATH`
+    /// and run **without a shell**, so nothing in `args` can become another
+    /// command.
+    run-command: func(name: string, args: list<string>) -> result<u32, denied>;
+
+    /// Collects a finished request, by the token that started it.
+    ///
+    /// A token may be taken once, and only by the widget that started it.
+    /// Asking before the `delivered` event arrives answers `unavailable`.
+    take-result: func(token: u32) -> result<task-result, denied>;
+
+    /// The widget's own data directory — needs `fs:<subpath>`.
+    ///
+    /// A missing file is `ok(none)`, not an error. The first run of a caching
+    /// widget finds nothing, and that is its normal case rather than its
+    /// failure case — a widget forced to tell "no cache yet" apart from "this
+    /// host is broken" by reading an error string would get it wrong.
+    read-file: func(path: string) -> result<option<list<u8>>, denied>;
+    write-file: func(path: string, bytes: list<u8>) -> result<_, denied>;
+
+    /// The OS keychain, namespaced to this widget — needs `secrets`.
+    ///
+    /// A key that was never set is `ok(none)`, not an error, for the reason
+    /// `read-file` answers the same way: a widget's first run has nothing
+    /// stored, and that is its normal case rather than its failure case. A
+    /// widget forced to tell "not signed in yet" from "this host is broken" by
+    /// reading an error string would get it wrong.
+    ///
+    /// A key is at most 64 characters of `[A-Za-z0-9._-]`, and a value at most
+    /// 64 KiB. Both are refused as `malformed`, which is a fact about the
+    /// request rather than about this host.
+    get-secret: func(key: string) -> result<option<list<u8>>, denied>;
+    set-secret: func(key: string, value: list<u8>) -> result<_, denied>;
+    /// Forgets a key. Removing one that was never there is not an error, so
+    /// signing out twice is not a bug a widget has to guard against. Answers
+    /// whether something was actually removed.
+    remove-secret: func(key: string) -> result<bool, denied>;
+
+    /// One of this widget's own settings, as its manifest declared it and its
+    /// user set it.
+    ///
+    /// `choice` is not a variant here on purpose: a choice's value *is* text,
+    /// and the set it must come from is the manifest's business rather than
+    /// the widget's. The host has already checked it, so a widget switching on
+    /// the string it gets back needs no fallback for a value that is not one
+    /// of its own options — it cannot receive one.
+    variant setting-value {
+        text(string),
+        number(f64),
+        toggle(bool),
+    }
+
+    /// Reads one of this widget's own settings.
+    ///
+    /// **Needs no capability.** These are the widget's own declared settings,
+    /// and a widget that could not read its own configuration would have no
+    /// reason to have one. Nothing here can reach another widget's.
+    ///
+    /// `none` means the manifest never declared that key, which is a bug in
+    /// the widget rather than a state to handle: a declared key always has a
+    /// value, because an unset one is its declared default. The type is always
+    /// the one the manifest declared — the host refuses anything else before a
+    /// widget ever sees it.
+    setting: func(key: string) -> option<setting-value>;
+
+    /// Machine counters — both need `metrics`.
+    ///
+    /// `cpu-load` is the busy fraction of every processor over the window
+    /// since it was last asked; `memory-load` is the fraction of physical
+    /// memory that is *not available* — what the kernel says it could not
+    /// hand to a new allocation without evicting something — rather than
+    /// "not free", which on any machine that has been up for an hour is
+    /// nearly everything and means nothing.
+    cpu-load: func() -> result<f32, denied>;
+    memory-load: func() -> result<f32, denied>;
+
+    /// What a battery is doing. Three states rather than the kernel's five,
+    /// because "full" and "not charging" are the same sentence to somebody
+    /// glancing at a widget — plugged in, and not gaining — and "unknown" is
+    /// answered as that too rather than as a fourth state nobody can draw.
+    enum power-state {
+        /// Plugged in, and gaining.
+        charging,
+        /// Running on its own charge.
+        discharging,
+        /// Plugged in and not gaining: full, or held below full by a charge
+        /// limit somebody set to spare the cells.
+        idle,
+    }
+
+    record battery-status {
+        /// `0.0..=1.0` of what the battery holds *now*, not of what it held
+        /// new — a worn battery that is full reads 1.0.
+        charge: f32,
+        state: power-state,
+        /// Until empty while discharging, until full while charging. `none`
+        /// where the kernel reports no rate to divide by, which is common for
+        /// the first seconds after a cable moves, and always when idle.
+        minutes-left: option<u32>,
+    }
+
+    /// Bytes per second, summed over every interface but loopback.
+    record throughput {
+        received: u64,
+        sent: u64,
+    }
+
+    /// The machine's battery — needs `metrics`.
+    ///
+    /// `ok(none)` is a machine with no battery, which is most desktops and is
+    /// their normal case rather than a failure: a power widget on one should
+    /// say "on mains power", and a widget forced to tell that apart from a
+    /// broken host by reading an error string would get it wrong. Several
+    /// batteries are reported as one, weighted by what each holds; a mouse's
+    /// or a headset's is not the machine's and is not counted.
+    battery: func() -> result<option<battery-status>, denied>;
+
+    /// The fraction of the filesystem holding the user's home directory that
+    /// is in use — needs `metrics`. "In use" counts the blocks reserved for
+    /// the administrator as used, the way `df` does, because a user cannot
+    /// write to them and a meter that read 95 % at the moment writes started
+    /// failing would be lying by five points.
+    disk-load: func() -> result<f32, denied>;
+
+    /// How fast the machine is talking to the network — needs `metrics`.
+    ///
+    /// A rate over the window since it was last asked, sampled the way
+    /// `cpu-load` is: the first call answers zero (there is no window yet),
+    /// and two calls within 250 ms get the same answer rather than noise.
+    network-throughput: func() -> result<throughput, denied>;
+
+    /// Goes to the host's log, prefixed with the widget's name. Always
+    /// available: a widget that cannot say what went wrong is one nobody can
+    /// help.
+    log: func(message: string);
+
+    /// Hands the host a PNG to draw, and gets back the handle an `image`
+    /// node names.
+    ///
+    /// **Needs no capability.** Nothing here reaches outside the sandbox:
+    /// the bytes came from the widget, and they go to the widget's own
+    /// surface. What is bounded instead is the host's memory — a PNG is at
+    /// most 1 MiB encoded and 1024 pixels a side, a widget may hold sixteen
+    /// at once, and one that has hit either answers `malformed` for the
+    /// first and `unavailable` for the second, exactly as `fs` does for a
+    /// file too large and a directory too full.
+    ///
+    /// The pixels are decoded once, here, and never cross the boundary
+    /// again: a widget that shows the same icon for a month registers it in
+    /// `start` and names the handle in every view. A handle belongs to the
+    /// instance that registered it; a restarted widget registers again.
+    register-image: func(png: list<u8>) -> result<u32, denied>;
+
+    /// Forgets an image. Answers whether there was one to forget.
+    release-image: func(handle: u32) -> bool;
+}
+
+/// What a widget must provide.
+interface guest {
+    use types.{tree, wake, event};
+
+    /// Bumped whenever this world changes. Checked at instantiation, before
+    /// anything else is called: the host runs widgets from ABI 9 — the 1.0
+    /// interface — up to its own number.
+    ///
+    /// 1 → 2: `read-file` answers `ok(none)` for a file that is not there,
+    /// rather than a denial a widget had to read an error string to interpret.
+    ///
+    /// 2 → 3: `measure-text` takes the `role` enum rather than a `u8` index
+    /// into it. The index had no meaning a widget author could look up, and
+    /// nothing stopped one passing 200.
+    ///
+    /// 3 → 4: one asynchronous mechanism instead of one per capability.
+    /// `take-response` is gone; `take-result` collects any request by token
+    /// and says what kind of answer it is. `run-command` joins `fetch` as the
+    /// second thing that can start one.
+    ///
+    /// 4 → 5: `get-secret` answers `ok(none)` for a key that was never set.
+    /// The 1 → 2 change again, in the one other place where absence was being
+    /// reported as an error — a widget's first run has no token, and that is
+    /// its normal case. `remove-secret` is new: a widget that cannot forget a
+    /// credential is one that keeps it forever.
+    ///
+    /// 5 → 6: `setting` — a widget can read its own configuration. The
+    /// `configured` event has been in this file since the first version and
+    /// nothing produced it, because there was nothing to configure.
+    ///
+    /// 6 → 7: `sparkline` joins `content`, and `memory-load` joins
+    /// `cpu-load`. A variant added to `content` is a widget an older host
+    /// would refuse to decode at all — which is the mismatch this number
+    /// exists to turn into a sentence rather than an error about a variant.
+    ///
+    /// 7 → 8: `register-image` and `release-image`. `image(u32)` had been in
+    /// `content` since the first version with no way to obtain a handle, so
+    /// every `image` node ever built drew nothing.
+    ///
+    /// 8 → 9: `battery`, `disk-load` and `network-throughput` join the
+    /// counters under `metrics`. Functions added to an interface are imports
+    /// an older host cannot satisfy, so a widget using them would fail to
+    /// link there — this number turns that into a sentence instead.
+    abi-version: func() -> u32;
+
+    /// Called once, before the first view.
+    start: func() -> result<_, string>;
+
+    /// Describe what should be on screen.
+    ///
+    /// Returning the same tree as last time means nothing is drawn at all.
+    view: func() -> tree;
+
+    /// When to be called again.
+    next-wake: func() -> wake;
+
+    /// React. Return true if the view would now differ.
+    on-event: func(e: event) -> bool;
+}
+
+world widget {
+    import host;
+    export guest;
+}

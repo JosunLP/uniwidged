@@ -15,7 +15,7 @@ and the [API reference](../reference/api.md) cover them.
 
 ```sh
 # no checkout yet: the tag of the release you installed
-git clone --branch v1.0.0 https://github.com/JosunLP/uniwidged && cd uniwidged
+git clone --branch v1.1.0 https://github.com/JosunLP/uniwidged && cd uniwidged
 # from the root of the checkout:
 cd widgets/system-load
 cargo test                                     # natively — no WASM toolchain needed

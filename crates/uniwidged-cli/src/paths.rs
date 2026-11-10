@@ -157,3 +157,28 @@ fn beside_config(name: &str) -> PathBuf {
         None => config_dir().join(name),
     }
 }
+
+/// A path as the system resolves it, in the form a person would write.
+///
+/// `canonicalize` on Windows answers with the verbatim `\\?\C:\…` spelling,
+/// which every API accepts and nobody types — and this is what gets recorded
+/// in a configuration file somebody will read. A drive path loses the prefix;
+/// a UNC one keeps it, because without it the path means something else.
+pub fn resolved(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    Ok(plain(path.canonicalize()?))
+}
+
+/// The same path without a verbatim prefix on a drive path. Nothing anywhere
+/// else; a no-op off Windows.
+pub fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\")
+            && rest.as_bytes().get(1) == Some(&b':')
+        {
+            return PathBuf::from(rest);
+        }
+    }
+    path
+}

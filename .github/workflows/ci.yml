@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -150,6 +153,48 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p uniwidged-runtime
 
+  # The SDK as crates.io will receive it: the three crates packaged together —
+  # each verified against the others as packaged, not as they sit in the
+  # workspace — and built for the target a widget ships to, which is the one
+  # where the bindings are generated at all. A file left out of `include`, or a
+  # path that reaches outside a crate, fails here rather than at release.
+  sdk-package:
+    name: the SDK, packaged for crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo package --locked --target wasm32-wasip2 -p uniwidged-core -p uniwidged-view -p uniwidged-guest
+
+  # The second SDK. The interface is a WIT file, and a contract one language
+  # has been written against is not yet a contract: this builds the C example
+  # with wasi-sdk and `wit-bindgen c`, and runs it in the real runtime.
+  # `UNIWIDGED_REQUIRE_C_SDK` stops the suite skipping where a tool is missing.
+  c-sdk:
+    name: the C SDK, built and run
+    runs-on: ubuntu-latest
+    env:
+      WASI_SDK_PATH: ${{ github.workspace }}/../wasi-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: wasi-sdk
+        run: |
+          set -eu
+          curl -sSfL -o "$RUNNER_TEMP/wasi-sdk.tar.gz" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-linux.tar.gz
+          mkdir -p "$WASI_SDK_PATH"
+          tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$WASI_SDK_PATH" --strip-components=1
+      - run: cargo install wit-bindgen-cli --version 0.61.1 --locked
+      - run: make -C sdks/c
+      - run: cargo test -p uniwidged-runtime --test c_sdk
+        env:
+          UNIWIDGED_REQUIRE_C_SDK: "1"
+
   # A packaging script is only a packaging script if it runs. This builds the
   # `.deb` and then looks inside it — a package that builds and is missing its
   # binary is a build that succeeded and a user who cannot start the program.
@@ -212,3 +257,90 @@ jobs:
       # rendered before shipping is one that renders as nonsense.
       - name: the manual page has no roff warnings
         run: groff -man -ww -z packaging/uniwidged.1
+
+  # M5's exit criterion is a sentence about a real desktop, so it is measured
+  # on one: a GitHub Windows runner has an interactive session and WARP behind
+  # DX12. `crates/uniwidged-shell/tests/win32_desktop.rs` maximises an ordinary
+  # window over a widget, clicks the widget, and reads back from the window
+  # manager what happened — and `UNIWIDGED_REQUIRE_WIN32` stops it skipping.
+  #
+  # The installer is built here as well, for the reason the `.deb` is: a
+  # packaging script is only a packaging script if it runs.
+  windows:
+    name: Windows (M5) — the shell, measured, and the installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      # The runner has no GPU, so D3D12 is WARP. WARP's own JIT faults
+      # compiling vello's compute shaders from FXC's DXBC (an access violation
+      # in d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets, the
+      # system WARP and the current NuGet one alike), so the suite renders
+      # through DXC and DXIL instead — what wgpu's own CI does on WARP.
+      # `WGPU_DX12_COMPILER=dxc` makes a missing DLL an error, not a quiet
+      # fall back to FXC.
+      - name: DXC, the shader compiler WARP can run vello through
+        shell: pwsh
+        run: |
+          $api = 'https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases'
+          $auth = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+          # wgpu needs v1.8.2502 or later; this one, or the latest if it is gone.
+          try { $release = Invoke-RestMethod "$api/tags/v1.8.2505" -Headers $auth }
+          catch { $release = Invoke-RestMethod "$api/latest" -Headers $auth }
+          "DXC $($release.tag_name)"
+          $asset = $release.assets | Where-Object { $_.name -match '^dxc_.*\.zip$' } | Select-Object -First 1
+          Invoke-WebRequest $asset.browser_download_url -OutFile "$env:RUNNER_TEMP\dxc.zip"
+          Expand-Archive "$env:RUNNER_TEMP\dxc.zip" "$env:RUNNER_TEMP\dxc" -Force
+          "$env:RUNNER_TEMP\dxc\bin\x64" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: cargo test --workspace --no-fail-fast
+        env:
+          UNIWIDGED_REQUIRE_WIN32: "1"
+          WGPU_DX12_COMPILER: dxc
+      - run: dotnet tool install --global wix --version 5.0.2
+      - name: the installer
+        shell: pwsh
+        run: packaging\windows\build.ps1 -Output "$env:RUNNER_TEMP\msi"
+      - name: the installer installs, and what it installed runs
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "$env:RUNNER_TEMP\msi\*.msi" | Select-Object -First 1
+          $p = Start-Process msiexec -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v `"$env:RUNNER_TEMP\msi.log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi.log" -Tail 50; throw "msiexec answered $($p.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\uniwidged\uniwidged.exe"
+          & $exe --version
+          & $exe doctor
+
+  # M6's, likewise. `tests/appkit_desktop.rs` is a plain `main` because AppKit
+  # wants the main thread; `UNIWIDGED_REQUIRE_APPKIT` stops it skipping.
+  macos:
+    name: macOS (M6) — the shell, measured, and the .app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+        env:
+          UNIWIDGED_REQUIRE_APPKIT: "1"
+      - run: packaging/macos/build.sh --output "$RUNNER_TEMP/macos"
+      - name: the bundle holds what it promises, and runs
+        run: |
+          set -eu
+          app="$RUNNER_TEMP/macos/uniwidged.app"
+          plutil -extract LSUIElement raw "$app/Contents/Info.plist" | grep -qx true
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" | grep -qx "$version"
+          codesign --verify --strict "$app"
+          "$app/Contents/MacOS/uniwidged" --version | grep -q "uniwidged $version"
+          "$app/Contents/MacOS/uniwidged" doctor

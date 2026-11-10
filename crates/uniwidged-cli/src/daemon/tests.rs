@@ -87,14 +87,16 @@ fn a_pid_belonging_to_a_process_that_is_not_uniwidged_is_stale() {
     let scratch = Scratch::new("somebody-else");
     let path = scratch.write_pid(&std::process::id().to_string());
     let answer = running_desktop(&path);
-    if cfg!(target_os = "linux") {
+    // Linux reads `/proc/<pid>/comm`, macOS asks `proc_name`: both know the
+    // name, and both must refuse.
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         assert_eq!(
             answer,
             Err(NotRunning::Stale(std::process::id() as i32)),
             "a live process that is not uniwidged must not be signalled"
         );
     } else {
-        // Without `/proc` the check is liveness alone, which is weaker and is
+        // Without either the check is liveness alone, which is weaker and is
         // documented as such rather than pretended to be the same.
         assert!(answer.is_ok());
     }
@@ -122,7 +124,9 @@ fn nudging_a_stale_pid_file_sends_nothing_and_says_why() {
     // path that signals a pid `running_desktop` would have refused.
     let scratch = Scratch::new("nudge-stale");
     let path = scratch.write_pid(&std::process::id().to_string());
-    if cfg!(target_os = "linux") {
+    // Linux reads `/proc/<pid>/comm`, macOS asks `proc_name`: both know the
+    // name, and both must refuse.
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         assert!(matches!(nudge(&path), Err(NotRunning::Stale(_))));
     }
     let gone = scratch.write_pid("4000000");

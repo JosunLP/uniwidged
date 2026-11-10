@@ -104,7 +104,26 @@ fn the_bash_script_parses() {
     // A parse is the whole of what can go wrong in a generated script, and
     // bash is on every machine this test runs on.
     let script = bash();
-    let output = parsed_by("bash", &script).expect("bash is on this machine");
+    // On Windows, `bash` on `PATH` is WSL's launcher, which on a machine with
+    // no distribution installed answers every script with a sentence about
+    // installing one. Git for Windows' bash is the one a Windows user runs
+    // these completions in, so that is the one asked.
+    let shell = if cfg!(windows) {
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+        let git_bash = std::path::Path::new(&program_files).join(r"Git\bin\bash.exe");
+        if !git_bash.exists() {
+            eprintln!(
+                "skipping: no Git for Windows bash at {}",
+                git_bash.display()
+            );
+            return;
+        }
+        git_bash.to_string_lossy().into_owned()
+    } else {
+        "bash".to_string()
+    };
+    let output = parsed_by(&shell, &script).expect("bash is on this machine");
     assert!(
         output.status.success(),
         "bash refused the script: {}\n{script}",
