@@ -375,7 +375,7 @@ impl FileKeyring {
         if self.custody == Custody::Keychain {
             return match keychain::get(&self.store_path)? {
                 Some(bytes) => self.exact_key(&bytes),
-                None => self.new_key(),
+                None => self.adopt_or_new_key(),
             };
         }
         match std::fs::read(&self.key_path) {
@@ -411,12 +411,43 @@ impl FileKeyring {
                 };
                 self.exact_key(&bytes)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.new_key(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.adopt_or_new_key(),
             Err(e) => Err(KeyringError::Unavailable(format!(
                 "{}: {e}",
                 self.key_path.display()
             ))),
         }
+    }
+
+    /// Where the operating system holds no key yet but a raw `keyring.key`
+    /// sits beside the store — one copied over from a Linux machine, or left
+    /// by a build before the OS held keys — that key is the store's. It is
+    /// handed to the OS and the raw file removed, rather than a new key being
+    /// made that would leave every stored secret unreadable. Otherwise a new
+    /// key, as on a fresh desktop.
+    fn adopt_or_new_key(&self) -> Result<[u8; 32], KeyringError> {
+        if self.custody == Custody::File {
+            return self.new_key();
+        }
+        let raw = self.key_path.with_file_name("keyring.key");
+        let bytes = match std::fs::read(&raw) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return self.new_key(),
+            Err(e) => {
+                return Err(KeyringError::Unavailable(format!("{}: {e}", raw.display())));
+            }
+        };
+        let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+            KeyringError::Unavailable(format!(
+                "{} is not a keychain key: it should be exactly 32 bytes",
+                raw.display()
+            ))
+        })?;
+        self.hold(&key)?;
+        // Only once the OS has it: a failure above leaves the raw key where
+        // it was, and the store still readable next time.
+        std::fs::remove_file(&raw).map_err(io("removing the key the OS now holds"))?;
+        Ok(key)
     }
 
     fn exact_key(&self, bytes: &[u8]) -> Result<[u8; 32], KeyringError> {
@@ -446,24 +477,27 @@ impl FileKeyring {
         getrandom::fill(&mut key).map_err(|e| {
             KeyringError::Unavailable(format!("this machine gave no entropy for a new key: {e}"))
         })?;
+        self.hold(&key)?;
+        Ok(key)
+    }
+
+    /// Puts `key` wherever this store's custody keeps it.
+    fn hold(&self, key: &[u8; 32]) -> Result<(), KeyringError> {
         #[cfg(target_os = "macos")]
         if self.custody == Custody::Keychain {
-            keychain::set(&self.store_path, &key)?;
-            return Ok(key);
+            return keychain::set(&self.store_path, key);
         }
         if let Some(parent) = self.key_path.parent() {
             std::fs::create_dir_all(parent).map_err(io("creating the keychain's directory"))?;
         }
         #[cfg(windows)]
         if self.custody == Custody::Dpapi {
-            let sealed = dpapi::seal(&key).map_err(|e| {
-                KeyringError::Unavailable(format!("DPAPI would not seal a new key: {e}"))
+            let sealed = dpapi::seal(key).map_err(|e| {
+                KeyringError::Unavailable(format!("DPAPI would not seal the key: {e}"))
             })?;
-            write_private(&self.key_path, &sealed)?;
-            return Ok(key);
+            return write_private(&self.key_path, &sealed);
         }
-        write_private(&self.key_path, &key)?;
-        Ok(key)
+        write_private(&self.key_path, key)
     }
 
     /// Everything in the store, as `(namespace, key) -> value`.

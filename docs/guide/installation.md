@@ -64,14 +64,10 @@ grep ' uniwidged-1.1.0-macos.zip$' SHA256SUMS | shasum -a 256 -c - && \
 mkdir -p ~/.local/bin
 ln -s ~/Applications/uniwidged.app/Contents/MacOS/uniwidged ~/.local/bin/uniwidged
 export PATH="$HOME/.local/bin:$PATH"
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+# zsh, the default, reads ~/.zshrc in every interactive shell, login or not;
+# for bash, put the same line in ~/.bash_profile instead.
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
-
-`~/Applications` needs no administrator. To install for every account on the
-Mac, extract into `/Applications` instead — which an administrator account can
-write to — and use `/Applications/uniwidged.app` wherever this page says
-`~/Applications/uniwidged.app`, in the link above and in the quarantine
-command below.
 
 ```sh [Arch Linux]
 # packaging/PKGBUILD builds the tagged release from source
@@ -81,6 +77,19 @@ makepkg -si
 ```
 
 :::
+
+`~/Applications` needs no administrator, and the link and `PATH` above are this
+account's. To install for every account on the Mac, an administrator extracts
+into `/Applications` instead and links the command line into `/usr/local/bin`,
+which every account's `PATH` already has — in place of the four lines after
+the bundle:
+
+```sh
+sudo mkdir -p /usr/local/bin
+sudo ln -s /Applications/uniwidged.app/Contents/MacOS/uniwidged /usr/local/bin/uniwidged
+```
+
+The quarantine command in the signing note below then names `/Applications/uniwidged.app`.
 
 The `.deb` installs the binary, the manual page (`man uniwidged`), a session
 desktop entry, and completions for bash, zsh and fish. The Windows installer

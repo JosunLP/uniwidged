@@ -549,3 +549,34 @@ fn a_dpapi_sealed_key_round_trips_and_is_not_the_key() {
         "no raw key file beside a sealed one"
     );
 }
+
+/// A store whose key is a raw file — copied over from a Linux machine — is
+/// still the user's store once the OS holds keys: the key is handed to DPAPI
+/// and the raw file goes, rather than a new key orphaning every secret.
+#[cfg(windows)]
+#[test]
+fn a_raw_key_beside_the_store_is_taken_into_dpapi_custody() {
+    let scratch = Scratch::new("dpapi-adopt");
+    scratch
+        .keyring()
+        .set("w", "token", b"from linux")
+        .expect("a raw-key store");
+    assert!(scratch.0.join("keyring.key").exists());
+
+    let system = FileKeyring::system(&scratch.0);
+    assert_eq!(
+        system.get("w", "token").expect("the copied store opens"),
+        Some(b"from linux".to_vec())
+    );
+    assert!(
+        !scratch.0.join("keyring.key").exists(),
+        "the raw key must not outlive its adoption"
+    );
+    let sealed = std::fs::read(scratch.0.join("keyring.dpapi")).expect("the sealed key");
+    assert_eq!(dpapi::unseal(&sealed).expect("it unseals").len(), 32);
+    assert_eq!(
+        FileKeyring::system(&scratch.0).get("w", "token"),
+        Ok(Some(b"from linux".to_vec())),
+        "and it opens again from the sealed key alone"
+    );
+}

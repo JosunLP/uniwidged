@@ -124,12 +124,32 @@ jobs:
             echo "::error::no CARGO_REGISTRY_TOKEN, so the SDK was not published and this release's \`uniwidged new\` will not build"
             exit 1
           fi
-          cargo publish --locked --target wasm32-wasip2 \
-            -p uniwidged-core -p uniwidged-view -p uniwidged-guest
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          on_crates_io() {
+            curl -sSf -o /dev/null -A "uniwidged release workflow" \
+              "https://crates.io/api/v1/crates/$1/$version"
+          }
+          # One crate at a time, in dependency order, skipping any a retried
+          # release already published: crates.io refuses a version twice, and
+          # a re-run must be able to finish what the first run started.
+          for crate in uniwidged-core uniwidged-view uniwidged-guest; do
+            if on_crates_io "$crate"; then
+              echo "$crate $version is already on crates.io"
+            else
+              cargo publish --locked --target wasm32-wasip2 -p "$crate"
+            fi
+          done
+          # What the release below is gated on: every SDK crate a released
+          # `uniwidged new` will ask for, answerable from crates.io itself.
+          for crate in uniwidged-core uniwidged-view uniwidged-guest; do
+            on_crates_io "$crate" || { echo "::error::$crate $version is not on crates.io"; exit 1; }
+          done
 
   deb:
     name: the .deb, and the release
-    needs: [msi, app]
+    # The SDK too: a release whose `uniwidged new` scaffolds against crates
+    # that are not on crates.io is one whose first widget does not build.
+    needs: [msi, app, sdk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
