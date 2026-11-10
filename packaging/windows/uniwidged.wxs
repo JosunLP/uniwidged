@@ -52,7 +52,7 @@
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenu" Guid="*">
         <!-- "Start the desktop", which is the one command a person runs by
-             clicking. `--background` lets go of the console, exactly as the
+             clicking. The background flag lets go of the console, exactly as the
              autostart entry does. -->
         <Shortcut
             Id="StartDesktop"
