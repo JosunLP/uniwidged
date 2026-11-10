@@ -31,16 +31,18 @@ use std::time::{Duration, Instant};
 use uniwidged_core::geom::PhysicalRect;
 use uniwidged_shell::Input;
 use uniwidged_shell::platform::desktop::{self, DesktopWindow};
-use windows_sys::Win32::Foundation::{HWND, POINT};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GA_ROOT, GW_HWNDNEXT, GWL_EXSTYLE, GetAncestor, GetClassNameW,
-    GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowTextW, SW_MAXIMIZE, SW_MINIMIZE, SW_SHOWNOACTIVATE, SetCursorPos, SetForegroundWindow,
-    ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WindowFromPoint,
+    CreateWindowExW, DestroyWindow, EnumWindows, GA_ROOT, GW_HWNDNEXT, GWL_EXSTYLE, GetAncestor,
+    GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, SW_MAXIMIZE, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetCursorPos,
+    SetForegroundWindow, ShowWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WindowFromPoint,
 };
 
 fn required() -> bool {
@@ -98,23 +100,93 @@ fn bare(x: i32, y: i32) -> bool {
             return true;
         }
         let root = GetAncestor(at, GA_ROOT);
-        if root == GetShellWindow() || root == GetDesktopWindow() {
-            return true;
-        }
-        let mut class = [0u16; 64];
-        let n = GetClassNameW(root, class.as_mut_ptr(), class.len() as i32);
-        let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
-        class == "Progman" || class == "WorkerW"
+        root == GetShellWindow() || root == GetDesktopWindow() || is_desktop(root)
     }
+}
+
+/// Other programs' windows this test minimised, put back when it ends —
+/// including when it fails.
+struct Cleared(Vec<HWND>);
+
+impl Drop for Cleared {
+    fn drop(&mut self) {
+        for &hwnd in &self.0 {
+            // SAFETY: a window that may have gone since; the call then fails.
+            unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+        }
+    }
+}
+
+/// Minimises, without activating anything, every other program's ordinary
+/// window over `rect` — what "show the desktop" does, for one rectangle.
+fn clear(rect: PhysicalRect) -> Cleared {
+    struct Search {
+        rect: RECT,
+        found: Vec<HWND>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> windows_sys::core::BOOL {
+        // SAFETY: `data` is the `Search` below, alive for the enumeration.
+        let search = unsafe { &mut *(data as *mut Search) };
+        // SAFETY: plain queries of a window the enumeration handed over.
+        unsafe {
+            let mut pid = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let mut at = std::mem::zeroed::<RECT>();
+            let overlaps = GetWindowRect(hwnd, &mut at) != 0
+                && at.left < search.rect.right
+                && at.right > search.rect.left
+                && at.top < search.rect.bottom
+                && at.bottom > search.rect.top;
+            if overlaps
+                && pid != GetCurrentProcessId()
+                && IsWindowVisible(hwnd) != 0
+                && IsIconic(hwnd) == 0
+                && style & WS_EX_TOPMOST == 0
+                && hwnd != GetShellWindow()
+                && !is_desktop(hwnd)
+            {
+                search.found.push(hwnd);
+            }
+        }
+        1
+    }
+    let mut search = Search {
+        rect: RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width as i32,
+            bottom: rect.y + rect.height as i32,
+        },
+        found: Vec::new(),
+    };
+    // SAFETY: the callback only reads windows and writes `search`.
+    unsafe { EnumWindows(Some(each), &mut search as *mut Search as LPARAM) };
+    for &hwnd in &search.found {
+        // SAFETY: a live top-level window; minimising activates nothing.
+        unsafe { ShowWindow(hwnd, SW_SHOWMINNOACTIVE) };
+    }
+    Cleared(search.found)
+}
+
+/// The shell's own desktop windows, which are the wallpaper rather than
+/// anything in front of it.
+fn is_desktop(hwnd: HWND) -> bool {
+    let mut class = [0u16; 64];
+    // SAFETY: a buffer of the length given.
+    let n = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
+    let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+    class == "Progman" || class == "WorkerW"
 }
 
 /// Somewhere on the primary screen that no other window covers.
 ///
 /// The widget sits below every ordinary window, so a click on it only lands
 /// where nothing else is — and a CI runner has windows of its own open (the
-/// hosted agent's terminal sits at the top left). Clear of where the test's
-/// own application window will be moved to, as well.
-fn uncovered(width: u32, height: u32) -> PhysicalRect {
+/// hosted agent's terminal fills the top of the screen). If nowhere is bare,
+/// the windows over the first candidate are minimised for the test's length.
+/// Clear of where the test's own application window will be moved to, too.
+fn uncovered(width: u32, height: u32) -> (PhysicalRect, Cleared) {
     let screen = desktop::outputs()
         .into_iter()
         .find(|o| o.primary)
@@ -122,22 +194,30 @@ fn uncovered(width: u32, height: u32) -> PhysicalRect {
         .unwrap_or(PhysicalRect::new(0, 0, 1024, 768));
     let (w, h) = (width as i32, height as i32);
     let app = (APP.0, APP.1, APP.0 + APP.2, APP.1 + APP.3);
+    let bare_rect = |x: i32, y: i32| {
+        [
+            (x + 4, y + 4),
+            (x + w - 4, y + 4),
+            (x + 4, y + h - 4),
+            (x + w - 4, y + h - 4),
+            (x + w / 2, y + h / 2),
+        ]
+        .iter()
+        .all(|&(x, y)| bare(x, y))
+    };
     for y in (screen.y + 40..screen.y + screen.height as i32 - h - 40).step_by(40) {
         for x in (screen.x + 40..screen.x + screen.width as i32 - w - 40).step_by(40) {
             let overlaps_app = x < app.2 && x + w > app.0 && y < app.3 && y + h > app.1;
-            let samples = [
-                (x + 4, y + 4),
-                (x + w - 4, y + 4),
-                (x + 4, y + h - 4),
-                (x + w - 4, y + h - 4),
-                (x + w / 2, y + h / 2),
-            ];
-            if !overlaps_app && samples.iter().all(|&(x, y)| bare(x, y)) {
-                return PhysicalRect::new(x, y, width, height);
+            if !overlaps_app && bare_rect(x, y) {
+                return (PhysicalRect::new(x, y, width, height), Cleared(Vec::new()));
             }
         }
     }
-    PhysicalRect::new(screen.x + 40, screen.y + 40, width, height)
+    let rect = PhysicalRect::new(screen.x + 40, screen.y + 40, width, height);
+    let cleared = clear(rect);
+    // Minimising animates; give it a moment before anything is asked of it.
+    std::thread::sleep(Duration::from_millis(300));
+    (rect, cleared)
 }
 
 /// Where the test's ordinary application window is moved to before the click.
@@ -183,7 +263,7 @@ fn click(x: i32, y: i32) {
 
 #[test]
 fn a_widget_is_a_gadget_rather_than_a_window() {
-    let rect = uncovered(240, 160);
+    let (rect, _cleared) = uncovered(240, 160);
     let mut windows = match DesktopWindow::open(rect, "uniwidged test widget") {
         Ok(window) => vec![window],
         Err(e) if !required() => {

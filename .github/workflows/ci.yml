@@ -295,8 +295,20 @@ jobs:
           }
           $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($crashed -and $cdb) {
-            & $cdb.FullName -lines -c ".sympath srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols;.reload;g;.echo ==== CRASH;r;kb 80;q" $exe --exact $crashed --test-threads=1
+            # The symbol path goes in -y: `.sympath` would read every `;` after it as
+            # another directory.
+            & $cdb.FullName -lines -y "srv*$env:RUNNER_TEMP\sym*https://msdl.microsoft.com/download/symbols" -c "g;.echo ==== CRASH;r;kb 80;!analyze -v;q" $exe --exact $crashed --test-threads=1
           } else { "crashed: $crashed; cdb: $cdb" }
+          # The same tests against a current WARP, the one wgpu's own CI uses,
+          # loaded from beside the executable instead of System32's.
+          Invoke-WebRequest https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP/1.0.13 -OutFile "$env:RUNNER_TEMP\warp.zip"
+          Expand-Archive "$env:RUNNER_TEMP\warp.zip" "$env:RUNNER_TEMP\warp" -Force
+          Copy-Item "$env:RUNNER_TEMP\warp\build\native\bin\x64\d3d10warp.dll" (Split-Path $exe)
+          foreach ($t in (& $exe --list --format=terse | ForEach-Object { $_ -replace ': test$', '' })) {
+            & $exe --exact $t --test-threads=1 *> $null
+            "newer WARP: $t -> $LASTEXITCODE"
+          }
+          Remove-Item (Join-Path (Split-Path $exe) d3d10warp.dll)
       - run: cargo test --workspace --no-fail-fast
         env:
           UNIWIDGED_REQUIRE_WIN32: "1"
