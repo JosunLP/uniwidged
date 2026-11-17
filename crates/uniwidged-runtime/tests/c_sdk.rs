@@ -15,7 +15,7 @@
 //!   side's `NodeId::named` hashes, so the click lands.
 //!
 //! It needs wasi-sdk (`WASI_SDK_PATH`, default `/opt/wasi-sdk`), `make` and
-//! `wit-bindgen` 0.61. Without them it skips, unless `UNIWIDGED_REQUIRE_C_SDK`
+//! `wit-bindgen` 0.63. Without them it skips, unless `UNIWIDGED_REQUIRE_C_SDK`
 //! is set, which is what CI does.
 
 use std::path::{Path, PathBuf};

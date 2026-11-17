@@ -46,7 +46,9 @@ pub(crate) fn read(
     let unpadded = width as usize * 4;
     let mut data = Vec::with_capacity(unpadded * height as usize);
     {
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| RenderError::Readback(e.to_string()))?;
         for row in 0..height as usize {
             let start = row * padded as usize;
             data.extend_from_slice(&mapped[start..start + unpadded]);

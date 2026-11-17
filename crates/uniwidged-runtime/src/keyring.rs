@@ -530,16 +530,16 @@ impl FileKeyring {
         };
         let nonce = unhex(nonce.trim()).ok_or_else(|| corrupt(&self.store_path))?;
         let sealed = unhex(sealed.trim()).ok_or_else(|| corrupt(&self.store_path))?;
-        if nonce.len() != 24 {
+        let Ok(nonce) = XNonce::try_from(nonce.as_slice()) else {
             return Err(corrupt(&self.store_path));
-        }
+        };
         let cipher = XChaCha20Poly1305::new(key.into());
         // The one error a user is likely to actually hit here is a key file
         // from a different keychain, so the message says so rather than
         // reporting an authentication tag.
         let plain = cipher
             .decrypt(
-                XNonce::from_slice(&nonce),
+                &nonce,
                 Payload {
                     msg: &sealed,
                     aad: AAD,
@@ -565,7 +565,7 @@ impl FileKeyring {
         let plain = encode(entries);
         let sealed = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &XNonce::from(nonce),
                 Payload {
                     msg: &plain,
                     aad: AAD,

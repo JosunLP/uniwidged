@@ -17,6 +17,46 @@ refused at instantiation, in a sentence naming both numbers.
 
 Nothing yet.
 
+## 1.1.1 — 2026-11-17
+
+**Every dependency brought up to date.** No new features and no change to the
+widget interface: ABI 9 still, and every 1.x widget runs unchanged. What a
+user can see is one pixel, below.
+
+### Dependencies
+
+* **Wasmtime 50** (from 48.0.8), the sandbox every widget runs in, with
+  `wasmtime-wasi` alongside it.
+* The rendering stack: **Vello 0.12** (wgpu 30), **Parley 0.13**, **Taffy
+  0.15**, AccessKit 0.25 and pollster 1.0.
+* The signing and keychain crates: **ed25519-dalek 3**, sha2 0.11,
+  chacha20poly1305 0.11 and getrandom 0.4. Signatures and keychain files are
+  the same bytes as before; a store written by 1.1.0 opens in 1.1.1 and the
+  other way round.
+* `toml` 1.x, `wit-bindgen` 0.63 for the Rust SDK, and every other crate to
+  its latest compatible release (`cargo update`). `cargo deny` passes with no
+  advisory ignored.
+
+### Changed
+
+* **Building the host from source needs Rust 1.97** (was 1.95), because
+  Wasmtime 50 does. Writing a widget does not: the SDK crates
+  (`uniwidged-core`, `uniwidged-view`, `uniwidged-guest`) keep 1.95, and a new
+  CI job builds both halves with exactly the version each promises.
+* Text centred on a half pixel lands on the pixel below rather than the one
+  above — Taffy 0.15 rounds ties the other way. Two golden images
+  (`accents-dark`, `accents-light`) moved by that pixel and were re-recorded;
+  no other image changed.
+* The C SDK is built with **wasi-sdk 34** and `wit-bindgen` **0.63** in CI;
+  the Makefile and README name the new `wit-bindgen` version.
+
+### CI
+
+* Actions on their current majors (`checkout` v7, `setup-node` v7,
+  `upload-artifact` v7, `download-artifact` v8, `upload-pages-artifact` v5,
+  `deploy-pages` v5, `action-gh-release` v3); the documentation builds on
+  Node 24. CI also runs on pushes to `dev`.
+
 ## 1.1.0 — 2026-11-09
 
 **Windows and macOS, the SDK on crates.io, and a second SDK.** Every item the

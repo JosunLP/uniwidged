@@ -233,6 +233,7 @@ impl Renderer {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: compatible,
             force_fallback_adapter: false,
+            ..Default::default()
         }))
         .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
 
@@ -487,7 +488,7 @@ impl Renderer {
         // 3. Present, and only now clear the dirty flags — a surface whose
         //    swapchain image could not be acquired stays dirty and is retried.
         for (id, frame) in presented {
-            frame.present();
+            self.queue.present(frame);
             if let Some(s) = self.surface_mut(id) {
                 s.dirty = false;
             }

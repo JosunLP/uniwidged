@@ -247,8 +247,9 @@ impl TextEngine {
             builder.push_default(StyleProperty::FontFeatures(FontFeatures::from(TABULAR)));
         }
         let mut built: Layout<peniko::Brush> = builder.build(text);
+        // Alignment is a setting the line breaker applies, so it comes first.
+        built.set_alignment(align.to_parley(), AlignmentOptions::default());
         built.break_all_lines(max_width);
-        built.align(align.to_parley(), AlignmentOptions::default());
 
         if self.cache.len() >= CACHE_CAP {
             self.cache.clear();

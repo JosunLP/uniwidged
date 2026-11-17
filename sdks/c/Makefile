@@ -8,7 +8,7 @@
 #   wasi-sdk 25 or later         WASI_SDK_PATH=/opt/wasi-sdk (the default);
 #                                its clang targets wasm32-wasip2 and links a
 #                                component directly, through wasm-component-ld
-#   wit-bindgen 0.61             cargo install wit-bindgen-cli --version 0.61.1
+#   wit-bindgen 0.63             cargo install wit-bindgen-cli --version 0.63.0
 #
 # The bindings are generated from the interface rather than committed: the
 # interface is the contract, and a generated file that drifted from it would be
@@ -38,7 +38,7 @@ all: $(BUILD)/$(NAME).wasm $(BUILD)/$(NAME).toml
 
 check-tools:
 	@test -x "$(CC)" || { echo "no clang at $(CC): set WASI_SDK_PATH to a wasi-sdk (25 or later)" >&2; exit 1; }
-	@command -v "$(WIT_BINDGEN)" >/dev/null || { echo "no $(WIT_BINDGEN): cargo install wit-bindgen-cli --version 0.61.1" >&2; exit 1; }
+	@command -v "$(WIT_BINDGEN)" >/dev/null || { echo "no $(WIT_BINDGEN): cargo install wit-bindgen-cli --version 0.63.0" >&2; exit 1; }
 
 # One stamp for the three files one run of wit-bindgen writes, so that the
 # generator runs once — and never twice at the same time under `make -j`.

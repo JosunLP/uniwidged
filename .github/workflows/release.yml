@@ -37,7 +37,7 @@ jobs:
     env:
       CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: dotnet tool install --global wix --version 5.0.2
@@ -53,7 +53,7 @@ jobs:
         env:
           UNIWIDGED_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: packaging\windows\build.ps1 -Output "$env:RUNNER_TEMP\dist"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: msi
           path: ${{ runner.temp }}/dist/*.msi
@@ -64,7 +64,7 @@ jobs:
     env:
       CERT: ${{ secrets.MACOS_CERTIFICATE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -95,7 +95,7 @@ jobs:
             echo "MACOS_NOTARY_PROFILE=uniwidged" >> "$GITHUB_ENV"
           fi
       - run: packaging/macos/build.sh --universal --output "$RUNNER_TEMP/dist"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app
           path: ${{ runner.temp }}/dist/*.zip
@@ -111,7 +111,7 @@ jobs:
     name: the SDK on crates.io
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
@@ -152,7 +152,7 @@ jobs:
     needs: [msi, app, sdk]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y dpkg-dev groff pkg-config libfontconfig1-dev libxcb1-dev
@@ -188,7 +188,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/unpacked"
           dpkg-deb --extract "$package" "$RUNNER_TEMP/unpacked"
           "$RUNNER_TEMP/unpacked/usr/bin/uniwidged" --version
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/deb
           merge-multiple: true
@@ -251,7 +251,7 @@ jobs:
             echo "Documentation: https://josunlp.github.io/uniwidged/"
           } >> "$RUNNER_TEMP/notes.md"
       - name: the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: uniwidged ${{ github.ref_name }}
           body_path: ${{ runner.temp }}/notes.md

@@ -14,11 +14,13 @@ members = [
 ]
 
 [workspace.package]
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
-# 1.95 because the Wasmtime 48.x releases that fix its 2026 security advisories
-# (see `cargo deny`) need it, and this process runs other people's code.
-rust-version = "1.95"
+# 1.97 because Wasmtime 50 needs it, and this process runs other people's code:
+# its sandbox is the last dependency to let fall behind. The SDK crates a widget
+# builds against (`uniwidged-core`, `-view`, `-guest`) need none of that and
+# keep their own, lower number — see theirs.
+rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JosunLP/uniwidged"
 homepage = "https://josunlp.github.io/uniwidged/"
@@ -31,13 +33,13 @@ authors = ["uniwidged contributors"]
 # `vello::Scene` that `uniwidged-render` submits, so the two have to agree on
 # the version or the types stop unifying — which is what a single workspace
 # entry guarantees.
-vello = "0.9.0"
-parley = "0.10.0"
-pollster = "0.4.0"
+vello = "0.12.0"
+parley = "0.13.0"
+pollster = "1.0.2"
 png = "0.18.1"
 kurbo = "0.13.1"
 peniko = "0.6.1"
-taffy = "0.11.0"
+taffy = "0.15.1"
 
 # There is deliberately no `wgpu` entry. Vello re-exports the exact wgpu it was
 # built against (`vello::wgpu`, currently 29.x), and reaching it that way makes
@@ -45,7 +47,7 @@ taffy = "0.11.0"
 # up with two `Device` types and an error message nobody enjoys reading.
 
 # --- Accessibility --------------------------------------------------------
-accesskit = "0.24.1"
+accesskit = "0.25.2"
 
 # --- Platform surfaces ----------------------------------------------------
 # `uniwidged-shell` creates desktop-layer surfaces itself and hands wgpu a raw
@@ -96,13 +98,13 @@ objc2-app-kit = "0.3"
 objc2-quartz-core = "0.3"
 
 # --- WASM guests ----------------------------------------------------------
-wasmtime = { version = "48.0.8", default-features = false, features = [
+wasmtime = { version = "50.0.2", default-features = false, features = [
     "component-model",
     "cranelift",
     "runtime",
 ] }
-wasmtime-wasi = "48.0.8"
-wit-bindgen = "0.61.1"
+wasmtime-wasi = "50.0.2"
+wit-bindgen = "0.63.0"
 
 # --- HTTPS ----------------------------------------------------------------
 # What the `net` capability is served with. `rustls` rather than the system
@@ -123,9 +125,9 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 # that runs *before* the sandbox does, so it is the last place to want a C
 # parser. `getrandom` rather than a `rand` version dance: key generation needs
 # thirty-two bytes of entropy and nothing else.
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
-sha2 = "0.10"
-getrandom = "0.3"
+ed25519-dalek = { version = "3", default-features = false, features = ["fast"] }
+sha2 = "0.11"
+getrandom = "0.4"
 
 # --- The keychain ---------------------------------------------------------
 # What the `secrets` capability is served with where no platform keychain is
@@ -137,7 +139,7 @@ getrandom = "0.3"
 #
 # `default-features = false` with `alloc` drops the heapless and stream
 # machinery; `getrandom` is already in the graph and generates the store's key.
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 
 # --- Utilities ------------------------------------------------------------
 # `localtime_r`, for the one thing no std API exposes: this machine's offset
@@ -145,7 +147,7 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 # through Wasmtime, so it costs nothing to compile.
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
-toml = "0.9"
+toml = "1"
 
 # There are deliberately no path dependencies on a sibling checkout. Everything
 # outside this workspace comes from crates.io, so `git clone && cargo test`
@@ -153,14 +155,14 @@ toml = "0.9"
 # from elsewhere and how.
 
 # --- Internal crates ------------------------------------------------------
-uniwidged-core = { path = "crates/uniwidged-core", version = "1.1.0" }
-uniwidged-view = { path = "crates/uniwidged-view", version = "1.1.0" }
-uniwidged-compose = { path = "crates/uniwidged-compose", version = "1.1.0" }
-uniwidged-render = { path = "crates/uniwidged-render", version = "1.1.0" }
-uniwidged-shell = { path = "crates/uniwidged-shell", version = "1.1.0" }
-uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "1.1.0" }
-uniwidged-guest = { path = "crates/uniwidged-guest", version = "1.1.0" }
-uniwidged-host = { path = "crates/uniwidged-host", version = "1.1.0" }
+uniwidged-core = { path = "crates/uniwidged-core", version = "1.1.1" }
+uniwidged-view = { path = "crates/uniwidged-view", version = "1.1.1" }
+uniwidged-compose = { path = "crates/uniwidged-compose", version = "1.1.1" }
+uniwidged-render = { path = "crates/uniwidged-render", version = "1.1.1" }
+uniwidged-shell = { path = "crates/uniwidged-shell", version = "1.1.1" }
+uniwidged-runtime = { path = "crates/uniwidged-runtime", version = "1.1.1" }
+uniwidged-guest = { path = "crates/uniwidged-guest", version = "1.1.1" }
+uniwidged-host = { path = "crates/uniwidged-host", version = "1.1.1" }
 
 # The host is an always-on desktop process. Size and steady-state cost matter
 # more than throughput, but not at the price of the render path — hence `s`

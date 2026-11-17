@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 permissions:
@@ -17,7 +17,7 @@ jobs:
     name: fmt · clippy · test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -75,7 +75,7 @@ jobs:
     name: golden images (lavapipe), and a live desktop
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
@@ -98,11 +98,37 @@ jobs:
           # green run that proved nothing.
           UNIWIDGED_REQUIRE_NET: "1"
 
+  # Two minimum Rust versions, and each is a promise: the host's follows
+  # Wasmtime, the SDK's is what a widget author needs. `stable` above never
+  # notices either one breaking, so both are built with exactly that version.
+  msrv:
+    name: the minimum Rust versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: the versions Cargo.toml promises
+        id: msrv
+        run: |
+          set -eu
+          echo "host=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+          echo "sdk=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' crates/uniwidged-guest/Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.host }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.sdk }}
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libxcb1-dev
+      - run: cargo +${{ steps.msrv.outputs.host }} check --locked --workspace --all-targets
+      - run: cargo +${{ steps.msrv.outputs.sdk }} check --locked --target wasm32-wasip2 -p uniwidged-core -p uniwidged-view -p uniwidged-guest
+
   supply-chain:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   # Each widget in `widgets/` is its own workspace — it is built for
@@ -115,7 +141,7 @@ jobs:
     name: the widgets' own tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -143,7 +169,7 @@ jobs:
     name: capability conformance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           # The suite builds the widget itself rather than looking for a
@@ -162,7 +188,7 @@ jobs:
     name: the SDK, packaged for crates.io
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
@@ -179,17 +205,17 @@ jobs:
     env:
       WASI_SDK_PATH: ${{ github.workspace }}/../wasi-sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: wasi-sdk
         run: |
           set -eu
           curl -sSfL -o "$RUNNER_TEMP/wasi-sdk.tar.gz" \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-linux.tar.gz
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
           mkdir -p "$WASI_SDK_PATH"
           tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C "$WASI_SDK_PATH" --strip-components=1
-      - run: cargo install wit-bindgen-cli --version 0.61.1 --locked
+      - run: cargo install wit-bindgen-cli --version 0.63.0 --locked
       - run: make -C sdks/c
       - run: cargo test -p uniwidged-runtime --test c_sdk
         env:
@@ -206,7 +232,7 @@ jobs:
     name: the .deb, and what is inside it
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `dpkg-shlibdeps` is in dpkg-dev, and it is what asks the binary which
@@ -270,7 +296,7 @@ jobs:
     name: Windows (M5) — the shell, measured, and the installer
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -323,7 +349,7 @@ jobs:
     name: macOS (M6) — the shell, measured, and the .app
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
