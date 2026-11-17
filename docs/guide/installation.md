@@ -31,35 +31,35 @@ macOS bundle, each built and inspected in CI, with their SHA-256 checksums in
 ::: code-group
 
 ```sh [Debian / Ubuntu]
-base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
-curl -LO "$base/uniwidged_1.1.0_amd64.deb" -LO "$base/SHA256SUMS"
+base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.1
+curl -LO "$base/uniwidged_1.1.1_amd64.deb" -LO "$base/SHA256SUMS"
 sha256sum --ignore-missing -c SHA256SUMS && \
-  sudo apt install ./uniwidged_1.1.0_amd64.deb
+  sudo apt install ./uniwidged_1.1.1_amd64.deb
 ```
 
 ```powershell [Windows]
 # Per-user: installs under %LOCALAPPDATA%\Programs, adds itself to your PATH,
 # and never asks for an administrator.
-$base = "https://github.com/JosunLP/uniwidged/releases/download/v1.1.0"
-Invoke-WebRequest "$base/uniwidged-1.1.0-x64.msi" -OutFile uniwidged-1.1.0-x64.msi
+$base = "https://github.com/JosunLP/uniwidged/releases/download/v1.1.1"
+Invoke-WebRequest "$base/uniwidged-1.1.1-x64.msi" -OutFile uniwidged-1.1.1-x64.msi
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
-$want = (Select-String -Path SHA256SUMS -Pattern 'uniwidged-1.1.0-x64.msi').Line.Split(' ')[0]
-$have = (Get-FileHash uniwidged-1.1.0-x64.msi -Algorithm SHA256).Hash.ToLower()
+$want = (Select-String -Path SHA256SUMS -Pattern 'uniwidged-1.1.1-x64.msi').Line.Split(' ')[0]
+$have = (Get-FileHash uniwidged-1.1.1-x64.msi -Algorithm SHA256).Hash.ToLower()
 if ($want -and $have -eq $want) {
-    msiexec /i uniwidged-1.1.0-x64.msi
+    msiexec /i uniwidged-1.1.1-x64.msi
 } else {
     Write-Error "checksum mismatch or missing: do not install this file"
 }
 ```
 
 ```sh [macOS]
-base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.0
-curl -LO "$base/uniwidged-1.1.0-macos.zip" -LO "$base/SHA256SUMS"
+base=https://github.com/JosunLP/uniwidged/releases/download/v1.1.1
+curl -LO "$base/uniwidged-1.1.1-macos.zip" -LO "$base/SHA256SUMS"
 # Exactly this file's line, so a missing entry fails rather than passing on
 # whatever else the list holds.
-grep ' uniwidged-1.1.0-macos.zip$' SHA256SUMS | shasum -a 256 -c - && \
+grep ' uniwidged-1.1.1-macos.zip$' SHA256SUMS | shasum -a 256 -c - && \
   mkdir -p ~/Applications && \
-  ditto -x -k uniwidged-1.1.0-macos.zip ~/Applications
+  ditto -x -k uniwidged-1.1.1-macos.zip ~/Applications
 # The command line, from the bundle, on a PATH a default macOS shell lacks:
 mkdir -p ~/.local/bin
 ln -s ~/Applications/uniwidged.app/Contents/MacOS/uniwidged ~/.local/bin/uniwidged
@@ -195,7 +195,7 @@ This writes an XDG autostart entry on Linux, a `LaunchAgent` on macOS
 ## Checking it worked
 
 ```sh
-uniwidged --version   # uniwidged 1.1.0 (widget ABI 9)
+uniwidged --version   # uniwidged 1.1.1 (widget ABI 9)
 uniwidged doctor
 ```
 

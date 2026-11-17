@@ -1509,7 +1509,7 @@ checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "uniwidged-compose"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "accesskit",
  "parley",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "kurbo",
  "peniko",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-render"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "png",
  "pollster",
@@ -1540,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-shell"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "block2",
  "libc",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "uniwidged-view"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "uniwidged-core",
 ]
