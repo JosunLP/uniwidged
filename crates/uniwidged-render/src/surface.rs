@@ -182,6 +182,9 @@ impl SurfaceRecord {
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: vec![],
+            // What wgpu did before it had the field: sRGB for the 8-bit formats
+            // a widget is presented in. A widget has no HDR content to ask for.
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(device, &config);
 

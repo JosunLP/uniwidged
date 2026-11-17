@@ -108,7 +108,7 @@ checked `SHA256SUMS` and trust it.
 
 ## From source
 
-You need a Rust toolchain of **1.95 or newer**, and what Rust itself needs to
+You need a Rust toolchain of **1.97 or newer**, and what Rust itself needs to
 link: on **Windows**, the Visual Studio C++ build tools (which `rustup` offers
 to install for the MSVC toolchain); on **macOS**, the Xcode Command Line Tools
 (`xcode-select --install`). On **Linux** you also need three system

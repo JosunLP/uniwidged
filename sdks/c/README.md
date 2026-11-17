@@ -14,7 +14,7 @@ the example here and runs it in the real runtime on every change
 
 * **wasi-sdk** 25 or later — its `clang` targets `wasm32-wasip2` and links a
   component directly. Point `WASI_SDK_PATH` at it (default `/opt/wasi-sdk`).
-* **wit-bindgen** 0.61 — `cargo install wit-bindgen-cli --version 0.61.1`.
+* **wit-bindgen** 0.63 — `cargo install wit-bindgen-cli --version 0.63.0`.
 * `make`.
 
 ## Building

@@ -237,18 +237,18 @@ impl Style {
                 width: LengthPercentage::length(self.gap),
                 height: LengthPercentage::length(self.gap),
             },
-            align_items: Some(match self.align {
+            align_items: match self.align {
                 Align::Start => AlignItems::START,
                 Align::Center => AlignItems::CENTER,
                 Align::End => AlignItems::END,
                 Align::Stretch => AlignItems::STRETCH,
-            }),
-            justify_content: Some(match self.justify {
+            },
+            justify_content: match self.justify {
                 Justify::Start => JustifyContent::START,
                 Justify::Center => JustifyContent::CENTER,
                 Justify::End => JustifyContent::END,
                 Justify::SpaceBetween => JustifyContent::SPACE_BETWEEN,
-            }),
+            },
             flex_grow: self.grow,
             flex_shrink: self.shrink,
             ..Default::default()
@@ -337,29 +337,38 @@ impl LayoutTree {
             height: AvailableSpace::Definite(height),
         };
         self.taffy
-            .compute_layout_with_measure(root, available, |known, avail, _node, context, _style| {
-                // No context means an unmeasured leaf, which contributes
-                // nothing of its own.
-                let key = context.copied().unwrap_or(0);
-                if key == 0 {
-                    return Size::ZERO;
-                }
-                let available_width = match avail.width {
-                    AvailableSpace::Definite(width) => Some(width),
-                    _ => None,
-                };
-                let (measured_width, measured_height) = measure(Measure {
-                    known_width: known.width,
-                    known_height: known.height,
-                    available_width,
-                    key,
-                });
-                Size {
-                    // A dimension layout has already fixed wins: the closure
-                    // is being asked what it would like, not told what it gets.
-                    width: known.width.unwrap_or(measured_width),
-                    height: known.height.unwrap_or(measured_height),
-                }
+            .compute_layout_with_measure(root, available, |inputs, _node, context, style| {
+                // Taffy resolves the leaf's own style — padding, border, a
+                // fixed size — and asks the closure only for its content.
+                taffy::compute_leaf_layout(
+                    inputs,
+                    style,
+                    |_, _| 0.0,
+                    |known, avail| {
+                        // No context means an unmeasured leaf, which contributes
+                        // nothing of its own.
+                        let key = context.as_deref().copied().unwrap_or(0);
+                        if key == 0 {
+                            return Size::ZERO;
+                        }
+                        let available_width = match avail.width {
+                            AvailableSpace::Definite(width) => Some(width),
+                            _ => None,
+                        };
+                        let (measured_width, measured_height) = measure(Measure {
+                            known_width: known.width,
+                            known_height: known.height,
+                            available_width,
+                            key,
+                        });
+                        Size {
+                            // A dimension layout has already fixed wins: the closure
+                            // is being asked what it would like, not told what it gets.
+                            width: known.width.unwrap_or(measured_width),
+                            height: known.height.unwrap_or(measured_height),
+                        }
+                    },
+                )
             })
             .expect("taffy could not compute a layout");
     }

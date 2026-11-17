@@ -2,7 +2,8 @@
 name = "uniwidged-core"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Not the workspace's: that one follows Wasmtime, which a widget never builds.
+rust-version = "1.95"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
